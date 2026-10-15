@@ -30,3 +30,8 @@ def make_user(app):
         return c
 
     return _make
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
