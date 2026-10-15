@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 from app.config import Settings
 from app.db import connect, init_db
-from app.routes import auth, conversations
+from app.routes import auth, chat, conversations
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -16,4 +16,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         conn.close()
     app.include_router(auth.router)
     app.include_router(conversations.router)
+    app.include_router(chat.router)
     return app

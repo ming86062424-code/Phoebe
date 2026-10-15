@@ -35,3 +35,13 @@ def make_user(app):
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture
+def fake_chat(app):
+    from app.deps import get_chat_client
+    from tests.fakes import FakeChatClient
+
+    fake = FakeChatClient()
+    app.dependency_overrides[get_chat_client] = lambda: fake
+    return fake
