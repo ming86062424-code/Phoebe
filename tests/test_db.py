@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -67,3 +68,10 @@ def test_settings_from_env_defaults_and_override(monkeypatch):
     assert Settings.from_env().eval_judge_model == "qwen3.5:4b"
     monkeypatch.setenv("SESSION_DAYS", "3")
     assert Settings.from_env().session_days == 3
+
+
+def test_default_db_path_is_absolute_project_data(monkeypatch):
+    monkeypatch.delenv("DB_PATH", raising=False)
+    path = Path(Settings.from_env().db_path)
+    assert path.is_absolute()
+    assert path.parts[-2:] == ("data", "app.db")

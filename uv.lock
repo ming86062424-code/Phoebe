@@ -1251,7 +1251,7 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1" },
 ]
 eval = [
-    { name = "deepeval", specifier = ">=4.3.0" },
+    { name = "deepeval", specifier = ">=4.3.0,<5" },
     { name = "ollama", specifier = ">=0.6.3" },
 ]
 

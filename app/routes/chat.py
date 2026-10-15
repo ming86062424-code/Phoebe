@@ -67,7 +67,8 @@ async def send_message(
         async for chunk in stream:
             parts.append(chunk)
             yield chunk
-        # get_db's connection is already closed once the body runs; use our own.
+        # The generator uses its own connection so it doesn't depend on the
+        # request-scoped dependency's lifetime.
         save_conn = connect(settings.db_path)
         try:
             conversations.add_message(save_conn, conversation_id, "assistant", "".join(parts))

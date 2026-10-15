@@ -68,12 +68,14 @@ async function selectConversation(id) {
   currentId = id;
   messagesEl.textContent = "";
   const res = await api("/api/conversations/" + id);
+  if (currentId !== id) return;
   if (!res.ok) {
     currentId = null;
     await loadList();
     return;
   }
   const conv = await res.json();
+  if (currentId !== id) return;
   for (const m of conv.messages) addBubble(m.role, m.content);
   await loadList();
 }
@@ -105,7 +107,6 @@ async function sendMessage() {
       currentId = (await res.json()).id;
       messagesEl.textContent = "";
     }
-    inputEl.value = "";
     addBubble("user", text);
     const bubble = addBubble("assistant", "");
     try {
@@ -118,8 +119,10 @@ async function sendMessage() {
         let data = null;
         try { data = await res.json(); } catch (e) { /* no body */ }
         bubble.textContent = detailText(data, res.status);
+        inputEl.value = text;
         return;
       }
+      inputEl.value = "";
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       try {
@@ -135,6 +138,7 @@ async function sendMessage() {
       }
     } catch (e) {
       if (e.message !== "unauthorized") bubble.textContent = "無法連線到伺服器";
+      inputEl.value = text;
     }
   } catch (e) {
     /* unauthorized: already redirected */

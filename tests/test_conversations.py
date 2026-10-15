@@ -27,7 +27,11 @@ def test_list_orders_by_updated_at_then_id_desc(make_user, settings):
     alice = make_user("alice")
     ids = [alice.post("/api/conversations").json()["id"] for _ in range(3)]
     c1, c2, c3 = ids
-    assert [c["id"] for c in alice.get("/api/conversations").json()] == [c3, c2, c1]
+    # Force identical updated_at so only the id DESC tie-break decides order.
+    with db(settings) as conn:
+        conn.execute("UPDATE conversations SET updated_at = '2026-01-01T00:00:00+00:00'")
+        conn.commit()
+    assert [c["id"] for c in alice.get("/api/conversations").json()] == sorted(ids, reverse=True)
     with db(settings) as conn:
         conversations.add_message(conn, c1, "user", "hi")
     assert [c["id"] for c in alice.get("/api/conversations").json()] == [c1, c3, c2]
