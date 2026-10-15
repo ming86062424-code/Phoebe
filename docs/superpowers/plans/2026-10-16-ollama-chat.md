@@ -69,11 +69,11 @@
   - `app.db.init_db(conn: sqlite3.Connection) -> None`：以 `CREATE TABLE IF NOT EXISTS` 建立規格第 4 節的四張表
   - `app.db.now_iso() -> str`：目前 UTC 時間的 ISO 字串
 
-- [ ] **Step 1: 安裝 uv 並初始化專案**
+- [ ] **Step 1: 初始化專案**
+
+uv 0.13.1 已透過 `pip install --user uv` 安裝（`C:\Users\anny3\AppData\Roaming\Python\Python312\Scripts\uv.exe`，已在 PATH 上），**不要再安裝 uv**。
 
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-# 重開終端機後
 uv --version
 uv init --bare --python 3.12
 uv python pin 3.12
