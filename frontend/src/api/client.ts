@@ -1,4 +1,12 @@
-import type { Conversation, ConversationDetail, User } from './types'
+import type {
+  Conversation,
+  ConversationDetail,
+  KbDocument,
+  KnowledgeBase,
+  ParserInfo,
+  Source,
+  User,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -80,4 +88,26 @@ export const api = {
     request(`/api/conversations/${id}/messages`, jsonInit('POST', { content })),
   regenerate: (id: number) =>
     request(`/api/conversations/${id}/regenerate`, jsonInit('POST')),
+  setConversationKb: (id: number, kbId: number | null) =>
+    json<ConversationDetail>(`/api/conversations/${id}`, jsonInit('PATCH', { kb_id: kbId })),
+  listParsers: () => json<ParserInfo[]>('/api/parsers'),
+  listKbs: () => json<KnowledgeBase[]>('/api/kbs'),
+  createKb: (name: string, description = '') =>
+    json<KnowledgeBase>('/api/kbs', jsonInit('POST', { name, description })),
+  updateKb: (id: number, patch: { name?: string; description?: string }) =>
+    json<KnowledgeBase>(`/api/kbs/${id}`, jsonInit('PATCH', patch)),
+  deleteKb: (id: number) => empty(`/api/kbs/${id}`, jsonInit('DELETE')),
+  listDocuments: (kbId: number) => json<KbDocument[]>(`/api/kbs/${kbId}/documents`),
+  uploadDocument: (kbId: number, file: File, parser: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('parser', parser)
+    return json<KbDocument>(`/api/kbs/${kbId}/documents`, { method: 'POST', body: form })
+  },
+  deleteDocument: (kbId: number, docId: number) =>
+    empty(`/api/kbs/${kbId}/documents/${docId}`, jsonInit('DELETE')),
+  retryDocument: (kbId: number, docId: number) =>
+    json<KbDocument>(`/api/kbs/${kbId}/documents/${docId}/retry`, jsonInit('POST')),
+  search: (kbId: number, q: string) =>
+    json<Source[]>(`/api/kbs/${kbId}/search?q=${encodeURIComponent(q)}`),
 }

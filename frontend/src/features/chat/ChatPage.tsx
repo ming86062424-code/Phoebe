@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
 import { useMediaQuery } from '../../shell/useMediaQuery'
 import { usePersistentState } from '../../shell/usePersistentState'
 import Composer from './Composer'
 import ConversationList from './ConversationList'
+import KbSelector from './KbSelector'
 import MessageList from './MessageList'
 import { useChat } from './useChat'
 import styles from './ChatPage.module.css'
@@ -42,7 +43,15 @@ export default function ChatPage() {
     onFinished: refresh,
   })
 
-  const { loadError } = chat
+  const { loadError, selectKb } = chat
+  const changeKb = useCallback(
+    (id: number | null) => {
+      void selectKb(id).then((err) => {
+        if (err) setNotice(err)
+      })
+    },
+    [selectKb],
+  )
   const [shownError, setShownError] = useState<string | null>(null)
   if (loadError !== shownError && (loadError || shownError)) {
     // keep the message visible after useChat clears it on the redirect to #/chat
@@ -84,6 +93,11 @@ export default function ChatPage() {
           >
             {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button>
+          <KbSelector
+            value={chat.kbId}
+            disabled={chat.streaming || chat.loading}
+            onChange={changeKb}
+          />
         </div>
         {notice && (
           <div role="alert" className={styles.notice}>

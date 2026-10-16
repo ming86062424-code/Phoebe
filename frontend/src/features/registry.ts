@@ -1,6 +1,7 @@
-import { MessageSquare, type LucideIcon } from 'lucide-react'
+import { BookOpen, MessageSquare, type LucideIcon } from 'lucide-react'
 import { createElement, type ReactNode } from 'react'
 import ChatPage from './chat/ChatPage'
+import KbPage from './kb/KbPage'
 
 export interface Feature {
   id: string
@@ -17,5 +18,12 @@ export const features: Feature[] = [
     path: '/chat',
     icon: MessageSquare,
     element: createElement(ChatPage),
+  },
+  {
+    id: 'kb',
+    label: '知識庫',
+    path: '/kb',
+    icon: BookOpen,
+    element: createElement(KbPage),
   },
 ]
