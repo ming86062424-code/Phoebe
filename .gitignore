@@ -183,3 +183,6 @@ data/
 __pycache__/
 .pytest_cache/
 .deepeval/
+
+# Node
+node_modules/
