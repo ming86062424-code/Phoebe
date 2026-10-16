@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登入</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="auth-box">
+    <h1 id="title">登入</h1>
+    <form id="form">
+      <label>帳號<input id="username" autocomplete="username" required></label>
+      <label>密碼<input id="password" type="password" autocomplete="current-password" required></label>
+      <div id="error" class="error"></div>
+      <button id="submit" class="primary" type="submit">登入</button>
+    </form>
+    <div class="switch"><button id="toggle" type="button">沒有帳號？註冊</button></div>
+  </div>
+  <script src="/login.js"></script>
+</body>
+</html>

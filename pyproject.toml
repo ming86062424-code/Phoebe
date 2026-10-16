@@ -1,0 +1,23 @@
+[project]
+name = "phoebe"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "bcrypt>=5.0.0",
+    "fastapi>=0.143.2",
+    "httpx>=0.28.1",
+    "uvicorn>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1",
+    "pytest>=9.1.1",
+]
+eval = [
+    "deepeval>=4.3.0,<5",
+    "ollama>=0.6.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
