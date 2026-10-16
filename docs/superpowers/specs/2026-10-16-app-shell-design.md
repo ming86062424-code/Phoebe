@@ -16,7 +16,7 @@
 5. **送出後輸入框立即清空**
 6. **失敗時在訊息下方顯示「重新送出」**，重新產生回答而**不新增重複的使用者訊息**
 7. **四周留白、卡片式**：介面與視窗四邊間距約 16–24px，圓角加陰影；訊息區最大寬度約 800px 並置中
-8. **只做電腦版**；視窗寬度小於 1024px 時對話列表自動收合
+8. **只做電腦版**；視窗寬度 < 1024px 時對話列表預設收合，可手動展開（不寫入偏好）
 9. **網址記住位置**：例如 `/#/chat/12`，重新整理後回到同一功能、同一對話
 10. 登入頁採用同樣的留白與卡片風格；介面文字為繁體中文
 
@@ -68,7 +68,7 @@ frontend/
 
 **功能註冊表**（`registry.ts`）：每筆為 `{ id, label, icon, path, element }`。新增功能 = 新增一筆，選單與路由自動產生。目前唯一一筆：`{ id: "chat", label: "AI 對話", path: "/chat" }`。
 
-**收合狀態**：存在 `localStorage`，鍵名 `phoebe.nav.collapsed`、`phoebe.chat.listCollapsed`。讀寫都包在 try/catch 中，失敗時使用預設值（皆展開）。視窗寬度 < 1024px 時對話列表強制收合（不覆寫使用者存的偏好）。
+**收合狀態**：存在 `localStorage`，鍵名 `phoebe.nav.collapsed`、`phoebe.chat.listCollapsed`。讀寫都包在 try/catch 中，失敗時使用預設值（皆展開）。視窗寬度 < 1024px 時對話列表預設收合，可手動展開（不寫入偏好）。
 
 **狀態管理**：React 內建 state 與自訂 hook，不使用全域狀態套件。
 
@@ -114,7 +114,7 @@ JSON 以 `ensure_ascii=False` 輸出，每行以 `\n` 結尾。
 3. 讀取歷史，以共用串流函式回應
 
 **共用串流函式**
-- 先取得第一個 `ChatDelta`：失敗規則沿用前一版（`OllamaUnavailable` → 503「無法連線到 Ollama」；`ModelNotFound` 等其他 `OllamaError` 或 `httpx.HTTPError` → 503 `str(e)`）
+- 先取得第一個 `ChatDelta`：失敗規則沿用前一版（`OllamaUnavailable` → 503「無法連線到 Ollama」；`ModelNotFound` 等其他 `OllamaError` 或 `httpx.HTTPError` → 503 `str(e)`；串流開始前若直接拋出原始 `httpx.HTTPError`，同樣對應 503「無法連線到 Ollama」（裁定 R4））
 - 之後逐一輸出 thinking／content 事件；只累加 content
 - 正常結束：另開 DB 連線存 assistant 訊息（只有 content），輸出 `done`
 - 中途發生 `OllamaError` 或 `httpx.HTTPError`：不存，輸出 `error` 事件（detail 為 `str(e)`，空字串時用「回覆中斷」）後正常結束

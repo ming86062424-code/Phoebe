@@ -43,11 +43,14 @@ cd frontend && npm run build
 uv run uvicorn app.main:create_app --factory
 ```
 
+注意：後端在啟動時才決定要不要提供 `frontend/dist`，所以第一次執行 `npm run build` 之後，必須重新啟動 uvicorn。
+
 前端測試與檢查：
 
 ```
 cd frontend && npm test
 cd frontend && npm run lint
+cd frontend && npm run typecheck
 ```
 
 ## 測試
@@ -76,7 +79,7 @@ uv run --group eval pytest evals -v
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
 | `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false` 或 `0` 為關閉） |
-| `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供 |
+| `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供；使用相對路徑時，會以啟動 uvicorn 的工作目錄為基準 |
 
 ## 資料位置
 
