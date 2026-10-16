@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { ApiError, api } from '../api/client'
 import type { User } from '../api/types'
 import { CurrentUserProvider } from './currentUser'
+import styles from './RequireAuth.module.css'
 
 export default function RequireAuth({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -33,14 +34,24 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
 
   if (error !== null) {
     return (
-      <div role="alert">
-        <p>{error}</p>
-        <button type="button" onClick={retry}>
-          重試
-        </button>
+      <div className={styles.page}>
+        <div role="alert" className={styles.card}>
+          <p className={styles.message}>{error}</p>
+          <button type="button" className={styles.retry} onClick={retry}>
+            重試
+          </button>
+        </div>
       </div>
     )
   }
-  if (!user) return <div role="status">載入中…</div>
+  if (!user) {
+    return (
+      <div className={styles.page}>
+        <div role="status" className={styles.card}>
+          載入中…
+        </div>
+      </div>
+    )
+  }
   return <CurrentUserProvider user={user}>{children}</CurrentUserProvider>
 }

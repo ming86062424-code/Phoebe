@@ -27,4 +27,14 @@ describe('MessageBubble', () => {
     expect(screen.getByText(/你.*（回覆中斷）/)).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('模型壞了')
   })
+
+  it('shows a muted placeholder for an empty finished assistant reply', () => {
+    render(<MessageBubble item={base} />)
+    expect(screen.getByText('（沒有回答內容）')).toBeInTheDocument()
+  })
+
+  it('does not show the placeholder while streaming', () => {
+    render(<MessageBubble item={{ ...base, status: 'streaming' }} />)
+    expect(screen.queryByText('（沒有回答內容）')).toBeNull()
+  })
 })

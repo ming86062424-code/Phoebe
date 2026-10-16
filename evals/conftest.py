@@ -61,7 +61,9 @@ def judge(settings: Settings):
 @pytest.fixture(scope="session")
 def generate_reply(settings: Settings):
     def _generate(messages: list[dict]) -> str:
-        client = OllamaClient(settings.ollama_base_url, settings.chat_model)
+        client = OllamaClient(
+            settings.ollama_base_url, settings.chat_model, think=settings.chat_think
+        )
 
         async def collect() -> str:
             return "".join(

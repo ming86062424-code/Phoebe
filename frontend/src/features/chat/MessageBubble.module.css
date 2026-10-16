@@ -29,6 +29,11 @@
   color: var(--color-text-muted);
 }
 
+.empty {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 .error {
   color: var(--color-danger);
   font-size: 14px;

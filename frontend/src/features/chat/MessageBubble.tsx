@@ -7,6 +7,7 @@ export default function MessageBubble({ item }: { item: ChatItem }) {
   const isUser = item.role === 'user'
   const live = item.status === 'streaming' && item.thinkingSeconds === undefined
   const showAlert = item.status === 'error' && !(item.interrupted && item.error === INTERRUPTED)
+  const isEmptyReply = !isUser && item.status === 'done' && item.content === ''
   return (
     <div className={`${styles.row} ${isUser ? styles.user : styles.assistant}`}>
       <div className={styles.bubble}>
@@ -24,6 +25,7 @@ export default function MessageBubble({ item }: { item: ChatItem }) {
             {item.interrupted ? '（回覆中斷）' : ''}
           </div>
         )}
+        {isEmptyReply && <div className={styles.empty}>（沒有回答內容）</div>}
         {!isUser && item.status === 'streaming' && item.content === '' && item.thinking === '' && (
           <span className={styles.pending}>…</span>
         )}
