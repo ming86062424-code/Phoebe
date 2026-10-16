@@ -1,5 +1,6 @@
 import type { ChatItem } from './chatState'
 import { INTERRUPTED } from './chatState'
+import SourceList from './SourceList'
 import ThinkingBlock from './ThinkingBlock'
 import styles from './MessageBubble.module.css'
 
@@ -28,6 +29,9 @@ export default function MessageBubble({ item }: { item: ChatItem }) {
         {isEmptyReply && <div className={styles.empty}>（沒有回答內容）</div>}
         {!isUser && item.status === 'streaming' && item.content === '' && item.thinking === '' && (
           <span className={styles.pending}>…</span>
+        )}
+        {!isUser && item.sources && item.status !== 'streaming' && (
+          <SourceList sources={item.sources} />
         )}
         {showAlert && (
           <div role="alert" className={styles.error}>

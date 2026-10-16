@@ -14,6 +14,13 @@ class Settings:
     session_days: int = 7
     chat_think: bool = True
     frontend_dist: str = str(PROJECT_ROOT / "frontend" / "dist")
+    embed_model: str = "embeddinggemma-2"
+    kb_dir: str = str(PROJECT_ROOT / "data" / "kb")
+    chroma_dir: str = str(PROJECT_ROOT / "data" / "chroma")
+    kb_top_k: int = 5
+    max_upload_mb: int = 50
+    ocr_model: str = "lightonai/LightOnOCR-3-0.8B"
+    liteparse_ocr_language: str = "chi_tra+eng"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -27,4 +34,13 @@ class Settings:
             chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
             not in ("false", "0"),
             frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
+            embed_model=os.environ.get("EMBED_MODEL", d.embed_model),
+            kb_dir=os.environ.get("KB_DIR", d.kb_dir),
+            chroma_dir=os.environ.get("CHROMA_DIR", d.chroma_dir),
+            kb_top_k=int(os.environ.get("KB_TOP_K", d.kb_top_k)),
+            max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", d.max_upload_mb)),
+            ocr_model=os.environ.get("OCR_MODEL", d.ocr_model),
+            liteparse_ocr_language=os.environ.get(
+                "LITEPARSE_OCR_LANGUAGE", d.liteparse_ocr_language
+            ),
         )

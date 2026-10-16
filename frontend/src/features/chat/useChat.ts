@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from '../../api/client'
 import { readEvents } from '../../api/stream'
 import { useNavGuard } from '../../shell/navGuard'
@@ -20,8 +20,12 @@ interface Options {
 }
 
 async function loadItems(id: number): Promise<ChatItem[]> {
+  return (await loadConversation(id)).items
+}
+
+async function loadConversation(id: number): Promise<{ items: ChatItem[]; kbId: number | null }> {
   const detail = await api.getConversation(id)
-  return fromMessages(detail.messages)
+  return { items: fromMessages(detail.messages), kbId: detail.kb_id ?? null }
 }
 
 function loadErrorText(e: unknown): string {
@@ -47,6 +51,13 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
   const activeIdRef = useRef(conversationId)
   const createdIdRef = useRef<number | null>(null)
   const counterRef = useRef(0)
+  // knowledge base used by the conversation; for a new chat it's applied once the conversation exists
+  const [kbId, setKbId] = useState<number | null>(null)
+  const kbIdRef = useRef<number | null>(null)
+  const applyKbId = useCallback((id: number | null) => {
+    kbIdRef.current = id
+    setKbId(id)
+  }, [])
 
   useEffect(() => {
     activeIdRef.current = conversationId
@@ -59,11 +70,12 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     setLoading(conversationId !== null)
     if (conversationId === null) return
     let cancelled = false
-    loadItems(conversationId).then(
+    loadConversation(conversationId).then(
       (loaded) => {
         if (cancelled) return
         // a reply started meanwhile owns the items: do not overwrite it
-        if (!streamingRef.current) setItems(loaded)
+        if (!streamingRef.current) setItems(loaded.items)
+        applyKbId(loaded.kbId)
         setLoading(false)
       },
       (e) => {
@@ -75,7 +87,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     return () => {
       cancelled = true
     }
-  }, [conversationId])
+  }, [conversationId, applyKbId])
 
   useEffect(() => {
     setBlocked(streaming ? '回覆產生中，確定要離開？' : null)
@@ -161,6 +173,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
           id = created.id
           createdIdRef.current = id
           onConversationCreated(id)
+          if (kbIdRef.current !== null) await api.setConversationKb(id, kbIdRef.current)
         }
         try {
           const res = await api.sendMessage(id, text)
@@ -193,7 +206,28 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     await run(assistantKey, () => api.regenerate(conversationId as number), { reloadOn409: true })
   }
 
+  /** Choose the knowledge base; returns an error message when saving fails. */
+  const selectKb = useCallback(
+    async (id: number | null): Promise<string | null> => {
+      if (id === kbIdRef.current) return null
+      if (conversationId === null) {
+        applyKbId(id)
+        return null
+      }
+      try {
+        const detail = await api.setConversationKb(conversationId, id)
+        if (activeIdRef.current === conversationId) applyKbId(detail.kb_id)
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : '無法設定知識庫'
+      }
+    },
+    [conversationId, applyKbId],
+  )
+
   return {
+    kbId,
+    selectKb,
     items,
     streaming,
     canRetry: canRetryOf(items, streaming),

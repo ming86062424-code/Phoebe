@@ -43,8 +43,9 @@ describe('NavSidebar', () => {
 
   it('renders one link per registry feature', () => {
     setup()
-    expect(features).toHaveLength(1)
+    expect(features).toHaveLength(2)
     expect(screen.getByRole('link', { name: 'AI 對話' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '知識庫' })).toBeInTheDocument()
     expect(screen.getByText('amy')).toBeInTheDocument()
   })
 

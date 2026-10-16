@@ -84,3 +84,50 @@ def test_settings_chat_think_env(monkeypatch):
     assert Settings.from_env().chat_think is False
     monkeypatch.delenv("CHAT_THINK")
     assert Settings.from_env().chat_think is True
+
+
+OLD_SCHEMA = """
+CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE conversations (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+    title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL,
+    role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
+"""
+
+
+def _columns(conn, table):
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def test_init_db_creates_kb_tables_and_columns(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"knowledge_bases", "kb_documents"} <= names
+    assert "kb_id" in _columns(conn, "conversations")
+    assert "sources" in _columns(conn, "messages")
+
+
+def test_init_db_migrates_old_database(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    conn.executescript(OLD_SCHEMA)
+    init_db(conn)
+    init_db(conn)
+    assert "kb_id" in _columns(conn, "conversations")
+    assert "sources" in _columns(conn, "messages")
+
+
+def test_deleting_kb_clears_conversation_kb_id(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    _seed_message(conn)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO knowledge_bases (user_id, name, description, created_at, updated_at) "
+        "VALUES (1, 'k', '', ?, ?)",
+        (now, now),
+    )
+    conn.execute("UPDATE conversations SET kb_id = 1 WHERE id = 1")
+    conn.execute("DELETE FROM knowledge_bases WHERE id = 1")
+    assert conn.execute("SELECT kb_id FROM conversations WHERE id = 1").fetchone()[0] is None

@@ -17,8 +17,13 @@ def _line(event: dict) -> str:
 
 
 async def ndjson_reply(
-    client: OllamaClient, history: list[dict], conversation_id: int, db_path: str
+    client: OllamaClient,
+    history: list[dict],
+    conversation_id: int,
+    db_path: str,
+    sources: list[dict] | None = None,
 ) -> StreamingResponse:
+    """Stream the model's reply; when sources is given, emit them first and save them."""
     stream = client.stream_chat(history)
     try:
         first = await anext(stream)
@@ -39,6 +44,8 @@ async def ndjson_reply(
                 parts.append(delta.text)
             return _line({"type": delta.kind, "text": delta.text})
 
+        if sources is not None:
+            yield _line({"type": "sources", "sources": sources})
         try:
             if first is not None:
                 yield handle(first)
@@ -52,7 +59,7 @@ async def ndjson_reply(
         save_conn = connect(db_path)
         try:
             message_id = conversations.add_message(
-                save_conn, conversation_id, "assistant", "".join(parts)
+                save_conn, conversation_id, "assistant", "".join(parts), sources
             )
         finally:
             save_conn.close()
