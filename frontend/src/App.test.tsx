@@ -4,16 +4,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 function mockMe(status: number) {
+  const json = (data: unknown, st = 200) => new Response(JSON.stringify(data), { status: st })
   vi.stubGlobal(
     'fetch',
-    vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify(
-          status === 200 ? { id: 1, username: 'amy' } : { detail: '未登入' },
-        ),
-        { status },
-      ),
-    ),
+    vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/me') {
+        return Promise.resolve(
+          status === 200 ? json({ id: 1, username: 'amy' }) : json({ detail: '未登入' }, status),
+        )
+      }
+      if (url === '/api/conversations') return Promise.resolve(json([]))
+      return Promise.resolve(
+        json({ id: 12, title: 't', created_at: '', updated_at: '', messages: [] }),
+      )
+    }),
   )
 }
 
@@ -62,6 +66,7 @@ describe('App', () => {
     await new Promise((r) => setTimeout(r, 50))
     expect(screen.getByRole('link', { name: 'AI 對話' })).toBe(link)
     expect(screen.queryByText('載入中…')).not.toBeInTheDocument()
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+    const meCalls = vi.mocked(fetch).mock.calls.filter((c) => c[0] === '/api/me')
+    expect(meCalls).toHaveLength(1)
   })
 })

@@ -1,0 +1,39 @@
+.row {
+  display: flex;
+}
+
+.user {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 85%;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  min-width: 0;
+}
+
+.user .bubble {
+  background: var(--color-primary-soft);
+  border-color: transparent;
+}
+
+.content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pending {
+  color: var(--color-text-muted);
+}
+
+.error {
+  color: var(--color-danger);
+  font-size: 14px;
+}
+
+.content + .error {
+  margin-top: var(--space-2);
+}
