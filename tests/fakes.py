@@ -1,11 +1,18 @@
+from app.ollama_client import ChatDelta
+
+
 class FakeChatClient:
     def __init__(
         self,
-        chunks: list[str] | None = None,
+        deltas: list[ChatDelta] | None = None,
         error: Exception | None = None,
         error_after: int | None = None,
     ):
-        self.chunks = ["你", "好"] if chunks is None else chunks
+        self.deltas = (
+            [ChatDelta("thinking", "嗯"), ChatDelta("content", "你"), ChatDelta("content", "好")]
+            if deltas is None
+            else deltas
+        )
         self.error = error
         self.error_after = error_after
         self.calls: list[list[dict]] = []
@@ -14,9 +21,9 @@ class FakeChatClient:
         self.calls.append([dict(m) for m in messages])
         if self.error is not None and self.error_after is None:
             raise self.error
-        for i, chunk in enumerate(self.chunks):
+        for i, delta in enumerate(self.deltas):
             if self.error is not None and i == self.error_after:
                 raise self.error
-            yield chunk
-        if self.error is not None and self.error_after is not None and self.error_after >= len(self.chunks):
+            yield delta
+        if self.error is not None and self.error_after is not None and self.error_after >= len(self.deltas):
             raise self.error

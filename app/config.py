@@ -12,6 +12,8 @@ class Settings:
     eval_judge_model: str = "qwen3.5:4b"
     db_path: str = str(PROJECT_ROOT / "data" / "app.db")
     session_days: int = 7
+    chat_think: bool = True
+    frontend_dist: str = str(PROJECT_ROOT / "frontend" / "dist")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -22,4 +24,7 @@ class Settings:
             eval_judge_model=os.environ.get("EVAL_JUDGE_MODEL", d.eval_judge_model),
             db_path=os.environ.get("DB_PATH", d.db_path),
             session_days=int(os.environ.get("SESSION_DAYS", d.session_days)),
+            chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
+            not in ("false", "0"),
+            frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
         )

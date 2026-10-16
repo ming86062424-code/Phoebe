@@ -1,11 +1,12 @@
 # Phoebe
 
-在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + 原生 JS）。
+在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React）。
 
 ## 事前準備
 
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/)
+- Node 22 以上（前端建置與開發用）
 - Ollama 已啟動，位於 http://localhost:11434
 - 下載模型：`ollama pull gemma4:e4b`（評測另需 `ollama pull qwen3.5:4b`）
 
@@ -16,7 +17,41 @@ uv sync
 uv run uvicorn app.main:create_app --factory --reload
 ```
 
-接著開啟 http://localhost:8000。
+前端需先建置才能由後端提供（見下方「前端」一節），再開啟 http://localhost:8000。
+
+## 前端
+
+前端位於 `frontend/`（React + TypeScript + Vite）。
+
+安裝套件：
+
+```
+cd frontend && npm install
+```
+
+開發模式（兩個終端機各跑一個指令，開啟 http://localhost:5173）：
+
+```
+uv run uvicorn app.main:create_app --factory --reload
+cd frontend && npm run dev
+```
+
+正式模式（建置後只需開 uvicorn，開啟 http://localhost:8000）：
+
+```
+cd frontend && npm run build
+uv run uvicorn app.main:create_app --factory
+```
+
+注意：後端在啟動時才決定要不要提供 `frontend/dist`，所以第一次執行 `npm run build` 之後，必須重新啟動 uvicorn。
+
+前端測試與檢查：
+
+```
+cd frontend && npm test
+cd frontend && npm run lint
+cd frontend && npm run typecheck
+```
 
 ## 測試
 
@@ -43,6 +78,8 @@ uv run --group eval pytest evals -v
 | `EVAL_JUDGE_MODEL` | `qwen3.5:4b` | 評測的裁判模型 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
+| `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false` 或 `0` 為關閉） |
+| `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供；使用相對路徑時，會以啟動 uvicorn 的工作目錄為基準 |
 
 ## 資料位置
 
@@ -51,6 +88,10 @@ uv run --group eval pytest evals -v
 ## 專案結構
 
 - `app/` — 後端（設定、資料庫、驗證、對話、Ollama 客戶端、路由）
-- `static/` — 前端（HTML / JS / CSS）
+- `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試
 - `evals/` — 聊天品質評測（deepeval）
+
+## 開發流程
+
+所有變更都透過 feature 分支與 Pull Request 進行，由 repo 擁有者審查後合併，不直接推送到 `main`。

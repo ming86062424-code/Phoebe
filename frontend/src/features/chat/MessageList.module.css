@@ -1,0 +1,37 @@
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 800px;
+  margin: 0 auto;
+  padding: var(--space-2) 0;
+}
+
+.empty {
+  margin: var(--space-5) 0;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.retry {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.retryButton {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+
+.retryButton:hover {
+  background: var(--color-primary-soft);
+}

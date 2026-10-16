@@ -7,7 +7,10 @@ from app.main import create_app
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(db_path=str(tmp_path / "test.db"))
+    return Settings(
+        db_path=str(tmp_path / "test.db"),
+        frontend_dist=str(tmp_path / "no-dist"),
+    )
 
 
 @pytest.fixture
