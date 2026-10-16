@@ -4,8 +4,15 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "bcrypt>=5.0.0",
+    "chromadb>=1.5.9",
     "fastapi>=0.143.2",
     "httpx>=0.28.1",
+    "liteparse>=2.16.0",
+    "llama-index-core>=0.14.25",
+    "llama-index-embeddings-ollama>=0.10.0",
+    "llama-index-vector-stores-chroma>=0.6.0",
+    "pypdfium2>=5.14.0",
+    "python-multipart>=0.0.32",
     "uvicorn>=0.54.0",
 ]
 
@@ -18,6 +25,21 @@ eval = [
     "deepeval>=4.3.0,<5",
     "ollama>=0.6.3",
 ]
+ocr = [
+    "torch>=2.9",
+    "torchvision>=0.24",
+    "transformers>=5.5.4",
+    "pillow>=11",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126" }]
+torchvision = [{ index = "pytorch-cu126" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

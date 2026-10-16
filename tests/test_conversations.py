@@ -20,7 +20,7 @@ def test_create_and_list(make_user):
     items = alice.get("/api/conversations").json()
     assert len(items) == 1
     assert items[0]["title"] == ""
-    assert set(items[0]) == {"id", "title", "created_at", "updated_at"}
+    assert set(items[0]) == {"id", "title", "kb_id", "created_at", "updated_at"}
 
 
 def test_list_orders_by_updated_at_then_id_desc(make_user, settings):
@@ -49,7 +49,7 @@ def test_get_includes_messages_in_order(make_user, settings):
         ]
     data = alice.get(f"/api/conversations/{cid}").json()
     assert [m["role"] for m in data["messages"]] == ["user", "assistant"]
-    assert set(data["messages"][0]) == {"id", "role", "content", "created_at"}
+    assert set(data["messages"][0]) == {"id", "role", "content", "sources", "created_at"}
 
 
 def test_message_content_stored_verbatim(make_user, settings):

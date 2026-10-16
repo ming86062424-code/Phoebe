@@ -29,7 +29,39 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS knowledge_bases (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kb_documents (
+    id INTEGER PRIMARY KEY,
+    kb_id INTEGER NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    parser TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'parsing', 'indexing', 'ready', 'failed')),
+    error TEXT,
+    progress_done INTEGER NOT NULL DEFAULT 0,
+    progress_total INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
+
+# Columns added after the first release; init_db adds them to older databases.
+MIGRATIONS = [
+    (
+        "conversations",
+        "kb_id",
+        "INTEGER REFERENCES knowledge_bases(id) ON DELETE SET NULL",
+    ),
+    ("messages", "sources", "TEXT"),
+]
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -42,6 +74,11 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    for table, column, decl in MIGRATIONS:
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.commit()
 
 
 def now_iso() -> str:
