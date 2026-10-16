@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom/vitest'
+import { cleanup } from '@testing-library/react'
+import { afterEach } from 'vitest'
 import { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { TextDecoder as NodeTextDecoder, TextEncoder as NodeTextEncoder } from 'node:util'
 
@@ -12,3 +14,7 @@ if (typeof globalThis.TextEncoder === 'undefined') {
 if (typeof globalThis.TextDecoder === 'undefined') {
   Object.assign(globalThis, { TextDecoder: NodeTextDecoder })
 }
+
+afterEach(() => {
+  cleanup()
+})
