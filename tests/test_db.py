@@ -75,3 +75,12 @@ def test_default_db_path_is_absolute_project_data(monkeypatch):
     path = Path(Settings.from_env().db_path)
     assert path.is_absolute()
     assert path.parts[-2:] == ("data", "app.db")
+
+
+def test_settings_chat_think_env(monkeypatch):
+    monkeypatch.setenv("CHAT_THINK", "FALSE")
+    assert Settings.from_env().chat_think is False
+    monkeypatch.setenv("CHAT_THINK", "0")
+    assert Settings.from_env().chat_think is False
+    monkeypatch.delenv("CHAT_THINK")
+    assert Settings.from_env().chat_think is True

@@ -10,7 +10,7 @@ from app.auth import current_user
 from app.config import Settings
 from app.db import connect
 from app.deps import get_chat_client, get_db, get_settings
-from app.ollama_client import OllamaClient, OllamaError, OllamaUnavailable
+from app.ollama_client import ChatDelta, OllamaClient, OllamaError, OllamaUnavailable
 
 router = APIRouter(prefix="/api")
 
@@ -52,7 +52,7 @@ async def send_message(
     try:
         first = await anext(stream)
     except StopAsyncIteration:
-        first = ""
+        first = None
     except OllamaUnavailable as e:
         raise HTTPException(status_code=503, detail=UNAVAILABLE_DETAIL) from e
     except OllamaError as e:
@@ -61,12 +61,22 @@ async def send_message(
         raise HTTPException(status_code=503, detail=UNAVAILABLE_DETAIL) from e
 
     async def body_iter():
-        parts = [first]
-        if first:
-            yield first
-        async for chunk in stream:
-            parts.append(chunk)
-            yield chunk
+        parts: list[str] = []
+
+        def handle(delta: ChatDelta) -> str:
+            if delta.kind == "content":
+                parts.append(delta.text)
+                return delta.text
+            return ""
+
+        if first is not None:
+            text = handle(first)
+            if text:
+                yield text
+        async for delta in stream:
+            text = handle(delta)
+            if text:
+                yield text
         # The generator uses its own connection so it doesn't depend on the
         # request-scoped dependency's lifetime.
         save_conn = connect(settings.db_path)

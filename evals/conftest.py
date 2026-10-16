@@ -64,7 +64,9 @@ def generate_reply(settings: Settings):
         client = OllamaClient(settings.ollama_base_url, settings.chat_model)
 
         async def collect() -> str:
-            return "".join([chunk async for chunk in client.stream_chat(messages)])
+            return "".join(
+                [d.text async for d in client.stream_chat(messages) if d.kind == "content"]
+            )
 
         return asyncio.run(collect())
 

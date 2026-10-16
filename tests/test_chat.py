@@ -1,7 +1,7 @@
 import pytest
 
 from app.deps import get_chat_client
-from app.ollama_client import ModelNotFound, OllamaStreamError, OllamaUnavailable
+from app.ollama_client import ChatDelta, ModelNotFound, OllamaStreamError, OllamaUnavailable
 from tests.fakes import FakeChatClient
 
 
@@ -23,6 +23,14 @@ def test_stream_returns_concatenated_text(make_user, fake_chat):
     r = _send(c, cid, "嗨")
     assert r.status_code == 200 and r.text == "你好"
     assert r.headers["content-type"].startswith("text/plain")
+
+
+def test_thinking_is_not_streamed_or_saved_yet(make_user, fake_chat):
+    c = make_user("alice")
+    cid = _new_conv(c)
+    r = _send(c, cid, "嗨")
+    assert r.text == "你好"
+    assert _messages(c, cid)[1]["content"] == "你好"
 
 
 def test_user_and_assistant_messages_saved(make_user, fake_chat):
@@ -106,7 +114,7 @@ def test_model_not_found_returns_503_with_model_name(make_user, app):
 
 def test_mid_stream_error_does_not_save_assistant(make_user, app):
     app.dependency_overrides[get_chat_client] = lambda: FakeChatClient(
-        chunks=["你", "好"], error=OllamaStreamError("boom"), error_after=1
+        deltas=[ChatDelta("content", "你"), ChatDelta("content", "好")], error=OllamaStreamError("boom"), error_after=1
     )
     c = make_user("alice")
     cid = _new_conv(c)
