@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -41,5 +42,26 @@ describe('App', () => {
     render(<App />)
     await screen.findByText('amy')
     expect(window.location.hash).toBe('#/chat')
+  })
+
+  it('shows an error with retry when /api/me fails with a non-401 error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network')))
+    render(<App />)
+    expect(await screen.findByText('無法連線到伺服器')).toBeInTheDocument()
+    mockMe(200)
+    await userEvent.click(screen.getByRole('button', { name: '重試' }))
+    expect(await screen.findByText('amy')).toBeInTheDocument()
+  })
+
+  it('does not remount the shell when moving from /chat to /chat/12', async () => {
+    mockMe(200)
+    render(<App />)
+    const link = await screen.findByRole('link', { name: 'AI 對話' })
+    window.location.hash = '#/chat/12'
+    await vi.waitFor(() => expect(window.location.hash).toBe('#/chat/12'))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.getByRole('link', { name: 'AI 對話' })).toBe(link)
+    expect(screen.queryByText('載入中…')).not.toBeInTheDocument()
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
   })
 })
