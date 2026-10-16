@@ -29,6 +29,7 @@ describe('api client', () => {
     expect(detailText({ detail: 'x' }, 400)).toBe('x')
     expect(detailText({ detail: [{ msg: 'a' }, { msg: 'b' }] }, 422)).toBe('a\nb')
     expect(detailText({}, 500)).toBe('發生錯誤（500）')
+    expect(detailText({ detail: [{ msg: 'Value error, 訊息不能是空白' }] }, 422)).toBe('訊息不能是空白')
   })
 
   it('sendMessage returns the Response on 200 and throws ApiError with detail on 503', async () => {

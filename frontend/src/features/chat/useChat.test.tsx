@@ -240,7 +240,7 @@ describe('useChat', () => {
       .mockResolvedValueOnce(held.response)
     const { result } = setup()
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-    let p!: Promise<void>
+    let p!: Promise<string | null>
     act(() => {
       p = result.current.send('x')
     })
@@ -252,5 +252,100 @@ describe('useChat', () => {
       await p
     })
     expect(result.current.streaming).toBe(false)
+  })
+
+  it('keeps a message sent while the conversation is still loading', async () => {
+    let resolveLoad!: (r: Response) => void
+    const held = heldResponse()
+    fetchMock
+      .mockReturnValueOnce(new Promise<Response>((r) => (resolveLoad = r)))
+      .mockResolvedValueOnce(held.response)
+    const { result } = setup()
+    expect(result.current.loading).toBe(true)
+    let p!: Promise<string | null>
+    act(() => {
+      p = result.current.send('哈囉')
+    })
+    await act(async () => {
+      resolveLoad(jsonResponse(conversation(1)))
+    })
+    expect(result.current.items.map((i) => i.content)).toEqual(['哈囉', ''])
+    expect(result.current.loading).toBe(false)
+    await act(async () => {
+      held.push({ type: 'content', text: '嗨' })
+      held.push({ type: 'done', message_id: 1 })
+      held.close()
+      await p
+    })
+    expect(result.current.items.map((i) => i.content)).toEqual(['哈囉', '嗨'])
+  })
+
+  it('a 422 rejection removes the pair, keeps the text and never regenerates', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(conversation(1)))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: [{ msg: 'Value error, 訊息最多 8000 字' }] }, 422),
+      )
+    const { result, onFinished } = setup()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    let rejected: string | null = null
+    await act(async () => {
+      rejected = await result.current.send('太長')
+    })
+    expect(rejected).toBe('訊息最多 8000 字')
+    expect(result.current.items).toHaveLength(0)
+    expect(result.current.canRetry).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(onFinished).toHaveBeenCalled()
+  })
+
+  it('retry after a network error before the message was stored sends it again', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(conversation(1)))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(
+        ndjsonResponse([
+          { type: 'content', text: '好' },
+          { type: 'done', message_id: 9 },
+        ]),
+      )
+    const { result } = setup()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(() => result.current.send('x'))
+    expect(result.current.canRetry).toBe(true)
+    await act(() => result.current.retry())
+    expect(fetchMock.mock.calls[2][0]).toBe('/api/conversations/1/messages')
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({ content: 'x' })
+    expect(result.current.items.map((i) => i.content)).toEqual(['x', '好'])
+  })
+
+  it('retry after createConversation succeeded but sendMessage failed re-sends to the new id', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(conversation(7), 201))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(
+        ndjsonResponse([
+          { type: 'content', text: '好' },
+          { type: 'done', message_id: 9 },
+        ]),
+      )
+    const { result, rerender } = setup(null)
+    await act(() => result.current.send('x'))
+    rerender({ id: 7 })
+    await act(async () => {})
+    await act(() => result.current.retry())
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls[2][0]).toBe('/api/conversations/7/messages')
+    expect(result.current.items.map((i) => i.content)).toEqual(['x', '好'])
+  })
+
+  it('refreshes the list when the stream ends with an error event', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(conversation(1)))
+      .mockResolvedValueOnce(ndjsonResponse([{ type: 'error', detail: '壞了' }]))
+    const { result, onFinished } = setup()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(() => result.current.send('x'))
+    expect(onFinished).toHaveBeenCalledTimes(1)
   })
 })

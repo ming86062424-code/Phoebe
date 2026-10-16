@@ -45,4 +45,18 @@ describe('Composer', () => {
     await userEvent.type(screen.getByRole('textbox'), 'a{Enter}')
     expect(onSend).not.toHaveBeenCalled()
   })
+
+  it('blocks messages over 8000 characters with a hint', () => {
+    const onSend = vi.fn()
+    render(<Composer disabled={false} onSend={onSend} />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'a'.repeat(8001) } })
+    expect(screen.getByText('訊息最多 8000 字')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '送出' })).toBeDisabled()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+    fireEvent.change(box, { target: { value: 'a'.repeat(8000) + '   ' } })
+    expect(screen.queryByText('訊息最多 8000 字')).toBeNull()
+    expect(screen.getByRole('button', { name: '送出' })).toBeEnabled()
+  })
 })

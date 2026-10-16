@@ -13,6 +13,7 @@ export interface ChatItem {
 }
 
 export const INTERRUPTED = '回覆中斷'
+export const MAX_MESSAGE_LENGTH = 8000
 
 export function fromMessages(messages: Message[]): ChatItem[] {
   return messages.map((m) => ({
@@ -28,7 +29,7 @@ function stopThinking(item: ChatItem, now: number): ChatItem {
   if (item.thinkingStartedAt === undefined || item.thinkingSeconds !== undefined) return item
   return {
     ...item,
-    thinkingSeconds: Math.round((now - item.thinkingStartedAt) / 1000),
+    thinkingSeconds: Math.floor((now - item.thinkingStartedAt) / 1000),
   }
 }
 

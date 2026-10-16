@@ -17,6 +17,7 @@ export function detailText(data: unknown, status: number): string {
     return detail
       .map((d) => (d as { msg?: unknown } | null)?.msg)
       .filter((m): m is string => typeof m === 'string')
+      .map((m) => m.replace(/^Value error, /, ''))
       .join('\n')
   }
   return `發生錯誤（${status}）`

@@ -88,4 +88,79 @@ describe('ChatPage', () => {
     expect(screen.getByRole('button', { name: '展開對話列表' })).toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: '對話列表' })).toBeNull()
   })
+
+  describe('narrow window', () => {
+    beforeEach(() => {
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }))
+      window.location.hash = '#/chat'
+      fetchMock.mockImplementation((url: string) => {
+        if (url === '/api/conversations')
+          return Promise.resolve(
+            jsonResponse([{ id: 2, title: '第二個', created_at: '', updated_at: '' }]),
+          )
+        if (url === '/api/conversations/2') return Promise.resolve(jsonResponse(conversation(2)))
+        return Promise.reject(new Error('unexpected ' + url))
+      })
+    })
+
+    it('hides the list by default but lets the user open and pick from it', async () => {
+      setup()
+      expect(screen.queryByRole('navigation', { name: '對話列表' })).toBeNull()
+      const toggle = screen.getByRole('button', { name: '展開對話列表' })
+      expect(toggle).toBeEnabled()
+      await userEvent.click(toggle)
+      expect(await screen.findByRole('navigation', { name: '對話列表' })).toBeInTheDocument()
+      await userEvent.click(await screen.findByText('第二個'))
+      await waitFor(() => expect(window.location.hash).toBe('#/chat/2'))
+      expect(screen.queryByRole('navigation', { name: '對話列表' })).toBeNull()
+      expect(localStorage.getItem('phoebe.chat.listCollapsed')).toBeNull()
+    })
+  })
+
+  it('disables the composer while the conversation is loading', async () => {
+    window.location.hash = '#/chat/1'
+    let resolveLoad!: (r: Response) => void
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/conversations') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/conversations/1') return new Promise<Response>((r) => (resolveLoad = r))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    await userEvent.type(screen.getByRole('textbox'), 'hi')
+    expect(screen.getByRole('button', { name: '送出' })).toBeDisabled()
+    resolveLoad(jsonResponse(conversation(1)))
+    await waitFor(() => expect(screen.getByRole('button', { name: '送出' })).toBeEnabled())
+  })
+
+  it('redirects an invalid conversation id to #/chat', async () => {
+    window.location.hash = '#/chat/abc'
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse([])))
+    setup()
+    await waitFor(() => expect(window.location.hash).toBe('#/chat'))
+  })
+
+  it('puts a rejected message back into the composer with the error', async () => {
+    window.location.hash = '#/chat/1'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/conversations') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/conversations/1') return Promise.resolve(jsonResponse(conversation(1)))
+      if (url === '/api/conversations/1/messages')
+        return Promise.resolve(
+          jsonResponse({ detail: [{ msg: 'Value error, 訊息不能是空白' }] }, 422),
+        )
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const box = screen.getByRole('textbox')
+    await waitFor(() => expect(box).toBeEnabled())
+    await userEvent.type(box, '原文{Enter}')
+    expect(await screen.findByText('訊息不能是空白')).toBeInTheDocument()
+    expect(box).toHaveValue('原文')
+    expect(screen.queryByRole('button', { name: '重新送出' })).toBeNull()
+  })
 })

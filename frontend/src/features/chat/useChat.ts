@@ -40,6 +40,9 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
   const [items, setItems] = useState<ChatItem[]>([])
   const [streaming, setStreaming] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(conversationId !== null)
+  // whether the last user message is stored server-side (so retry may regenerate instead of re-sending)
+  const persistedRef = useRef(true)
   const streamingRef = useRef(false)
   const activeIdRef = useRef(conversationId)
   const createdIdRef = useRef<number | null>(null)
@@ -50,16 +53,23 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     // The id changed because send() just created this conversation: keep the in-flight items.
     if (conversationId !== null && conversationId === createdIdRef.current) return
     createdIdRef.current = null
+    persistedRef.current = true
     setLoadError(null)
     setItems([])
+    setLoading(conversationId !== null)
     if (conversationId === null) return
     let cancelled = false
     loadItems(conversationId).then(
       (loaded) => {
-        if (!cancelled) setItems(loaded)
+        if (cancelled) return
+        // a reply started meanwhile owns the items: do not overwrite it
+        if (!streamingRef.current) setItems(loaded)
+        setLoading(false)
       },
       (e) => {
-        if (!cancelled) setLoadError(loadErrorText(e))
+        if (cancelled) return
+        setLoadError(loadErrorText(e))
+        setLoading(false)
       },
     )
     return () => {
@@ -72,21 +82,23 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     return () => setBlocked(null)
   }, [streaming, setBlocked])
 
-  async function run(key: string, open: () => Promise<Response>, reloadOn409 = false) {
+  async function run(
+    key: string,
+    open: () => Promise<Response>,
+    { reloadOn409 = false, userKey }: { reloadOn409?: boolean; userKey?: string } = {},
+  ): Promise<string | null> {
     streamingRef.current = true
     setStreaming(true)
     const update = (fn: (i: ChatItem) => ChatItem) =>
       setItems((prev) => prev.map((i) => (i.key === key ? fn(i) : i)))
     let finished = false
+    let rejected: string | null = null
     try {
       const res = await open()
       if (!res.body) throw new SyntaxError('empty body')
       for await (const event of readEvents(res.body)) {
         update((i) => applyEvent(i, event, Date.now()))
-        if (event.type === 'done') {
-          finished = true
-          onFinished()
-        } else if (event.type === 'error') {
+        if (event.type === 'done' || event.type === 'error') {
           finished = true
         }
       }
@@ -98,25 +110,41 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
         const id = conversationId
         try {
           const loaded = await loadItems(id as number)
+          persistedRef.current = true
           if (activeIdRef.current === id) setItems(loaded)
         } catch (e2) {
           update((i) => failItem(i, streamErrorText(e2), Date.now()))
         }
+      } else if (
+        userKey !== undefined &&
+        e instanceof ApiError &&
+        e.status >= 400 &&
+        e.status < 500 &&
+        e.status !== 401 &&
+        !persistedRef.current
+      ) {
+        // the server refused the message (validation etc.): drop the pair and hand the text back
+        rejected = e.message
+        setItems((prev) => prev.filter((i) => i.key !== key && i.key !== userKey))
       } else {
         update((i) => failItem(i, streamErrorText(e), Date.now()))
       }
     } finally {
       streamingRef.current = false
       setStreaming(false)
+      // the backend may have set the conversation title even when the reply failed
+      onFinished()
     }
+    return rejected
   }
 
   function newAssistant(key: string): ChatItem {
     return { key, role: 'assistant', content: '', thinking: '', status: 'streaming' }
   }
 
-  async function send(text: string) {
-    if (streamingRef.current) return
+  async function send(text: string): Promise<string | null> {
+    if (streamingRef.current) return null
+    persistedRef.current = false
     const n = ++counterRef.current
     const assistantKey = `a${n}`
     setItems((prev) => [
@@ -124,24 +152,36 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
       { key: `u${n}`, role: 'user', content: text, thinking: '', status: 'done' },
       newAssistant(assistantKey),
     ])
-    await run(assistantKey, async () => {
-      let id = conversationId
-      if (id === null) {
-        const created = await api.createConversation()
-        id = created.id
-        createdIdRef.current = id
-        onConversationCreated(id)
-      }
-      return api.sendMessage(id, text)
-    })
+    return run(
+      assistantKey,
+      async () => {
+        let id = conversationId
+        if (id === null) {
+          const created = await api.createConversation()
+          id = created.id
+          createdIdRef.current = id
+          onConversationCreated(id)
+        }
+        try {
+          const res = await api.sendMessage(id, text)
+          persistedRef.current = true
+          return res
+        } catch (e) {
+          // 503: the backend stores the user message before it calls Ollama
+          if (e instanceof ApiError && e.status === 503) persistedRef.current = true
+          throw e
+        }
+      },
+      { userKey: `u${n}` },
+    )
   }
 
   async function retry() {
     if (streamingRef.current || !canRetryOf(items, false)) return
     const last = items[items.length - 1]
     const base = last.role === 'assistant' ? items.slice(0, -1) : items
-    if (conversationId === null) {
-      // the conversation was never created: send the last user message again
+    if (!persistedRef.current) {
+      // the message never reached the database: send the same text again
       const lastUser = base[base.length - 1]
       setItems(base.slice(0, -1))
       await send(lastUser.content)
@@ -150,7 +190,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     const n = ++counterRef.current
     const assistantKey = `a${n}`
     setItems([...base, newAssistant(assistantKey)])
-    await run(assistantKey, () => api.regenerate(conversationId), true)
+    await run(assistantKey, () => api.regenerate(conversationId as number), { reloadOn409: true })
   }
 
   return {
@@ -158,6 +198,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     streaming,
     canRetry: canRetryOf(items, streaming),
     loadError,
+    loading,
     send,
     retry,
   }

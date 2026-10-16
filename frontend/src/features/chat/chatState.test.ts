@@ -16,11 +16,11 @@ describe('chatState', () => {
     expect(item).toMatchObject({ thinking: '甲乙', thinkingStartedAt: 1000 })
   })
 
-  it('rounds thinking seconds at the first content only', () => {
+  it('floors thinking seconds at the first content only', () => {
     let item = applyEvent(fresh, { type: 'thinking', text: '甲' }, 1000)
     item = applyEvent(item, { type: 'content', text: 'x' }, 3600)
     item = applyEvent(item, { type: 'content', text: 'y' }, 9000)
-    expect(item).toMatchObject({ content: 'xy', thinkingSeconds: 3 })
+    expect(item).toMatchObject({ content: 'xy', thinkingSeconds: 2 })
   })
 
   it('leaves thinkingSeconds unset when there was no thinking', () => {

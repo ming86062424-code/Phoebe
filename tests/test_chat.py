@@ -140,8 +140,12 @@ def test_send_to_nonexistent_conversation_404(make_user, fake_chat):
 def test_blank_or_too_long_content_422(make_user, fake_chat):
     c = make_user("alice")
     cid = _new_conv(c)
-    assert _send(c, cid, "   ").status_code == 422
-    assert _send(c, cid, "字" * 8001).status_code == 422
+    blank = _send(c, cid, "   ")
+    assert blank.status_code == 422
+    assert "訊息不能是空白" in blank.json()["detail"][0]["msg"]
+    too_long = _send(c, cid, "字" * 8001)
+    assert too_long.status_code == 422
+    assert "訊息最多 8000 字" in too_long.json()["detail"][0]["msg"]
     assert _send(c, cid, "字" * 8000).status_code == 200
 
 

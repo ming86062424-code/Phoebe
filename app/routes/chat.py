@@ -23,9 +23,9 @@ class MessageIn(BaseModel):
     def validate_content(cls, v: str) -> str:
         stripped = v.strip()
         if not stripped:
-            raise ValueError("content must not be blank")
+            raise ValueError("訊息不能是空白")
         if len(stripped) > MAX_CONTENT_LENGTH:
-            raise ValueError(f"content must be at most {MAX_CONTENT_LENGTH} characters")
+            raise ValueError(f"訊息最多 {MAX_CONTENT_LENGTH} 字")
         return v
 
 
