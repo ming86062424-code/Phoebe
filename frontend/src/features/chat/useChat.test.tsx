@@ -303,6 +303,8 @@ describe('useChat', () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(conversation(1)))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      // retry first checks whether the message was stored: it was not
+      .mockResolvedValueOnce(jsonResponse(conversation(1)))
       .mockResolvedValueOnce(
         ndjsonResponse([
           { type: 'content', text: '好' },
@@ -314,8 +316,8 @@ describe('useChat', () => {
     await act(() => result.current.send('x'))
     expect(result.current.canRetry).toBe(true)
     await act(() => result.current.retry())
-    expect(fetchMock.mock.calls[2][0]).toBe('/api/conversations/1/messages')
-    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({ content: 'x' })
+    expect(fetchMock.mock.calls[3][0]).toBe('/api/conversations/1/messages')
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1].body))).toEqual({ content: 'x' })
     expect(result.current.items.map((i) => i.content)).toEqual(['x', '好'])
   })
 
@@ -323,6 +325,7 @@ describe('useChat', () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(conversation(7), 201))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(jsonResponse(conversation(7)))
       .mockResolvedValueOnce(
         ndjsonResponse([
           { type: 'content', text: '好' },
@@ -334,8 +337,8 @@ describe('useChat', () => {
     rerender({ id: 7 })
     await act(async () => {})
     await act(() => result.current.retry())
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(fetchMock.mock.calls[2][0]).toBe('/api/conversations/7/messages')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock.mock.calls[3][0]).toBe('/api/conversations/7/messages')
     expect(result.current.items.map((i) => i.content)).toEqual(['x', '好'])
   })
 

@@ -70,14 +70,14 @@ export const api = {
     empty('/api/auth/register', jsonInit('POST', { username, password })),
   logout: () => empty('/api/auth/logout', jsonInit('POST')),
   listConversations: () => json<Conversation[]>('/api/conversations'),
-  createConversation: () =>
-    json<Conversation>('/api/conversations', jsonInit('POST')),
+  createConversation: (signal?: AbortSignal) =>
+    json<Conversation>('/api/conversations', { ...jsonInit('POST'), signal }),
   getConversation: (id: number) =>
     json<ConversationDetail>(`/api/conversations/${id}`),
   deleteConversation: (id: number) =>
     empty(`/api/conversations/${id}`, jsonInit('DELETE')),
-  sendMessage: (id: number, content: string) =>
-    request(`/api/conversations/${id}/messages`, jsonInit('POST', { content })),
-  regenerate: (id: number) =>
-    request(`/api/conversations/${id}/regenerate`, jsonInit('POST')),
+  sendMessage: (id: number, content: string, signal?: AbortSignal) =>
+    request(`/api/conversations/${id}/messages`, { ...jsonInit('POST', { content }), signal }),
+  regenerate: (id: number, signal?: AbortSignal) =>
+    request(`/api/conversations/${id}/regenerate`, { ...jsonInit('POST'), signal }),
 }
