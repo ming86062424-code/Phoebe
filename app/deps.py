@@ -21,4 +21,6 @@ def get_db(request: Request) -> Iterator[sqlite3.Connection]:
 
 
 def get_chat_client(settings: Settings = Depends(get_settings)) -> OllamaClient:
-    return OllamaClient(settings.ollama_base_url, settings.chat_model)
+    return OllamaClient(
+        settings.ollama_base_url, settings.chat_model, think=settings.chat_think
+    )

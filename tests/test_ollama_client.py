@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.ollama_client import (
+    ChatDelta,
     ModelNotFound,
     OllamaClient,
     OllamaStreamError,
@@ -19,9 +20,9 @@ def ndjson(*objs) -> bytes:
     return b"".join(json.dumps(o, ensure_ascii=False).encode() + b"\n" for o in objs)
 
 
-def make_client(handler) -> OllamaClient:
+def make_client(handler, think: bool = True) -> OllamaClient:
     return OllamaClient(
-        "http://ollama.test", MODEL, transport=httpx.MockTransport(handler)
+        "http://ollama.test", MODEL, think=think, transport=httpx.MockTransport(handler)
     )
 
 
@@ -45,7 +46,7 @@ async def test_stream_chat_yields_content_pieces():
         {"done": True},
     )
     client = make_client(lambda request: httpx.Response(200, content=body))
-    assert await collect(client) == ["你", "好"]
+    assert await collect(client) == [ChatDelta("content", "你"), ChatDelta("content", "好")]
 
 
 async def test_stream_chat_sends_model_messages_and_stream_flag():
@@ -69,7 +70,7 @@ async def test_stream_chat_handles_multibyte_split_across_chunks():
     split = body.index("犬".encode()) + 1
     stream = SplitStream(body[:split], body[split:])
     client = make_client(lambda request: httpx.Response(200, stream=stream))
-    assert "".join(await collect(client)) == "柴犬"
+    assert "".join([d.text for d in await collect(client)]) == "柴犬"
 
 
 async def test_stream_chat_skips_empty_content():
@@ -79,7 +80,7 @@ async def test_stream_chat_skips_empty_content():
         {"message": {"content": ""}, "done": True},
     )
     client = make_client(lambda request: httpx.Response(200, content=body))
-    assert await collect(client) == ["好"]
+    assert await collect(client) == [ChatDelta("content", "好")]
 
 
 async def test_connect_error_raises_ollama_unavailable():
@@ -119,4 +120,32 @@ async def test_error_line_mid_stream_raises_stream_error():
     with pytest.raises(OllamaStreamError, match="boom"):
         async for piece in client.stream_chat([{"role": "user", "content": "hi"}]):
             pieces.append(piece)
-    assert pieces == ["你"]
+    assert pieces == [ChatDelta("content", "你")]
+
+
+async def test_stream_chat_yields_thinking_then_content():
+    body = ndjson(
+        {"message": {"thinking": "想"}},
+        {"message": {"content": "你"}},
+        {"done": True},
+    )
+    client = make_client(lambda request: httpx.Response(200, content=body))
+    assert await collect(client) == [ChatDelta("thinking", "想"), ChatDelta("content", "你")]
+
+
+async def test_stream_chat_sends_think_flag():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["think"])
+        return httpx.Response(200, content=ndjson({"done": True}))
+
+    await collect(make_client(handler, think=False))
+    await collect(make_client(handler))
+    assert seen == [False, True]
+
+
+async def test_same_line_thinking_before_content():
+    body = ndjson({"message": {"thinking": "a", "content": "b"}}, {"done": True})
+    client = make_client(lambda request: httpx.Response(200, content=body))
+    assert await collect(client) == [ChatDelta("thinking", "a"), ChatDelta("content", "b")]

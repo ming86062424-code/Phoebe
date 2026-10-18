@@ -1,7 +1,15 @@
 import json
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Literal
 
 import httpx
+
+
+@dataclass(frozen=True)
+class ChatDelta:
+    kind: Literal["thinking", "content"]
+    text: str
 
 
 class OllamaError(Exception):
@@ -28,14 +36,21 @@ class OllamaClient:
         self,
         base_url: str,
         model: str,
+        think: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.think = think
         self._transport = transport
 
-    async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
-        payload = {"model": self.model, "messages": messages, "stream": True}
+    async def stream_chat(self, messages: list[dict]) -> AsyncIterator[ChatDelta]:
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "think": self.think,
+        }
         timeout = httpx.Timeout(None, connect=5.0)
         try:
             async with httpx.AsyncClient(
@@ -60,9 +75,11 @@ class OllamaClient:
                             raise OllamaStreamError("Ollama 回傳無法解析的資料") from e
                         if "error" in data:
                             raise OllamaStreamError(str(data["error"]))
-                        content = (data.get("message") or {}).get("content")
-                        if content:
-                            yield content
+                        message = data.get("message") or {}
+                        if message.get("thinking"):
+                            yield ChatDelta("thinking", message["thinking"])
+                        if message.get("content"):
+                            yield ChatDelta("content", message["content"])
                         if data.get("done"):
                             return
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
