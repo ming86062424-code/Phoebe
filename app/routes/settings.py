@@ -60,7 +60,8 @@ async def put_settings(
         raise HTTPException(status_code=422, detail=str(e)) from None
     availability = await provider_availability(settings)
     provider = values.get("llm_provider")
-    if provider is not None:
+    current = await run_in_threadpool(llm_settings.load_llm_settings, conn, settings)
+    if provider is not None and provider != current.llm_provider:
         ok, reason = availability[provider]
         if not ok:
             raise HTTPException(

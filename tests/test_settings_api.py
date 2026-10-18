@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 from app.llm.ollama import OllamaChatClient
 from app.main import create_app
 
+_REAL_AVAILABILITY = OllamaChatClient.availability
+
 
 @pytest.fixture(autouse=True)
 def fake_ollama(monkeypatch):
@@ -101,7 +103,10 @@ def test_put_to_gemini_with_key_works(settings, kb_services):
     assert r.status_code == 200 and r.json()["llm_provider"] == "gemini"
 
 
-def test_put_to_unavailable_ollama_is_409(admin, monkeypatch):
+def test_switching_to_unavailable_ollama_is_409(settings, kb_services, monkeypatch):
+    admin = _client(settings, kb_services, "admin", gemini_api_key="k")
+    assert admin.put("/api/settings", json={"llm_provider": "gemini"}).status_code == 200
+
     async def down(self):
         return False, "無法連線到 Ollama"
 
@@ -140,3 +145,29 @@ def test_settings_response_never_contains_api_key(settings, kb_services):
         c.put("/api/settings", json={"temperature": 9}),
     ):
         assert "sk-secret" not in r.text
+
+
+def test_saving_other_fields_while_current_provider_down_is_ok(admin, monkeypatch):
+    async def down(self):
+        return False, "無法連線到 Ollama"
+
+    monkeypatch.setattr(OllamaChatClient, "availability", down)
+    r = admin.put("/api/settings", json={"llm_provider": "ollama", "system_prompt": "x"})
+    assert r.status_code == 200 and r.json()["system_prompt"] == "x"
+    r = admin.put("/api/settings", json={"llm_provider": "gemini"})
+    assert r.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_ollama_availability_uses_short_timeout():
+    import httpx
+
+    seen = []
+
+    def handler(request):
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, json={"models": []})
+
+    client = OllamaChatClient("http://x", "m", transport=httpx.MockTransport(handler))
+    assert await _REAL_AVAILABILITY(client) == (True, "")
+    assert max(v for v in seen[0].values() if v) <= 3.0

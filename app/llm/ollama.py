@@ -70,10 +70,11 @@ class OllamaChatClient:
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             raise LlmUnavailable() from e
 
-    async def _tags(self) -> list[str]:
+    async def _tags(self, timeout: httpx.Timeout | None = None) -> list[str]:
         try:
             async with httpx.AsyncClient(
-                transport=self._transport, timeout=httpx.Timeout(10.0, connect=5.0)
+                transport=self._transport,
+                timeout=timeout or httpx.Timeout(10.0, connect=5.0),
             ) as client:
                 response = await client.get(f"{self.base_url}/api/tags")
         except httpx.HTTPError as e:
@@ -90,7 +91,7 @@ class OllamaChatClient:
 
     async def availability(self) -> tuple[bool, str]:
         try:
-            await self._tags()
+            await self._tags(httpx.Timeout(3.0))
         except Exception as e:
             return False, str(e)
         return True, ""
