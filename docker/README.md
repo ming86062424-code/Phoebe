@@ -18,7 +18,7 @@ cd docker
 cp .env.example .env
 ```
 
-編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`VLLM_GPU_UTIL`），同時也當作容器的環境變數。`DB_PATH`、`KB_DIR`、`CHROMA_HOST/PORT`、`OLLAMA_BASE_URL`、`KB_WORKER_MODE`、`VLLM_BASE_URL`、`HF_HOME` 由 `compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`VLLM_GPU_UTIL`），同時也當作容器的環境變數。`DB_PATH`、`KB_DIR`、`CHROMA_HOST/PORT`、`OLLAMA_BASE_URL`、`KB_WORKER_MODE`、`VLLM_BASE_URL`、`HF_HOME` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
@@ -51,7 +51,7 @@ vLLM 對主機開放在 http://localhost:8001（容器內為 8000）。
 
 - vLLM 會常駐並佔用 `VLLM_GPU_UTIL`（預設 0.35，約 2GB）的顯存，與主機 Ollama 的聊天模型搶 VRAM；聊天可能變慢，或需改用較小的模型。調低 `VLLM_GPU_UTIL` 可留更多顯存給 Ollama，但太低 vLLM 會無法啟動。
 - RTX 2060 是 Turing 架構，不支援 bfloat16，因此固定使用 `--dtype float16`。
-- 映像固定為 `vllm/vllm-openai:v0.11.2`。該 vLLM 版本是否支援 LightOnOCR 模型、能否在此硬體上運作，尚未驗證；若失敗請改用較新的版本（同時修改 `compose.yml`）或回到 transformers 模式。
+- 映像固定為 `vllm/vllm-openai:v0.11.2`。該 vLLM 版本是否支援 LightOnOCR 模型、能否在此硬體上運作，尚未驗證；若失敗請改用較新的版本（同時修改 `docker-compose.yml`）或回到 transformers 模式。
 
 ## 主機 Ollama 連線
 

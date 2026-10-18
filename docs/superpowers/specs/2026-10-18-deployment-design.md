@@ -92,7 +92,7 @@
 ```
 docker/
 ├── Dockerfile            # 多階段：frontend（node 24 建置）→ web（python 3.12 slim + uv，無 torch）→ worker（加上 ocr 依賴與 CUDA 版 torch）
-├── compose.yml           # 正式部署：web、worker、chroma；profile vllm 加入 vllm 服務
+├── docker-compose.yml           # 正式部署：web、worker、chroma；profile vllm 加入 vllm 服務
 ├── gunicorn.conf.py
 ├── .dockerignore 的內容放在根目錄 .dockerignore（Docker 規定位置；compose 以根目錄為 build context）
 └── README.md             # 部署說明（中文）

@@ -50,7 +50,7 @@
 | `app/kb/parsers/ocr_engines.py` | `OcrEngine`、`TransformersOcrEngine`、`VllmOcrEngine`、`build_ocr_engine` |
 | `app/kb/parsers/lightonocr.py` | 改為使用 `OcrEngine` |
 | `app/kb/index.py`、`app/kb/services.py` | Chroma 用戶端選擇；組裝 |
-| `docker/Dockerfile`、`docker/compose.yml`、`docker/gunicorn.conf.py`、`docker/README.md`、`.dockerignore` | 部署 |
+| `docker/Dockerfile`、`docker/docker-compose.yml`、`docker/gunicorn.conf.py`、`docker/README.md`、`.dockerignore` | 部署 |
 
 ---
 
@@ -267,7 +267,7 @@ git commit -m "feat: pluggable OCR engine with transformers and vLLM backends"
 **前置（controller 處理）：** Docker Desktop 必須在執行中（`docker version` 能顯示 Server）。
 
 **Files:**
-- Create: `docker/Dockerfile`、`docker/compose.yml`、`docker/gunicorn.conf.py`、`docker/README.md`、`.dockerignore`
+- Create: `docker/Dockerfile`、`docker/docker-compose.yml`、`docker/gunicorn.conf.py`、`docker/README.md`、`.dockerignore`
 - Modify: `pyproject.toml`（`uv add gunicorn uvicorn-worker`）、`README.md`
 - Test: `tests/test_gunicorn_conf.py`（新）
 
@@ -276,7 +276,7 @@ git commit -m "feat: pluggable OCR engine with transformers and vLLM backends"
 - Produces:
   - `docker/gunicorn.conf.py`：規格 §3.7 的值；`workers = int(os.environ.get("WEB_CONCURRENCY", "2"))`
   - `docker/Dockerfile` 階段：`frontend`（`node:24-<固定版本>-slim`，`npm ci && npm run build`）→ `base`（`python:3.12-slim`，從 `ghcr.io/astral-sh/uv:0.13.1` 複製 uv，`uv sync --frozen --no-dev --no-install-project`）→ `web`（複製 app 與 frontend/dist，`CMD gunicorn -c docker/gunicorn.conf.py "app.main:create_app()"`）→ `worker`（`uv sync --frozen --no-dev --group ocr`，`CMD python -m app.kb.worker_main`）；LiteParse 需要的系統套件在 build 時查明並安裝；非 root 使用者執行
-  - `docker/compose.yml`：規格 §3.8 的服務表；named volumes `phoebe-data`、`chroma-data`、`hf-cache`；`web` 依賴 `chroma`；`worker` 與 `vllm` 要求 NVIDIA GPU；vllm 的 8000 對應主機 8001；chroma 映像版本與 `uv.lock` 中 chromadb 的版本一致
+  - `docker/docker-compose.yml`：規格 §3.8 的服務表；named volumes `phoebe-data`、`chroma-data`、`hf-cache`；`web` 依賴 `chroma`；`worker` 與 `vllm` 要求 NVIDIA GPU；vllm 的 8000 對應主機 8001；chroma 映像版本與 `uv.lock` 中 chromadb 的版本一致
   - `.dockerignore`：`.venv`、`node_modules`、`frontend/dist`、`data`、`.git`、`.superpowers`、`__pycache__`、`.env`、`dev_history`
   - `docker/README.md`：前置需求（Docker Desktop、WSL2、NVIDIA 驅動）、`.env` 準備、啟動／停止／看 log、vLLM profile 與 6GB 顯存取捨、主機 Ollama 連線與 `OLLAMA_HOST=0.0.0.0` 排錯、資料備份（volume）
   - 根目錄 `README.md`：新增「設定（.env）」與「部署」小節（連到 `docker/README.md`），快速測試流程改為先 `cp .env.example .env`

@@ -86,7 +86,7 @@ def test_env_example_lists_every_setting():
 def test_docker_env_example_lists_compose_and_settings_keys():
     import yaml
 
-    compose_text = (PROJECT_ROOT / "docker" / "compose.yml").read_text(encoding="utf-8")
+    compose_text = (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
     compose = yaml.safe_load(compose_text)
     interpolated = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose_text))
     fixed = set()

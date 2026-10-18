@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# build context 為專案根目錄（compose.yml 設 context: ..）：cd docker && docker compose build
+# build context 為專案根目錄（docker-compose.yml 設 context: ..）：cd docker && docker compose build
 
 # ---- 前端建置 ----
 FROM node:24.11.1-slim AS frontend
