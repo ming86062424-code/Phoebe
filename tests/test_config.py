@@ -74,7 +74,9 @@ def test_invalid_worker_mode_and_ocr_backend_raise(monkeypatch):
 def test_env_example_lists_every_setting():
     text = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
     keys = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, flags=re.M))
-    used = set(re.findall(r'os\.environ\.get\(\s*"([A-Z0-9_]+)"', inspect.getsource(Settings.from_env)))
+    source = inspect.getsource(Settings.from_env)
+    used = set(re.findall(r'(?:os\.environ\.get|_choice)\(\s*"([A-Z0-9_]+)"', source))
+    assert {"KB_WORKER_MODE", "OCR_BACKEND"} <= used
     assert used
     assert used <= keys
     assert {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL"} <= keys
