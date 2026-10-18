@@ -131,3 +131,15 @@ def test_deleting_kb_clears_conversation_kb_id(tmp_path):
     conn.execute("UPDATE conversations SET kb_id = 1 WHERE id = 1")
     conn.execute("DELETE FROM knowledge_bases WHERE id = 1")
     assert conn.execute("SELECT kb_id FROM conversations WHERE id = 1").fetchone()[0] is None
+
+
+@pytest.mark.parametrize("value", ["false", "0", "no", "off", "OFF", " No "])
+def test_settings_chat_think_falsy_values(monkeypatch, value):
+    monkeypatch.setenv("CHAT_THINK", value)
+    assert Settings.from_env().chat_think is False
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes", "on"])
+def test_settings_chat_think_truthy_values(monkeypatch, value):
+    monkeypatch.setenv("CHAT_THINK", value)
+    assert Settings.from_env().chat_think is True

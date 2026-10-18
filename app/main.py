@@ -30,6 +30,8 @@ def create_app(
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
     app.state.kb = kb_services
+    # ids of conversations with a reply in progress (see chat_stream.claim_reply)
+    app.state.replying = set()
     app.include_router(auth.router)
     app.include_router(conversations.router)
     app.include_router(chat.router)

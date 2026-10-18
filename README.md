@@ -107,7 +107,7 @@ uv run --group eval pytest evals -v
 | `EVAL_JUDGE_MODEL` | `qwen3.5:4b` | 評測的裁判模型 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
-| `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false` 或 `0` 為關閉） |
+| `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |
 | `EMBED_MODEL` | `embeddinggemma-2` | 知識庫 Embedding 模型（Ollama）；更換後需重新上傳文件 |
 | `KB_DIR` | `<專案根目錄>/data/kb` | 上傳的 PDF 存放位置 |
 | `CHROMA_DIR` | `<專案根目錄>/data/chroma` | 向量資料庫位置 |

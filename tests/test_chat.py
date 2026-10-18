@@ -236,3 +236,29 @@ def test_regenerate_503_when_unavailable(make_user, app):
 
 def test_regenerate_requires_login(client):
     assert client.post("/api/conversations/1/regenerate").status_code == 401
+
+
+class DeletingChatClient:
+    """Deletes the conversation mid-stream, as another tab would."""
+
+    def __init__(self, db_path):
+        self.db_path = db_path
+
+    async def stream_chat(self, messages):
+        from app.db import connect
+
+        yield ChatDelta("content", "你")
+        conn = connect(self.db_path)
+        conn.execute("DELETE FROM conversations")
+        conn.commit()
+        conn.close()
+        yield ChatDelta("content", "好")
+
+
+def test_save_failure_after_stream_emits_error_event(make_user, app, settings):
+    app.dependency_overrides[get_chat_client] = lambda: DeletingChatClient(settings.db_path)
+    c = make_user("alice")
+    cid = _new_conv(c)
+    ev = events(_send(c, cid, "嗨"))
+    assert ev[-1] == {"type": "error", "detail": "回覆無法儲存"}
+    assert all(e["type"] != "done" for e in ev)
