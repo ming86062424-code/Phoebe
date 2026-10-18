@@ -176,8 +176,14 @@ async def upload_document(
             with tmp.open("rb") as f:
                 if f.read(5) != b"%PDF-":
                     raise HTTPException(status_code=422, detail="檔案不是有效的 PDF")
-            doc = store.create_document(conn, kb_id, filename[:200], chosen.id, size)
-            tmp.replace(kb.file_path(kb_id, doc["id"]))
+            # 'pending' can't be claimed: only queue it once its file is in place
+            doc = store.create_document(conn, kb_id, filename[:200], chosen.id, size, "pending")
+            try:
+                tmp.replace(kb.file_path(kb_id, doc["id"]))
+                store.update_document(conn, doc["id"], status="queued")
+            except BaseException:
+                store.delete_document(conn, kb_id, doc["id"])
+                raise
         finally:
             tmp.unlink(missing_ok=True)
         kb.worker.enqueue(doc["id"])

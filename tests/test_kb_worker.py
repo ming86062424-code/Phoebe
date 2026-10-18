@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -204,3 +205,117 @@ def test_cleanup_orphans_removes_files_without_documents(env):
     assert services.worker.cleanup_orphans() == 2
     assert keep_path.exists() and tmp.exists()
     assert not orphan.exists() and not gone_kb.exists()
+
+
+def _age(conn, doc_id, ts="2000-01-01T00:00:00+00:00"):
+    conn.execute("UPDATE kb_documents SET updated_at = ? WHERE id = ?", (ts, doc_id))
+    conn.commit()
+
+
+def test_heartbeat_refreshes_updated_at_during_slow_parse(env):
+    conn, _, parser, services, add_doc = env
+    services.worker.heartbeat_seconds = 0.05
+    doc = add_doc()
+    seen = []
+    original = parser.parse
+
+    def slow_parse(path, on_progress):
+        _age(conn, doc["id"])  # as if no update for a long time
+        time.sleep(0.4)  # no progress calls: only the heartbeat can refresh
+        seen.append(store.get_document(conn, doc["id"])["updated_at"])
+        return original(path, on_progress)
+
+    parser.parse = slow_parse
+    assert store.claim_next_document(conn) == doc["id"]
+    services.worker.process(doc["id"])
+    assert seen[0] > "2001"
+
+
+def test_running_worker_requeues_stale_documents_periodically(env, monkeypatch):
+    import app.kb.worker as worker_mod
+
+    conn, _, parser, services, add_doc = env
+    monkeypatch.setattr(worker_mod, "CLEANUP_INTERVAL_SECONDS", 0)
+    services.worker.poll_seconds = 0.05
+    doc = add_doc()
+    store.update_document(conn, doc["id"], status="parsing")
+    _age(conn, doc["id"])
+    stop = threading.Event()
+    t = threading.Thread(target=services.worker.run_forever, args=(stop,))
+    t.start()
+    deadline = time.time() + 10
+    while store.get_document(conn, doc["id"])["status"] != "ready" and time.time() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    services.worker.wake()
+    t.join(timeout=5)
+    assert store.get_document(conn, doc["id"])["status"] == "ready"
+
+
+def test_active_document_is_not_requeued_by_another_worker(env):
+    conn, _, parser, services, add_doc = env
+    services.worker.heartbeat_seconds = 0.05
+    doc = add_doc()
+    original = parser.parse
+    outcome = []
+
+    def slow_parse(path, on_progress):
+        _age(conn, doc["id"])
+        time.sleep(0.4)
+        other = connect(services.worker.db_path)
+        try:
+            stale_before = (
+                datetime.now(timezone.utc) - timedelta(seconds=30)
+            ).isoformat()
+            outcome.append(store.requeue_stale_documents(other, stale_before))
+        finally:
+            other.close()
+        return original(path, on_progress)
+
+    parser.parse = slow_parse
+    assert store.claim_next_document(conn) == doc["id"]
+    services.worker.process(doc["id"])
+    assert outcome == [[]]
+    assert store.get_document(conn, doc["id"])["status"] == "ready"
+
+
+def test_stop_event_ends_processing_after_current_page(env):
+    conn, _, parser, services, add_doc = env
+    doc = add_doc()
+    stop = threading.Event()
+    pages = []
+
+    def parse(path, on_progress):
+        for page in (1, 2, 3):
+            if page == 2:
+                stop.set()
+            on_progress(page, 3)
+            pages.append(page)
+        return [PageText(1, "x")]
+
+    parser.parse = parse
+    assert store.claim_next_document(conn) == doc["id"]
+    services.worker.process(doc["id"], stop)
+    assert pages == [1]
+    assert store.get_document(conn, doc["id"])["status"] == "parsing"
+
+
+def test_pending_document_is_not_claimed_nor_orphaned(env):
+    conn, kb, parser, services, add_doc = env
+    doc = add_doc()
+    store.update_document(conn, doc["id"], status="pending")
+    assert store.claim_next_document(conn) is None
+    assert services.worker.cleanup_orphans() == 0
+    assert services.file_path(kb["id"], doc["id"]).exists()
+
+
+def test_stop_keeps_thread_reference_when_join_times_out(env):
+    _, _, _, services, _ = env
+    release = threading.Event()
+    t = threading.Thread(target=release.wait)
+    t.start()
+    services.worker._thread = t
+    t.join = lambda timeout=None: None  # simulate a loop stuck in a long page
+    services.worker.stop()
+    assert services.worker._thread is t
+    release.set()

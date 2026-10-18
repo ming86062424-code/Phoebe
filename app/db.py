@@ -51,7 +51,7 @@ AUTOINCREMENT_TABLES = {
     kb_id INTEGER NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     filename TEXT NOT NULL,
     parser TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('queued', 'parsing', 'indexing', 'ready', 'failed')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'queued', 'parsing', 'indexing', 'ready', 'failed')),
     error TEXT,
     progress_done INTEGER NOT NULL DEFAULT 0,
     progress_total INTEGER NOT NULL DEFAULT 0,
@@ -96,7 +96,9 @@ def _ensure_autoincrement(conn: sqlite3.Connection) -> None:
         sql = _table_sql(conn, name)
         if sql is None:
             conn.execute(ddl.format(name=name))
-        elif "AUTOINCREMENT" not in sql.upper():
+        elif "AUTOINCREMENT" not in sql.upper() or (
+            name == "kb_documents" and "'pending'" not in sql
+        ):
             _rebuild(conn, name, ddl)
     conn.commit()
 

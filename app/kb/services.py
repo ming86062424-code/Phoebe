@@ -69,6 +69,7 @@ def build_kb_services(
         threaded=threaded,
         poll_seconds=settings.kb_worker_poll_seconds,
         stale_seconds=settings.kb_stale_seconds,
+        heartbeat_seconds=settings.kb_heartbeat_seconds,
         kb_dir=str(services.kb_dir),
     )
     return services

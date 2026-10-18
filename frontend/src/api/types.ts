@@ -40,7 +40,7 @@ export interface KnowledgeBase {
   updated_at: string
 }
 
-export type DocumentStatus = 'queued' | 'parsing' | 'indexing' | 'ready' | 'failed'
+export type DocumentStatus = 'pending' | 'queued' | 'parsing' | 'indexing' | 'ready' | 'failed'
 
 export interface KbDocument {
   id: number

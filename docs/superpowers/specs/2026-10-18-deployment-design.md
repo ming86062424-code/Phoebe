@@ -54,7 +54,9 @@
 ### 3.2 解析佇列改為 DB 驅動
 - `kb_documents.status = 'queued'` 即為佇列；worker 以單一 SQL 原子性地「認領」一份：`UPDATE kb_documents SET status='parsing', updated_at=? WHERE id = (SELECT id FROM kb_documents WHERE status='queued' ORDER BY id LIMIT 1) AND status='queued' RETURNING id`（SQLite 3.35+ 支援 `RETURNING`）
 - worker 迴圈：認領 → 處理 → 再認領；沒有工作時睡 `KB_WORKER_POLL_SECONDS`（預設 2 秒），`enqueue()` 可喚醒同 process 的 worker（embedded 模式維持即時性）
-- 啟動時：把 `parsing`／`indexing` 但 `updated_at` 超過 `KB_STALE_SECONDS`（預設 900）的文件重設為 `queued`（取代現在「啟動時全部重排」的行為，避免多個 worker 互搶）；處理中的文件每頁進度更新會刷新 `updated_at`
+- 逾時重排：把 `parsing`／`indexing` 但 `updated_at` 超過 `KB_STALE_SECONDS`（預設 120）的文件重設為 `queued`（取代現在「啟動時全部重排」的行為，避免多個 worker 互搶）；worker 啟動時執行一次，閒置時約每 60 秒再執行一次（與孤立檔案掃描同頻率）
+- 心跳：處理文件期間（解析與建立索引兩階段）有背景執行緒每 `KB_HEARTBEAT_SECONDS`（預設 30）刷新該文件的 `updated_at`，不論有無進度，因此長時間處理中的文件不會被誤判為逾時
+- 上傳時文件先以 `pending`（不可被認領）建立，檔案就位後才改為 `queued`
 - 現有的文件身分檢查（PR #3 review #1 的修正）保留
 - 新增獨立入口 `python -m app.kb.worker_main`：建立 `KbServices`、執行 worker 迴圈、處理 SIGTERM 優雅結束
 - `KB_WORKER_MODE=embedded`（預設）：維持現在的行為（lifespan 啟動 worker）；`external`：lifespan 不啟動

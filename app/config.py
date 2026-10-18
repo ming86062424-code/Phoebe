@@ -42,7 +42,8 @@ class Settings:
     chroma_port: int = 8000
     reply_lock_ttl_seconds: int = 600
     kb_worker_poll_seconds: float = 2.0
-    kb_stale_seconds: int = 900
+    kb_stale_seconds: int = 120
+    kb_heartbeat_seconds: float = 30.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -80,4 +81,7 @@ class Settings:
                 os.environ.get("KB_WORKER_POLL_SECONDS", d.kb_worker_poll_seconds)
             ),
             kb_stale_seconds=int(os.environ.get("KB_STALE_SECONDS", d.kb_stale_seconds)),
+            kb_heartbeat_seconds=float(
+                os.environ.get("KB_HEARTBEAT_SECONDS", d.kb_heartbeat_seconds)
+            ),
         )

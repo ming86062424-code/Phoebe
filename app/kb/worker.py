@@ -29,6 +29,10 @@ def _remove(path: Path) -> bool:
         return False
 
 
+class _Stopped(Exception):
+    """The worker was asked to shut down; the document is left for another run."""
+
+
 class _Superseded(Exception):
     """The document was deleted (and maybe its id reused) while being processed."""
 
@@ -49,8 +53,9 @@ class IngestWorker:
         file_path: Callable[[int, int], str],
         threaded: bool = True,
         poll_seconds: float = 2.0,
-        stale_seconds: int = 900,
+        stale_seconds: int = 120,
         kb_dir: str = "",
+        heartbeat_seconds: float = 30.0,
     ):
         self.db_path = db_path
         self.index = index
@@ -60,6 +65,7 @@ class IngestWorker:
         self.poll_seconds = poll_seconds
         self.stale_seconds = stale_seconds
         self.kb_dir = kb_dir
+        self.heartbeat_seconds = heartbeat_seconds
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -97,7 +103,10 @@ class IngestWorker:
             self._stop.set()
             self._wake.set()
             self._thread.join(timeout=5)
-            self._thread = None
+            if self._thread.is_alive():
+                logger.warning("解析執行緒尚未結束，保留參考以免重複啟動")
+            else:
+                self._thread = None
 
     def wake(self) -> None:
         self._wake.set()
@@ -118,11 +127,14 @@ class IngestWorker:
 
     def _drain(self) -> None:
         while (doc_id := self._claim()) is not None:
-            self.process(doc_id)
+            try:
+                self.process(doc_id)
+            except Exception:
+                logger.exception("處理文件 %s 時發生未預期錯誤", doc_id)
         self._release_parsers()
 
     def run_forever(self, stop: threading.Event) -> None:
-        last_orphan_scan = 0.0
+        last_scan: float | None = None
         worked = False
         while not stop.is_set():
             self._wake.clear()
@@ -134,7 +146,7 @@ class IngestWorker:
             if doc_id is not None:
                 worked = True
                 try:
-                    self.process(doc_id)
+                    self.process(doc_id, stop)
                 except Exception:
                     logger.exception("處理文件 %s 時發生未預期錯誤", doc_id)
                 continue
@@ -142,12 +154,13 @@ class IngestWorker:
                 self._release_parsers()
                 worked = False
             self.cleanup()
-            if time.monotonic() - last_orphan_scan >= CLEANUP_INTERVAL_SECONDS:
-                last_orphan_scan = time.monotonic()
+            if last_scan is None or time.monotonic() - last_scan >= CLEANUP_INTERVAL_SECONDS:
+                last_scan = time.monotonic()
                 try:
+                    self.requeue_stale()
                     self.cleanup_orphans()
                 except Exception:
-                    logger.exception("清理孤立檔案失敗")
+                    logger.exception("定期維護（重新排入逾時文件、清理孤立檔案）失敗")
             self._wake.wait(self.poll_seconds)
 
     def cleanup_orphans(self) -> int:
@@ -214,14 +227,33 @@ class IngestWorker:
             except Exception:
                 logger.exception("釋放解析器 %s 失敗", parser.id)
 
-    def process(self, doc_id: int) -> None:
+    def process(self, doc_id: int, stop: threading.Event | None = None) -> None:
         conn = connect(self.db_path)
+        done = threading.Event()
+        beat = threading.Thread(
+            target=self._heartbeat, args=(doc_id, done), name="kb-heartbeat", daemon=True
+        )
+        beat.start()
         try:
-            self._process(conn, doc_id)
+            self._process(conn, doc_id, stop)
         finally:
+            done.set()
+            beat.join(timeout=5)
             conn.close()
 
-    def _process(self, conn, doc_id: int) -> None:
+    def _heartbeat(self, doc_id: int, done: threading.Event) -> None:
+        """Refresh updated_at while a document is being processed, whatever the progress."""
+        while not done.wait(self.heartbeat_seconds):
+            try:
+                conn = connect(self.db_path)
+                try:
+                    store.touch_document(conn, doc_id)
+                finally:
+                    conn.close()
+            except Exception:
+                logger.exception("更新文件 %s 的心跳失敗", doc_id)
+
+    def _process(self, conn, doc_id: int, stop: threading.Event | None = None) -> None:
         doc = store.get_document(conn, doc_id)
         if doc is None or doc["status"] != "parsing":  # must have been claimed
             return
@@ -239,6 +271,8 @@ class IngestWorker:
                 raise _Superseded()
 
         def on_progress(done: int, total: int) -> None:
+            if stop is not None and stop.is_set():
+                raise _Stopped()  # finish after the current page; the stale check requeues it
             check_current()  # also stops a long OCR run once the document is deleted
             store.update_document(conn, doc_id, progress_done=done, progress_total=total)
 
@@ -258,6 +292,8 @@ class IngestWorker:
                 )
                 return
             store.update_document(conn, doc_id, status="ready", chunk_count=chunks)
+        except _Stopped:
+            logger.info("worker 停止中，文件 %s 留待下次處理", doc_id)
         except _Superseded:
             if indexed:
                 self.index.delete_document(doc["kb_id"], doc_id)

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 新設定與預設值：`KB_WORKER_MODE=embedded`（`embedded|external`）、`OCR_BACKEND=transformers`（`transformers|vllm`）、`VLLM_BASE_URL=http://localhost:8001/v1`、`CHROMA_HOST=`（空）、`CHROMA_PORT=8000`、`REPLY_LOCK_TTL_SECONDS=600`、`KB_WORKER_POLL_SECONDS=2`、`KB_STALE_SECONDS=900`、`WEB_CONCURRENCY=2`（只有 gunicorn 用）
+- 新設定與預設值：`KB_WORKER_MODE=embedded`（`embedded|external`）、`OCR_BACKEND=transformers`（`transformers|vllm`）、`VLLM_BASE_URL=http://localhost:8001/v1`、`CHROMA_HOST=`（空）、`CHROMA_PORT=8000`、`REPLY_LOCK_TTL_SECONDS=600`、`KB_WORKER_POLL_SECONDS=2`、`KB_STALE_SECONDS=120`、`KB_HEARTBEAT_SECONDS=30`（處理中每 30 秒刷新 `updated_at`；閒置 worker 約每 60 秒重排逾時文件）、`WEB_CONCURRENCY=2`（只有 gunicorn 用）
 - `KB_WORKER_MODE`、`OCR_BACKEND` 值不合法 → `Settings.from_env()` 拋 `ValueError`，訊息為中文並列出合法值
 - `.env` 載入：`load_dotenv(path, override=False)`；路徑為 `ENV_FILE` 或 `<專案根>/.env`；環境變數優先
 - 測試永遠不讀開發者的 `.env`（conftest 把 `ENV_FILE` 設成不存在的路徑）

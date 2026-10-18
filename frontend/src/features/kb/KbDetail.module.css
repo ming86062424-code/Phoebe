@@ -180,6 +180,7 @@
   color: var(--color-danger);
 }
 
+.pending,
 .queued {
   background: var(--color-surface-muted);
   color: var(--color-text-muted);

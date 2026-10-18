@@ -311,3 +311,23 @@ def test_external_worker_mode_does_not_start_worker(settings, kb_services):
     with TestClient(create_app(settings, kb_services)):
         pass
     assert started == ["start", "stop"]
+
+
+def test_upload_creates_pending_row_and_queues_after_file_is_in_place(make_user, kb_services, monkeypatch):
+    from app.kb import store as kb_store
+
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    seen = []
+    real = kb_store.update_document
+
+    def spy(conn, doc_id, **fields):
+        if fields.get("status") == "queued":
+            seen.append(
+                (kb_store.get_document(conn, doc_id)["status"], kb_services.file_path(kb["id"], doc_id).exists())
+            )
+        return real(conn, doc_id, **fields)
+
+    monkeypatch.setattr(kb_store, "update_document", spy)
+    assert _upload(alice, kb["id"]).status_code == 201
+    assert seen == [("pending", True)]

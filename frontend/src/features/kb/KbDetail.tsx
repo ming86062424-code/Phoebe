@@ -8,6 +8,7 @@ import styles from './KbDetail.module.css'
 const POLL_MS = 2000
 
 const STATUS_TEXT: Record<KbDocument['status'], string> = {
+  pending: '排隊中',
   queued: '排隊中',
   parsing: '解析中',
   indexing: '建立索引中',
