@@ -9,16 +9,25 @@ interface Props {
   onRetry(): void
 }
 
+// within this distance of the bottom the list keeps following new text
+const STICK_PX = 80
+
 export default function MessageList({ items, canRetry, onRetry }: Props) {
   const ref = useRef<HTMLDivElement>(null)
+  const stickRef = useRef(true)
 
   useEffect(() => {
     const el = ref.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight
   }, [items, canRetry])
 
+  const onScroll = () => {
+    const el = ref.current
+    if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX
+  }
+
   return (
-    <div className={styles.scroll} ref={ref}>
+    <div className={styles.scroll} ref={ref} onScroll={onScroll}>
       <div className={styles.inner}>
         {items.length === 0 && <p className={styles.empty}>開始一段新的對話吧</p>}
         {items.map((item) => (
