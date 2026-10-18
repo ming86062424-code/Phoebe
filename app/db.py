@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS parser_status (
     reason TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 # Knowledge base ids name files and Chroma collections, so they must never be reused
