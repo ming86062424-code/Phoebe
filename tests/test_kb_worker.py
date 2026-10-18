@@ -319,3 +319,87 @@ def test_stop_keeps_thread_reference_when_join_times_out(env):
     services.worker.stop()
     assert services.worker._thread is t
     release.set()
+
+
+# --- parser status published by the worker, read by the web process ---
+
+
+def _external_services(tmp_path, parser):
+    settings = Settings(
+        db_path=str(tmp_path / "x.db"),
+        kb_dir=str(tmp_path / "kb"),
+        chroma_dir=str(tmp_path / "chroma"),
+        kb_worker_mode="external",
+    )
+    conn = connect(settings.db_path)
+    init_db(conn)
+    services = build_kb_services(
+        settings, embed_model=KeywordEmbedding(), parsers=[parser], threaded=False
+    )
+    return settings, conn, services
+
+
+def test_external_availability_reads_parser_status(tmp_path):
+    parser = FakeParser(available=False)  # the web side's own check must not matter
+    _, conn, services = _external_services(tmp_path, parser)
+    conn.execute(
+        "INSERT INTO parser_status (parser_id, available, reason, updated_at) VALUES (?, 1, '', ?)",
+        ("fake", now_iso()),
+    )
+    conn.commit()
+    assert services.availability("fake") == (True, "")
+    conn.execute("UPDATE parser_status SET available = 0, reason = '沒有 GPU'")
+    conn.commit()
+    assert services.availability("fake") == (False, "沒有 GPU")
+    assert services.parser_info()[0]["available"] is False
+
+
+def test_external_availability_without_row_or_when_stale(tmp_path):
+    _, conn, services = _external_services(tmp_path, FakeParser())
+    down = (False, "文件解析服務（worker）未啟動")
+    assert services.availability("fake") == down
+    old = (datetime.now(timezone.utc) - timedelta(seconds=46)).isoformat()
+    conn.execute(
+        "INSERT INTO parser_status (parser_id, available, reason, updated_at) VALUES ('fake', 1, '', ?)",
+        (old,),
+    )
+    conn.commit()
+    assert services.availability("fake") == down
+
+
+def test_embedded_availability_checks_locally(env):
+    _, _, parser, services, _ = env
+    assert services.availability("fake") == (True, "")
+    parser.available = False
+    assert services.availability("fake") == (False, "未安裝")
+
+
+def test_worker_publishes_parser_status(tmp_path):
+    parser = FakeParser(available=False)
+    _, conn, services = _external_services(tmp_path, parser)
+    services.worker.publish_parser_status()
+    row = conn.execute("SELECT * FROM parser_status WHERE parser_id = 'fake'").fetchone()
+    assert (row["available"], row["reason"]) == (0, "未安裝")
+    parser.available = True
+    services.worker.publish_parser_status()
+    row = conn.execute("SELECT * FROM parser_status WHERE parser_id = 'fake'").fetchone()
+    assert (row["available"], row["reason"]) == (1, "")
+    assert services.availability("fake") == (True, "")
+
+
+def test_publisher_thread_publishes_and_stops(tmp_path):
+    parser = FakeParser()
+    _, conn, services = _external_services(tmp_path, parser)
+    worker = services.worker
+    worker.start_status_publisher(interval=0.05)
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if conn.execute("SELECT 1 FROM parser_status").fetchone():
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("status never published")
+    finally:
+        worker.stop_status_publisher()
+    assert worker._status_thread is None

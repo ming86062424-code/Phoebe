@@ -74,8 +74,10 @@ def _require_kb(conn: sqlite3.Connection, user: dict, kb_id: int) -> dict:
 
 
 @router.get("/parsers")
-def list_parsers(_: dict = Depends(current_user), kb: KbServices = Depends(get_kb_services)):
-    return kb.parser_info()
+async def list_parsers(
+    _: dict = Depends(current_user), kb: KbServices = Depends(get_kb_services)
+):
+    return await run_in_threadpool(kb.parser_info)
 
 
 @router.get("/kbs")
@@ -152,7 +154,7 @@ async def upload_document(
     chosen = kb.parsers.get(parser) if isinstance(parser, str) else None
     if chosen is None:
         raise HTTPException(status_code=422, detail="未知的解析器")
-    available, reason = chosen.availability()
+    available, reason = await run_in_threadpool(kb.availability, chosen.id)
     if not available:
         raise HTTPException(status_code=422, detail=reason or "此解析器目前無法使用")
     filename = (file.filename or "").strip()

@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS active_replies (
     conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
     started_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS parser_status (
+    parser_id TEXT PRIMARY KEY,
+    available INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 # Knowledge base ids name files and Chroma collections, so they must never be reused

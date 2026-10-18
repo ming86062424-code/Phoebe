@@ -331,3 +331,43 @@ def test_upload_creates_pending_row_and_queues_after_file_is_in_place(make_user,
     monkeypatch.setattr(kb_store, "update_document", spy)
     assert _upload(alice, kb["id"]).status_code == 201
     assert seen == [("pending", True)]
+
+
+def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.db import connect, init_db, now_iso
+    from app.kb.services import build_kb_services
+    from app.main import create_app
+    from tests.fakes import KeywordEmbedding
+
+    settings = Settings(
+        db_path=str(tmp_path / "e.db"),
+        frontend_dist=str(tmp_path / "no-dist"),
+        kb_dir=str(tmp_path / "kb"),
+        chroma_dir=str(tmp_path / "chroma"),
+        kb_worker_mode="external",
+    )
+    fake_parser.available = False  # the web process itself could not use it
+    services = build_kb_services(
+        settings, embed_model=KeywordEmbedding(), parsers=[fake_parser], threaded=False
+    )
+    c = TestClient(create_app(settings, services))
+    creds = {"username": "eve", "password": "password123"}
+    c.post("/api/auth/register", json=creds)
+    c.post("/api/auth/login", json=creds)
+    kb = c.post("/api/kbs", json={"name": "k"}).json()
+    r = _upload(c, kb["id"])
+    assert r.status_code == 422
+    assert "worker" in r.json()["detail"]
+    conn = connect(settings.db_path)
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO parser_status (parser_id, available, reason, updated_at) VALUES ('fake', 1, '', ?)",
+        (now_iso(),),
+    )
+    conn.commit()
+    conn.close()
+    assert c.get("/api/parsers").json()[0]["available"] is True
+    assert _upload(c, kb["id"]).status_code == 201

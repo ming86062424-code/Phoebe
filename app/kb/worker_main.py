@@ -34,8 +34,12 @@ def main() -> None:
 
     # The loop runs on the main thread, so don't call start() (it would spawn a second one).
     worker.requeue_stale()
+    worker.start_status_publisher()
     logger.info("解析 worker 已啟動")
-    worker.run_forever(stop)
+    try:
+        worker.run_forever(stop)
+    finally:
+        worker.stop_status_publisher()
     logger.info("解析 worker 已停止")
 
 

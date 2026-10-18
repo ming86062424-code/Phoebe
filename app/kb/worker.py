@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.db import connect
+from app.db import connect, now_iso
 from app.kb import store
 from app.kb.index import KnowledgeIndex
 from app.kb.parsers.base import Parser, ParseError
@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 # how often an idle worker retries deleting files that were in use, and scans for orphans
 CLEANUP_INTERVAL_SECONDS = 60
+# how often the worker republishes which parsers it can run (the web process reads it)
+STATUS_PUBLISH_SECONDS = 15
 
 
 def _remove(path: Path) -> bool:
@@ -69,6 +71,8 @@ class IngestWorker:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._status_thread: threading.Thread | None = None
+        self._status_stop = threading.Event()
         self._pending_removal: set[Path] = set()
         self._removal_lock = threading.Lock()
 
@@ -95,10 +99,66 @@ class IngestWorker:
                     target=self.run_forever, args=(self._stop,), name="kb-ingest", daemon=True
                 )
                 self._thread.start()
+            self.start_status_publisher()
         else:
             self._drain()
 
+    def publish_parser_status(self) -> None:
+        """Record in the database which parsers can run here, for the web process to read."""
+        rows = []
+        for parser in self.parsers.values():
+            try:
+                available, reason = parser.availability()
+            except Exception as e:
+                logger.exception("檢查解析器 %s 失敗", parser.id)
+                available, reason = False, f"檢查失敗：{e}"
+            rows.append((parser.id, int(bool(available)), reason or "", now_iso()))
+        conn = connect(self.db_path)
+        try:
+            conn.executemany(
+                "INSERT INTO parser_status (parser_id, available, reason, updated_at)"
+                " VALUES (?, ?, ?, ?) ON CONFLICT(parser_id) DO UPDATE SET"
+                " available = excluded.available, reason = excluded.reason,"
+                " updated_at = excluded.updated_at",
+                rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def start_status_publisher(self, interval: float = STATUS_PUBLISH_SECONDS) -> None:
+        """Publish parser status from its own thread, so a long OCR run can't make it stale."""
+        if self._status_thread is not None:
+            return
+        self._status_stop.clear()
+        self._status_thread = threading.Thread(
+            target=self._publish_loop,
+            args=(self._status_stop, interval),
+            name="kb-parser-status",
+            daemon=True,
+        )
+        self._status_thread.start()
+
+    def stop_status_publisher(self) -> None:
+        thread = self._status_thread
+        if thread is None:
+            return
+        self._status_stop.set()
+        thread.join(timeout=5)
+        if not thread.is_alive():
+            self._status_thread = None
+
+    def _publish_loop(self, stop: threading.Event, interval: float) -> None:
+        while True:
+            try:
+                self.publish_parser_status()
+            except Exception:
+                logger.exception("發佈解析器狀態失敗")
+            if stop.wait(interval):
+                return
+
     def stop(self) -> None:
+        self.stop_status_publisher()
         if self._thread is not None:
             self._stop.set()
             self._wake.set()
