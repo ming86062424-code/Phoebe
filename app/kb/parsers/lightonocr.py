@@ -73,10 +73,9 @@ class LightOnOcrParser:
             return_tensors="pt",
             enable_thinking=False,
         ).to(self._model.device)
+        # greedy decoding: the same PDF always gives the same text
         with torch.inference_mode():
-            out = self._model.generate(
-                **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=True, temperature=0.2
-            )
+            out = self._model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False)
         new_tokens = out[0, inputs["input_ids"].shape[1] :]
         return self._processor.decode(new_tokens, skip_special_tokens=True).strip()
 
