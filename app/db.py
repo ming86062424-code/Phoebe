@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,13 +74,28 @@ MIGRATIONS = [
 ]
 
 
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    # Converting a fresh database to WAL can fail with "database is locked" without
+    # consulting busy_timeout when several processes connect at once: retry.
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
 def connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode=WAL")
+    # busy_timeout first so concurrent first-time WAL conversion waits instead of failing
     conn.execute("PRAGMA busy_timeout=5000")
+    _enable_wal(conn)
     return conn
 
 

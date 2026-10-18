@@ -284,11 +284,12 @@ def test_concurrent_init_db_on_fresh_database(tmp_path):
     def run():
         try:
             c = connect(path)
-            barrier.wait()
+            barrier.wait(timeout=20)
             init_db(c)
             c.close()
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
+            barrier.abort()
 
     threads = [threading.Thread(target=run) for _ in range(6)]
     for t in threads:
