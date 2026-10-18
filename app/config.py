@@ -49,7 +49,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         load_dotenv(env_file_path(), override=False)
         d = cls()
-        return cls(
+        settings = cls(
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", d.ollama_base_url),
             chat_model=os.environ.get("CHAT_MODEL", d.chat_model),
             eval_judge_model=os.environ.get("EVAL_JUDGE_MODEL", d.eval_judge_model),
@@ -85,3 +85,6 @@ class Settings:
                 os.environ.get("KB_HEARTBEAT_SECONDS", d.kb_heartbeat_seconds)
             ),
         )
+        if settings.kb_heartbeat_seconds >= settings.kb_stale_seconds:
+            raise ValueError("KB_HEARTBEAT_SECONDS 必須小於 KB_STALE_SECONDS")
+        return settings

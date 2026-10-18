@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 # how often an idle worker retries deleting files that were in use, and scans for orphans
 CLEANUP_INTERVAL_SECONDS = 60
+# upload temp files older than this are leftovers from an interrupted upload
+UPLOAD_TMP_MAX_AGE_SECONDS = 3600
 # how often the worker republishes which parsers it can run (the web process reads it)
 STATUS_PUBLISH_SECONDS = 15
 
@@ -84,10 +86,15 @@ class IngestWorker:
         conn = connect(self.db_path)
         try:
             requeued = store.requeue_stale_documents(conn, stale_before)
+            abandoned = store.fail_stale_pending_documents(
+                conn, stale_before, "上傳未完成，請重新上傳"
+            )
         finally:
             conn.close()
         if requeued:
             logger.info("重新排入逾時的文件：%s", requeued)
+        if abandoned:
+            logger.info("標記為失敗的未完成上傳：%s", abandoned)
 
     def start(self) -> None:
         """Re-queue stale documents, then start the thread (or drain the queue if unthreaded)."""
@@ -240,6 +247,7 @@ class IngestWorker:
                 ]
                 found.append((int(folder.name), folder, docs))
         removed = 0
+        tmp_cutoff = time.time() - UPLOAD_TMP_MAX_AGE_SECONDS
         conn = connect(self.db_path)
         try:
             for kb_id, folder, docs in found:
@@ -255,6 +263,13 @@ class IngestWorker:
                         "SELECT 1 FROM kb_documents WHERE id = ? AND kb_id = ?", (doc_id, kb_id)
                     ).fetchone()
                     if row is None and _remove(f):
+                        removed += 1
+                for tmp in folder.glob("upload-*.tmp"):
+                    try:
+                        old = tmp.is_file() and tmp.stat().st_mtime < tmp_cutoff
+                    except OSError:
+                        continue
+                    if old and _remove(tmp):
                         removed += 1
         finally:
             conn.close()

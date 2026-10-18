@@ -403,3 +403,38 @@ def test_publisher_thread_publishes_and_stops(tmp_path):
     finally:
         worker.stop_status_publisher()
     assert worker._status_thread is None
+
+
+def test_cleanup_orphans_removes_old_upload_temp_files_only(env):
+    import os
+
+    _, kb, _, services, _ = env
+    folder = services.kb_dir / str(kb["id"])
+    folder.mkdir(parents=True, exist_ok=True)
+    old = folder / "upload-old.tmp"
+    fresh = folder / "upload-fresh.tmp"
+    other = folder / "notes.tmp"
+    for f in (old, fresh, other):
+        f.write_bytes(b"x")
+    past = time.time() - 2 * 3600
+    os.utime(old, (past, past))
+    os.utime(other, (past, past))
+    assert services.worker.cleanup_orphans() == 1
+    assert not old.exists()
+    assert fresh.exists() and other.exists()
+
+
+def test_stale_pending_documents_are_failed(env):
+    conn, _, _, services, add_doc = env
+    stale = add_doc()
+    fresh = add_doc()
+    queued = add_doc()
+    for d in (stale, fresh):
+        store.update_document(conn, d["id"], status="pending")
+    _age(conn, stale["id"])
+    _age(conn, queued["id"])
+    services.worker.requeue_stale()
+    got = store.get_document(conn, stale["id"])
+    assert (got["status"], got["error"]) == ("failed", "上傳未完成，請重新上傳")
+    assert store.get_document(conn, fresh["id"])["status"] == "pending"
+    assert store.get_document(conn, queued["id"])["status"] == "queued"  # other statuses untouched

@@ -136,6 +136,19 @@ def requeue_stale_documents(conn: sqlite3.Connection, stale_before: str) -> list
     return sorted(r["id"] for r in rows)
 
 
+def fail_stale_pending_documents(
+    conn: sqlite3.Connection, stale_before: str, message: str
+) -> list[int]:
+    """Fail uploads that never finished (the web process died between 'pending' and 'queued')."""
+    rows = conn.execute(
+        "UPDATE kb_documents SET status = 'failed', error = ?, updated_at = ? "
+        "WHERE status = 'pending' AND updated_at < ? RETURNING id",
+        (message, now_iso(), stale_before),
+    ).fetchall()
+    conn.commit()
+    return sorted(r["id"] for r in rows)
+
+
 def touch_document(conn: sqlite3.Connection, doc_id: int) -> None:
     """Heartbeat: show that a worker is still busy with this document."""
     conn.execute(

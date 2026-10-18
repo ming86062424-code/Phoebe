@@ -104,3 +104,12 @@ def test_docker_env_example_lists_compose_and_settings_keys():
     assert (used - fixed) <= keys
     assert not (fixed & keys)
     assert "WEB_CONCURRENCY" in keys
+
+
+def test_heartbeat_must_be_shorter_than_stale_timeout(monkeypatch):
+    monkeypatch.setenv("KB_HEARTBEAT_SECONDS", "120")
+    monkeypatch.setenv("KB_STALE_SECONDS", "120")
+    with pytest.raises(ValueError, match="KB_HEARTBEAT_SECONDS"):
+        Settings.from_env()
+    monkeypatch.setenv("KB_HEARTBEAT_SECONDS", "119")
+    assert Settings.from_env().kb_heartbeat_seconds == 119
