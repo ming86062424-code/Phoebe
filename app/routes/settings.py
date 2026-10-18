@@ -10,6 +10,7 @@ from app.auth import require_admin
 from app.config import Settings
 from app.deps import get_db, get_settings
 from app.llm import LlmError, OllamaChatClient
+from app.llm.gemini import GeminiChatClient
 from app.llm.factory import PROVIDER_LABELS, provider_availability
 
 router = APIRouter(prefix="/api/settings", dependencies=[Depends(require_admin)])
@@ -85,7 +86,13 @@ async def list_models(
             return {"models": await client.list_models()}
         except LlmError as e:
             raise HTTPException(status_code=503, detail=str(e)) from None
-    if not settings.gemini_api_key:
-        raise HTTPException(status_code=503, detail="未設定 GEMINI_API_KEY")
-    # Task 3 replaces this branch with GeminiChatClient.list_models()
-    raise HTTPException(status_code=503, detail="無法連線到 Gemini")
+    client = GeminiChatClient(
+        settings.gemini_api_key, settings.gemini_model, think=settings.chat_think
+    )
+    ok, reason = await client.availability()
+    if not ok:
+        raise HTTPException(status_code=503, detail=reason)
+    try:
+        return {"models": await client.list_models()}
+    except LlmError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from None

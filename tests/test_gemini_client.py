@@ -1,0 +1,203 @@
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from google.genai import errors
+
+from app.config import Settings
+from app.llm import (
+    LlmAuthError,
+    LlmRateLimited,
+    LlmStreamError,
+    LlmUnavailable,
+    ModelNotFound,
+    OllamaChatClient,
+)
+from app.llm.factory import build_chat_client
+from app.llm.gemini import GeminiChatClient
+from app.llm_settings import LlmSettings
+
+pytestmark = pytest.mark.anyio
+
+MODEL = "gemini-x"
+MSGS = [
+    {"role": "user", "content": "a"},
+    {"role": "assistant", "content": "b"},
+    {"role": "user", "content": "c"},
+]
+
+
+def part(text, thought=None):
+    return SimpleNamespace(text=text, thought=thought)
+
+
+def resp(*parts):
+    return SimpleNamespace(
+        candidates=[SimpleNamespace(content=SimpleNamespace(parts=list(parts)))]
+    )
+
+
+def api_error(code, message="boom"):
+    cls = errors.ServerError if code >= 500 else errors.ClientError
+    return cls(code, {"error": {"code": code, "message": message, "status": "X"}})
+
+
+class FakeModels:
+    def __init__(self, chunks=(), error=None, error_after=None, models=()):
+        self.chunks = list(chunks)
+        self.error = error
+        self.error_after = error_after
+        self.models = list(models)
+        self.calls = []
+
+    async def generate_content_stream(self, *, model, contents, config=None):
+        self.calls.append({"model": model, "contents": contents, "config": config})
+        if self.error is not None and self.error_after is None:
+            raise self.error
+
+        async def gen():
+            for i, chunk in enumerate(self.chunks):
+                if self.error is not None and i == self.error_after:
+                    raise self.error
+                yield chunk
+            if self.error is not None and self.error_after >= len(self.chunks):
+                raise self.error
+
+        return gen()
+
+    async def list(self, *, config=None):
+        if self.error is not None:
+            raise self.error
+
+        async def gen():
+            for m in self.models:
+                yield m
+
+        return gen()
+
+
+def make(models, think=True):
+    fake = SimpleNamespace(aio=SimpleNamespace(models=models))
+    return GeminiChatClient("k", MODEL, think=think, client=fake)
+
+
+async def collect(client, **kw):
+    return [d async for d in client.stream_chat(MSGS, **kw)]
+
+
+async def test_gemini_maps_roles_and_config():
+    models = FakeModels([resp(part("x"))])
+    await collect(make(models, think=False), system="sys", temperature=0.5)
+    call = models.calls[0]
+    assert call["model"] == MODEL
+    assert [c.role for c in call["contents"]] == ["user", "model", "user"]
+    assert call["contents"][1].parts[0].text == "b"
+    assert call["config"].system_instruction == "sys"
+    assert call["config"].temperature == 0.5
+    assert call["config"].thinking_config.include_thoughts is False
+
+
+async def test_gemini_yields_thought_and_content():
+    models = FakeModels(
+        [resp(part("想", True)), resp(part("")), resp(part("你"), part("好", False))]
+    )
+    out = await collect(make(models))
+    assert [(d.kind, d.text) for d in out] == [
+        ("thinking", "想"),
+        ("content", "你"),
+        ("content", "好"),
+    ]
+
+
+@pytest.mark.parametrize("code", [401, 403])
+async def test_gemini_401_403_maps_to_auth_error(code):
+    with pytest.raises(LlmAuthError, match="Gemini API key 無效"):
+        await collect(make(FakeModels(error=api_error(code))))
+
+
+async def test_gemini_400_api_key_vs_other():
+    with pytest.raises(LlmAuthError):
+        await collect(make(FakeModels(error=api_error(400, "API key not valid"))))
+    with pytest.raises(LlmStreamError) as ei:
+        await collect(make(FakeModels(error=api_error(400, "bad request"))))
+    assert not isinstance(ei.value, LlmAuthError)
+
+
+async def test_gemini_404_maps_to_model_not_found():
+    with pytest.raises(ModelNotFound, match="找不到模型 gemini-x"):
+        await collect(make(FakeModels(error=api_error(404))))
+
+
+async def test_gemini_429_maps_to_rate_limited():
+    with pytest.raises(LlmRateLimited, match="Gemini 配額已用完或請求太頻繁，請稍後再試"):
+        await collect(make(FakeModels(error=api_error(429))))
+
+
+async def test_gemini_mid_stream_error_keeps_class():
+    models = FakeModels([resp(part("a"))], error=api_error(429), error_after=1)
+    got = []
+    with pytest.raises(LlmRateLimited):
+        async for d in make(models).stream_chat(MSGS):
+            got.append(d.text)
+    assert got == ["a"]
+
+
+@pytest.mark.parametrize(
+    "err",
+    [
+        api_error(503),
+        httpx.ConnectError("x"),
+        httpx.ReadTimeout("x"),
+        TimeoutError(),
+        ConnectionError(),
+    ],
+)
+async def test_gemini_5xx_and_connect_map_to_unavailable(err):
+    with pytest.raises(LlmUnavailable, match="無法連線到 Gemini"):
+        await collect(make(FakeModels(error=err)))
+
+
+async def test_gemini_error_message_has_no_key():
+    fake = SimpleNamespace(
+        aio=SimpleNamespace(models=FakeModels(error=api_error(403, "bad sk-secret")))
+    )
+    client = GeminiChatClient("sk-secret", MODEL, think=True, client=fake)
+    with pytest.raises(LlmAuthError) as ei:
+        await collect(client)
+    assert "sk-secret" not in str(ei.value)
+
+
+async def test_gemini_list_models_filters_and_sorts():
+    def m(name, actions):
+        return SimpleNamespace(name=name, supported_actions=actions)
+
+    models = FakeModels(
+        models=[
+            m("models/gemini-2.5-pro", ["generateContent"]),
+            m("models/gemini-2.5-flash", ["generateContent", "countTokens"]),
+            m("models/gemini-embedding-001", ["embedContent"]),
+            m("models/gemma-3-27b", ["generateContent"]),
+            m("models/gemini-none", None),
+        ]
+    )
+    assert await make(models).list_models() == ["gemini-2.5-flash", "gemini-2.5-pro"]
+
+
+async def test_gemini_list_models_error_maps():
+    with pytest.raises(LlmAuthError):
+        await make(FakeModels(error=api_error(403))).list_models()
+
+
+async def test_gemini_availability_without_key():
+    c = GeminiChatClient("", MODEL, think=True, client=object())
+    assert await c.availability() == (False, "未設定 GEMINI_API_KEY")
+    assert await make(FakeModels()).availability() == (True, "")
+
+
+def test_factory_builds_client_for_provider():
+    s = Settings(gemini_api_key="k")
+    base = dict(system_prompt="", temperature=None, ollama_model="o", gemini_model="g")
+    c = build_chat_client(s, LlmSettings(llm_provider="gemini", **base))
+    assert isinstance(c, GeminiChatClient) and c.model == "g"
+    c = build_chat_client(s, LlmSettings(llm_provider="ollama", **base))
+    assert isinstance(c, OllamaChatClient) and c.model == "o"

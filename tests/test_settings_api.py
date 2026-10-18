@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.llm.ollama import OllamaChatClient
+from app.llm.gemini import GeminiChatClient
 from app.main import create_app
 
 _REAL_AVAILABILITY = OllamaChatClient.availability
@@ -135,7 +136,11 @@ def test_models_ollama_unreachable_is_503(admin, monkeypatch):
     assert r.status_code == 503 and r.json()["detail"] == "無法連線到 Ollama"
 
 
-def test_settings_response_never_contains_api_key(settings, kb_services):
+def test_settings_response_never_contains_api_key(settings, kb_services, monkeypatch):
+    async def fake_models(self):
+        return ["gemini-2.5-flash"]
+
+    monkeypatch.setattr(GeminiChatClient, "list_models", fake_models)
     c = _client(settings, kb_services, "admin", gemini_api_key="sk-secret")
     c.put("/api/settings", json={"llm_provider": "gemini"})
     for r in (
@@ -171,3 +176,24 @@ async def test_ollama_availability_uses_short_timeout():
     client = OllamaChatClient("http://x", "m", transport=httpx.MockTransport(handler))
     assert await _REAL_AVAILABILITY(client) == (True, "")
     assert max(v for v in seen[0].values() if v) <= 3.0
+
+
+def test_gemini_models_endpoint_lists_and_maps_errors(settings, kb_services, monkeypatch):
+    from app.llm import LlmAuthError
+
+    c = _client(settings, kb_services, "admin", gemini_api_key="sk-secret")
+
+    async def ok(self):
+        return ["gemini-2.5-flash"]
+
+    monkeypatch.setattr(GeminiChatClient, "list_models", ok)
+    assert c.get("/api/settings/models?provider=gemini").json() == {
+        "models": ["gemini-2.5-flash"]
+    }
+
+    async def bad(self):
+        raise LlmAuthError("Gemini API key 無效")
+
+    monkeypatch.setattr(GeminiChatClient, "list_models", bad)
+    r = c.get("/api/settings/models?provider=gemini")
+    assert r.status_code == 503 and r.json()["detail"] == "Gemini API key 無效"
