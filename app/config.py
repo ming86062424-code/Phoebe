@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FALSY_VALUES = ("false", "0", "no", "off")
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,6 @@ class Settings:
             db_path=os.environ.get("DB_PATH", d.db_path),
             session_days=int(os.environ.get("SESSION_DAYS", d.session_days)),
             chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
-            not in ("false", "0"),
+            not in FALSY_VALUES,
             frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
         )
