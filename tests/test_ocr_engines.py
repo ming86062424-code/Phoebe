@@ -32,7 +32,8 @@ def test_vllm_ocr_sends_png_data_url_and_parses_reply():
     assert seen["path"] == "/v1/chat/completions"
     body = seen["body"]
     assert body["model"] == "ocr-model"
-    assert body["temperature"] == 0
+    assert body["temperature"] == 0.2
+    assert body["top_p"] == 0.9
     assert body["max_tokens"] == 4096
     part = body["messages"][0]["content"][0]
     assert part["type"] == "image_url"

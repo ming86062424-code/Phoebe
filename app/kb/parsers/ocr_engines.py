@@ -11,7 +11,12 @@ from app.kb.parsers.base import ParseError
 
 logger = logging.getLogger(__name__)
 
+# the model card uses 1024 in its transformers example and 4096 for vLLM; use 4096 so
+# dense pages aren't truncated
 MAX_NEW_TOKENS = 4096
+# sampling settings from the official model card
+TEMPERATURE = 0.2
+TOP_P = 0.9
 VLLM_UNAVAILABLE = "OCR 服務（vLLM）未啟動"
 
 
@@ -60,7 +65,8 @@ class TransformersOcrEngine:
         unload_ollama_models(self.ollama_base_url)
         if torch.cuda.is_available():
             device = "cuda"
-            # Turing and older GPUs lack native bf16; fp16 is much faster there.
+            # The model card recommends bf16; fp16 is only a hardware fallback, because
+            # Turing and older GPUs (e.g. RTX 2060) lack native bf16.
             major, _ = torch.cuda.get_device_capability()
             dtype = torch.bfloat16 if major >= 8 else torch.float16
         else:
@@ -89,12 +95,16 @@ class TransformersOcrEngine:
             return_tensors="pt",
             enable_thinking=False,
         ).to(self._model.device)
-        # greedy decoding: the same PDF always gives the same text.
+        # Official sampling settings (temperature 0.2), so re-running OCR may differ slightly.
         # The model config ships use_cache=false; without the KV cache every new
         # token recomputes the whole ~3k-token image prompt (~18x slower).
         with torch.inference_mode():
             out = self._model.generate(
-                **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False, use_cache=True
+                **inputs,
+                max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=True,
+                temperature=TEMPERATURE,
+                use_cache=True,
             )
         new_tokens = out[0, inputs["input_ids"].shape[1] :]
         return self._processor.decode(new_tokens, skip_special_tokens=True).strip()
@@ -144,7 +154,8 @@ class VllmOcrEngine:
                     "content": [{"type": "image_url", "image_url": {"url": data_url}}],
                 }
             ],
-            "temperature": 0,
+            "temperature": TEMPERATURE,
+            "top_p": TOP_P,
             "max_tokens": MAX_NEW_TOKENS,
         }
         try:

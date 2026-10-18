@@ -28,9 +28,9 @@ class LightOnOcrParser:
             pages: list[PageText] = []
             for i in range(total):
                 page = pdf[i]
-                width, height = page.get_size()
-                scale = min(RENDER_DPI / 72, MAX_EDGE / max(width, height))
-                image = page.render(scale=scale).to_pil().convert("RGB")
+                # rendering exactly as the model card does
+                image = page.render(scale=RENDER_DPI / 72).to_pil().convert("RGB")
+                image.thumbnail((MAX_EDGE, MAX_EDGE))
                 try:
                     text = self.engine.ocr(image)
                 except ParseError:

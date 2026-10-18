@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 import re
 from pathlib import Path
@@ -123,3 +124,18 @@ def test_reply_lock_ttl_must_exceed_heartbeat(monkeypatch):
         Settings.from_env()
     monkeypatch.setenv("REPLY_LOCK_TTL_SECONDS", str(REPLY_HEARTBEAT_SECONDS + 1))
     assert Settings.from_env().reply_lock_ttl_seconds == REPLY_HEARTBEAT_SECONDS + 1
+
+
+def test_vllm_service_follows_official_flags():
+    import yaml
+
+    compose = yaml.safe_load(
+        (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    vllm = compose["services"]["vllm"]
+    command = vllm["command"]
+    assert "--trust-remote-code" in command
+    i = command.index("--default-chat-template-kwargs")
+    assert json.loads(command[i + 1]) == {"enable_thinking": False}
+    assert vllm["image"] == "vllm/vllm-openai:v0.30.0"
+    assert "float16" in command

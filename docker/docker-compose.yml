@@ -105,7 +105,7 @@ services:
   vllm:
     <<: *env
     profiles: [vllm]
-    image: vllm/vllm-openai:v0.11.2
+    image: vllm/vllm-openai:v0.30.0
     restart: unless-stopped
     ports:
       - "8001:8000"
@@ -118,6 +118,9 @@ services:
       - ${VLLM_GPU_UTIL:-0.35}
       - --max-model-len
       - "8192"
+      - --trust-remote-code
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
     ipc: host
     environment:
       HF_HOME: /hf-cache

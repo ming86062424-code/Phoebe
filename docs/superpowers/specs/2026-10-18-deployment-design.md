@@ -79,7 +79,7 @@
 ### 3.6 OCR 後端
 - `LightOnOcrParser` 拆成「把 PDF 轉成頁面影像」與「對一張影像做 OCR」兩層；OCR 由 `OcrEngine` 協定提供：`ocr(image) -> str`、`availability() -> tuple[bool, str]`、`release()`
   - `TransformersOcrEngine`：現有的本機 transformers 實作（含卸載 Ollama 模型、fp16／bf16 判斷）
-  - `VllmOcrEngine`：以 httpx 呼叫 `{VLLM_BASE_URL}/chat/completions`，影像以 base64 PNG data URL 送出，`temperature=0`、`max_tokens=4096`，模型名用 `OCR_MODEL`；`availability()` 以 `GET {VLLM_BASE_URL}/models` 檢查，連不上時回「OCR 服務（vLLM）未啟動」
+  - `VllmOcrEngine`：以 httpx 呼叫 `{VLLM_BASE_URL}/chat/completions`，影像以 base64 PNG data URL 送出，`temperature=0.2`、`top_p=0.9`、`max_tokens=4096`（依 LightOnOCR 官方模型卡；transformers 引擎同樣以 `do_sample=True, temperature=0.2` 取樣，故重跑結果可能略有差異，取代先前的貪婪解碼），模型名用 `OCR_MODEL`；`availability()` 以 `GET {VLLM_BASE_URL}/models` 檢查，連不上時回「OCR 服務（vLLM）未啟動」
 - `OCR_BACKEND` 決定使用哪個；transformers／torch 只在 `transformers` 引擎被用到時才 import，所以 `vllm` 模式的映像不需要 torch
 - 文件標示的 parser id 不變（仍為 `lightonocr`），使用者介面不需改
 
@@ -107,7 +107,7 @@ docker/
 | `web` | Dockerfile target `web` | Gunicorn；port `${PHOEBE_PORT:-8000}:8000`；`KB_WORKER_MODE=external`；`CHROMA_HOST=chroma`；`OLLAMA_BASE_URL=http://host.docker.internal:11434`；`DB_PATH`、`KB_DIR` 指向 `/data` volume |
 | `worker` | target `worker` | `python -m app.kb.worker_main`；同樣的 `/data` volume；`OCR_BACKEND` 預設 `transformers` 並要求 GPU（`deploy.resources.reservations.devices: nvidia`）；`HF_HOME` 指向 `hf-cache` volume |
 | `chroma` | `chromadb/chroma:<固定版本>` | volume `chroma-data` |
-| `vllm`（profile `vllm`） | `vllm/vllm-openai:<固定版本>` | `--model ${OCR_MODEL} --dtype float16 --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.35} --max-model-len 8192`；使用 GPU；`hf-cache` volume |
+| `vllm`（profile `vllm`） | `vllm/vllm-openai:<固定版本>` | `--model ${OCR_MODEL} --dtype float16 --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.35} --max-model-len 8192 --trust-remote-code --default-chat-template-kwargs '{"enable_thinking": false}'`，映像 `v0.30.0`；使用 GPU；`hf-cache` volume |
 
 - 所有服務都讀 `env_file: [{path: .env, required: false}]`（即 `docker/.env`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）
 - Docker 專用設定檔 `docker/.env`（範本 `docker/.env.example`，已被 git 忽略並排除於 build context）；指令在 `docker/` 目錄執行，Compose 自動讀取它做變數插值，`env_file: [{path: .env, required: false}]` 供容器環境變數。根目錄 `.env` 只給本機快速測試。compose `environment:` 固定的鍵（DB_PATH、KB_DIR、CHROMA_HOST/PORT、OLLAMA_BASE_URL、KB_WORKER_MODE、VLLM_BASE_URL、HF_HOME）不可由 `.env` 覆寫

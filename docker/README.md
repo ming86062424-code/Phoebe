@@ -51,7 +51,8 @@ vLLM 對主機開放在 http://localhost:8001（容器內為 8000）。
 
 - vLLM 會常駐並佔用 `VLLM_GPU_UTIL`（預設 0.35，約 2GB）的顯存，與主機 Ollama 的聊天模型搶 VRAM；聊天可能變慢，或需改用較小的模型。調低 `VLLM_GPU_UTIL` 可留更多顯存給 Ollama，但太低 vLLM 會無法啟動。
 - RTX 2060 是 Turing 架構，不支援 bfloat16，因此固定使用 `--dtype float16`。
-- 映像固定為 `vllm/vllm-openai:v0.11.2`。該 vLLM 版本是否支援 LightOnOCR 模型、能否在此硬體上運作，尚未驗證；若失敗請改用較新的版本（同時修改 `docker-compose.yml`）或回到 transformers 模式。
+- 映像固定為 `vllm/vllm-openai:v0.30.0`（v0.11.2 尚不支援 Qwen3.5 架構）。啟動參數依 LightOnOCR 官方模型卡：`--trust-remote-code` 與 `--default-chat-template-kwargs '{"enable_thinking": false}'`（模型以關閉 thinking 訓練與評估）。能否在此硬體上運作尚未驗證；若失敗請回到 transformers 模式。
+- 依官方用法，OCR 使用取樣（`temperature=0.2`；vLLM 另加 `top_p=0.9`），因此重跑同一份 PDF 的結果可能有些微差異（這取代了先前的貪婪解碼，依 repo 擁有者要求遵循官方用法）。頁面以 400 DPI 算繪並縮圖至最長邊 2048。
 
 ## 主機 Ollama 連線
 
