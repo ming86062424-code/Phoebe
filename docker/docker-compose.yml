@@ -78,8 +78,9 @@ services:
     depends_on:
       web:
         condition: service_healthy
+      # 只等容器啟動：vLLM 還在下載模型或失敗時，LiteParse 仍可使用（OCR 解析器會顯示未啟動）
       vllm:
-        condition: service_healthy
+        condition: service_started
     stop_grace_period: 30s
     environment:
       OCR_BACKEND: vllm
@@ -95,13 +96,14 @@ services:
       - phoebe-data:/data
 
   # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
-  # 只想給本機快速測試用：docker compose up -d vllm（對主機開放 8001）
+  # 只想給本機快速測試用：docker compose up -d vllm（只對本機 127.0.0.1:8001 開放）
   # 不載入 env_file：vllm 不需要應用程式設定，避免 vLLM 對未知的 VLLM_* 環境變數發出警告
   vllm:
     image: vllm/vllm-openai:v0.30.0
     restart: unless-stopped
     ports:
-      - "8001:8000"
+      # 無驗證的 GPU 端點，只對本機開放
+      - "127.0.0.1:8001:8000"
     command:
       - --model
       - ${OCR_MODEL:-lightonai/LightOnOCR-3-0.8B}

@@ -20,9 +20,20 @@ TEMPERATURE = 0.1
 
 _ESCAPED_DOLLAR = chr(92) + "$"  # backslash followed by a dollar sign
 _DISPLAY_MATH = re.compile(re.escape(_ESCAPED_DOLLAR * 2) + r"(.+?)" + re.escape(_ESCAPED_DOLLAR * 2), re.DOTALL)
-# inline math: no line break, no leading or trailing space (so "\$5 and \$6" is left alone)
+# Inline math: no line break, no space or digit right after the opening delimiter and no
+# trailing space (so prices such as "\$5 and \$6" or "\$5-\$10" stay escaped). Backslash
+# commands (\alpha, \frac) are allowed inside, but the content never crosses the next "\$".
+_BACKSLASH = re.escape(chr(92))
 _INLINE_MATH = re.compile(
-    re.escape(_ESCAPED_DOLLAR) + r"(?=\S)([^\n$" + re.escape(chr(92)) + r"]*?\S)" + re.escape(_ESCAPED_DOLLAR)
+    re.escape(_ESCAPED_DOLLAR)
+    + r"(?=[^\s\d])((?:[^\n$"
+    + _BACKSLASH
+    + r"]|"
+    + _BACKSLASH
+    + "(?!"
+    + re.escape("$")
+    + r"))*?\S)"
+    + re.escape(_ESCAPED_DOLLAR)
 )
 
 
@@ -33,6 +44,8 @@ def fix_escaped_dollars(text: str) -> str:
     """
     text = _DISPLAY_MATH.sub(lambda m: "$$" + m.group(1) + "$$", text)
     return _INLINE_MATH.sub(lambda m: "$" + m.group(1) + "$", text)
+
+
 VLLM_UNAVAILABLE = "OCR 服務（vLLM）未啟動"
 
 

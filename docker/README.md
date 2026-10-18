@@ -18,7 +18,7 @@ cd docker
 cp .env.example .env
 ```
 
-編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`），同時也當作容器的環境變數。`DB_PATH`、`KB_DIR`、`CHROMA_HOST/PORT`、`OLLAMA_BASE_URL`、`KB_WORKER_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`），同時也當作容器的環境變數（vllm 除外，它不載入 `docker/.env`）。`DB_PATH`、`KB_DIR`、`CHROMA_HOST/PORT`、`OLLAMA_BASE_URL`、`KB_WORKER_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
@@ -52,9 +52,9 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 **升級提醒**：舊的 `docker/.env` 若有 `VLLM_GPU_UTIL`、`VLLM_MAX_MODEL_LEN`，請改名為 `OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`（舊名稱已不會被讀取），也可參考 `.env.example` 新增 `OCR_VLLM_MAX_NUM_SEQS`。
 
 - 模型快取：`hf-cache` volume 掛在 `/root/.cache/huggingface`（vLLM 映像以 root 執行、未設 `HF_HOME` 時的預設位置）。
-- vllm 有 healthcheck（`GET /health`，`start_period` 600 秒涵蓋首次下載與載入模型）；worker 等它健康才啟動。
+- vllm 有 healthcheck（`GET /health`，`start_period` 600 秒涵蓋首次下載與載入模型）；worker 只等它啟動（`service_started`）、不等健康：vLLM 還在下載模型或啟動失敗時，LiteParse 仍可使用，LightOnOCR 則顯示「OCR 服務（vLLM）未啟動」。
 - 頁面以 400 DPI 算繪並縮圖至最長邊 2048。請求只含頁面影像，`temperature=0.1`、`chat_template_kwargs={"enable_thinking": false}`、`max_tokens=4096`（官方建議不要用貪婪解碼，所以同一份 PDF 重跑結果可能有些微差異）。OCR 結果中被跳脫的數學分隔符號（反斜線加錢字號）會還原成一般的 `$`，單獨出現的金額（如 `NT` 加跳脫錢字號）不變。
-- 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 對主機開放在 8001）。
+- 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
 - 沒有 GPU 或想用 transformers 時，只能在本機快速測試用 `uv sync --group ocr` 搭配 `OCR_BACKEND=transformers`；Docker 的 worker 不含 torch。
 
 ## 主機 Ollama 連線

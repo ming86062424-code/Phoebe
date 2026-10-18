@@ -138,7 +138,6 @@ def test_vllm_service_follows_official_flags():
     assert vllm["image"] == "vllm/vllm-openai:v0.30.0"
     for flag in ("--trust-remote-code", "--no-enable-prefix-caching", "float16"):
         assert flag in command
-    flags = {command[i + 1] for i, c in enumerate(command) if c.startswith("--") and i + 1 < len(command)}
     kwargs = command[command.index("--default-chat-template-kwargs") + 1]
     assert json.loads(kwargs) == {"enable_thinking": False}
     assert json.loads(command[command.index("--limit-mm-per-prompt") + 1]) == {"image": 1}
@@ -148,8 +147,10 @@ def test_vllm_service_follows_official_flags():
     assert "--enforce-eager" in command
     assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-8}"
     assert "env_file" not in vllm  # no app settings, so no "unknown VLLM_*" warnings
-    assert flags
-    assert "healthcheck" in vllm
+    health = vllm["healthcheck"]
+    assert any("/health" in str(part) for part in health["test"])
+    assert health["start_period"]
+    assert vllm["ports"] == ["127.0.0.1:8001:8000"]
     assert "hf-cache:/root/.cache/huggingface" in vllm["volumes"]
 
 
@@ -162,7 +163,8 @@ def test_worker_uses_vllm_and_has_no_gpu():
     worker = compose["services"]["worker"]
     assert worker["environment"]["OCR_BACKEND"] == "vllm"
     assert worker["environment"]["VLLM_BASE_URL"] == "http://vllm:8000/v1"
-    assert worker["depends_on"]["vllm"]["condition"] == "service_healthy"
+    # LiteParse must keep working while vLLM is down or still downloading
+    assert worker["depends_on"]["vllm"]["condition"] == "service_started"
     assert "deploy" not in worker
     assert "HF_HOME" not in worker["environment"]
     assert not any("hf-cache" in v for v in worker.get("volumes", []))

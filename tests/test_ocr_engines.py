@@ -77,6 +77,14 @@ def test_fix_escaped_dollars_repairs_math_but_not_prices():
     assert fix_escaped_dollars(r"\$5") == r"\$5"
     assert fix_escaped_dollars(r"\$5 and \$6") == r"\$5 and \$6"
     assert fix_escaped_dollars("no dollars") == "no dollars"
+    # LaTeX commands inside inline math
+    assert fix_escaped_dollars(r"\$\alpha+1\$") == r"$\alpha+1$"
+    assert fix_escaped_dollars(r"\$\frac{a}{b}\$") == r"$\frac{a}{b}$"
+    assert fix_escaped_dollars(r"\$\alpha\$ 與 \$\beta\$") == r"$\alpha$ 與 $\beta$"
+    # price ranges are not pairs
+    assert fix_escaped_dollars(r"\$5-\$10") == r"\$5-\$10"
+    assert fix_escaped_dollars(r"NT\$1,280 to NT\$2,000") == r"NT\$1,280 to NT\$2,000"
+    assert fix_escaped_dollars("NT$ 1,280") == "NT$ 1,280"
 
 
 def test_vllm_ocr_output_is_repaired():
