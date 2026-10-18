@@ -57,3 +57,47 @@ def test_update_document_rejects_unknown_field(conn):
     doc = store.create_document(conn, kb["id"], "x.pdf", "liteparse", 1)
     with pytest.raises(ValueError):
         store.update_document(conn, doc["id"], filename="evil")
+
+
+def _queued_doc(conn, kb_id, name="a.pdf"):
+    return store.create_document(conn, kb_id, name, "fake", 1)
+
+
+def test_claim_next_document_claims_oldest_queued(conn):
+    kb = store.create_kb(conn, 1, "a", "")
+    first = _queued_doc(conn, kb["id"])
+    second = _queued_doc(conn, kb["id"], "b.pdf")
+    assert store.claim_next_document(conn) == first["id"]
+    assert store.get_document(conn, first["id"])["status"] == "parsing"
+    assert store.get_document(conn, second["id"])["status"] == "queued"
+    assert store.claim_next_document(conn) == second["id"]
+    assert store.claim_next_document(conn) is None
+
+
+def test_two_connections_claim_distinct_documents(conn, tmp_path):
+    kb = store.create_kb(conn, 1, "a", "")
+    _queued_doc(conn, kb["id"])
+    _queued_doc(conn, kb["id"], "b.pdf")
+    other = connect(str(tmp_path / "t.db"))
+    try:
+        a = store.claim_next_document(conn)
+        b = store.claim_next_document(other)
+        assert a is not None and b is not None and a != b
+        assert store.claim_next_document(conn) is None
+        assert store.claim_next_document(other) is None
+    finally:
+        other.close()
+
+
+def test_stale_parsing_documents_are_requeued(conn):
+    kb = store.create_kb(conn, 1, "a", "")
+    old = _queued_doc(conn, kb["id"])
+    fresh = _queued_doc(conn, kb["id"], "b.pdf")
+    store.update_document(conn, old["id"], status="parsing", progress_done=3)
+    store.update_document(conn, fresh["id"], status="indexing")
+    conn.execute("UPDATE kb_documents SET updated_at = '2000-01-01T00:00:00' WHERE id = ?", (old["id"],))
+    conn.commit()
+    assert store.requeue_stale_documents(conn, "2020-01-01T00:00:00") == [old["id"]]
+    got = store.get_document(conn, old["id"])
+    assert (got["status"], got["progress_done"]) == ("queued", 0)
+    assert store.get_document(conn, fresh["id"])["status"] == "indexing"

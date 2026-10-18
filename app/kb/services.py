@@ -57,7 +57,9 @@ def build_kb_services(
             LiteParseParser(settings.liteparse_ocr_language),
             LightOnOcrParser(settings.ocr_model, settings.ollama_base_url),
         ]
-    index = KnowledgeIndex(settings.chroma_dir, embed_model)
+    index = KnowledgeIndex(
+        settings.chroma_dir, embed_model, settings.chroma_host, settings.chroma_port
+    )
     services = KbServices(index=index, parsers={p.id: p for p in parsers}, kb_dir=Path(settings.kb_dir))
     services.worker = IngestWorker(
         settings.db_path,
@@ -65,5 +67,8 @@ def build_kb_services(
         services.parsers,
         lambda kb_id, doc_id: str(services.file_path(kb_id, doc_id)),
         threaded=threaded,
+        poll_seconds=settings.kb_worker_poll_seconds,
+        stale_seconds=settings.kb_stale_seconds,
+        kb_dir=str(services.kb_dir),
     )
     return services

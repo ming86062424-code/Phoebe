@@ -38,10 +38,20 @@ def _collection_name(kb_id: int) -> str:
 class KnowledgeIndex:
     """Chunks, embeds and retrieves document pages; one Chroma collection per knowledge base."""
 
-    def __init__(self, chroma_dir: str, embed_model: BaseEmbedding):
-        self._client = chromadb.PersistentClient(
-            path=chroma_dir, settings=chromadb.Settings(anonymized_telemetry=False)
-        )
+    def __init__(
+        self,
+        chroma_dir: str,
+        embed_model: BaseEmbedding,
+        chroma_host: str = "",
+        chroma_port: int = 8000,
+    ):
+        chroma_settings = chromadb.Settings(anonymized_telemetry=False)
+        if chroma_host:
+            self._client = chromadb.HttpClient(
+                host=chroma_host, port=chroma_port, settings=chroma_settings
+            )
+        else:
+            self._client = chromadb.PersistentClient(path=chroma_dir, settings=chroma_settings)
         self._embed_model = embed_model
         self._splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         # Chroma's local client isn't safe for concurrent writes from several threads.

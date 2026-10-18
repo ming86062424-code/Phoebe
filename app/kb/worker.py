@@ -1,8 +1,9 @@
 import logging
-import queue
 import shutil
 import threading
+import time
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.db import connect
@@ -12,7 +13,7 @@ from app.kb.parsers.base import Parser, ParseError
 
 logger = logging.getLogger(__name__)
 
-# how often an idle worker retries deleting files that were in use
+# how often an idle worker retries deleting files that were in use, and scans for orphans
 CLEANUP_INTERVAL_SECONDS = 60
 
 
@@ -35,7 +36,9 @@ class _Superseded(Exception):
 class IngestWorker:
     """Parses and indexes uploaded documents one at a time.
 
-    With threaded=False, enqueue() processes the document immediately (used by tests).
+    The queue is the kb_documents table: workers atomically claim 'queued' rows, so several
+    workers (or a standalone worker process) can share it. With threaded=False, enqueue()
+    processes queued documents immediately (used by tests).
     """
 
     def __init__(
@@ -45,44 +48,146 @@ class IngestWorker:
         parsers: dict[str, Parser],
         file_path: Callable[[int, int], str],
         threaded: bool = True,
+        poll_seconds: float = 2.0,
+        stale_seconds: int = 900,
+        kb_dir: str = "",
     ):
         self.db_path = db_path
         self.index = index
         self.parsers = parsers
         self.file_path = file_path
         self.threaded = threaded
-        self._queue: queue.Queue[int | None] = queue.Queue()
+        self.poll_seconds = poll_seconds
+        self.stale_seconds = stale_seconds
+        self.kb_dir = kb_dir
         self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._wake = threading.Event()
         self._pending_removal: set[Path] = set()
         self._removal_lock = threading.Lock()
 
-    def start(self) -> None:
-        """Re-queue documents left unfinished by a previous run, then start the thread."""
+    def requeue_stale(self) -> None:
+        """Re-queue documents whose worker disappeared."""
+        stale_before = (
+            datetime.now(timezone.utc) - timedelta(seconds=self.stale_seconds)
+        ).isoformat()
         conn = connect(self.db_path)
         try:
-            pending = [d["id"] for d in store.list_unfinished_documents(conn)]
-            for doc_id in pending:
-                store.update_document(conn, doc_id, status="queued", progress_done=0)
+            requeued = store.requeue_stale_documents(conn, stale_before)
         finally:
             conn.close()
-        if self.threaded and self._thread is None:
-            self._thread = threading.Thread(target=self._run, name="kb-ingest", daemon=True)
-            self._thread.start()
-        for doc_id in pending:
-            self.enqueue(doc_id)
+        if requeued:
+            logger.info("重新排入逾時的文件：%s", requeued)
+
+    def start(self) -> None:
+        """Re-queue stale documents, then start the thread (or drain the queue if unthreaded)."""
+        self.requeue_stale()
+        if self.threaded:
+            if self._thread is None:
+                self._stop.clear()
+                self._thread = threading.Thread(
+                    target=self.run_forever, args=(self._stop,), name="kb-ingest", daemon=True
+                )
+                self._thread.start()
+        else:
+            self._drain()
 
     def stop(self) -> None:
         if self._thread is not None:
-            self._queue.put(None)
+            self._stop.set()
+            self._wake.set()
             self._thread.join(timeout=5)
             self._thread = None
 
+    def wake(self) -> None:
+        self._wake.set()
+
     def enqueue(self, doc_id: int) -> None:
+        """The document is already 'queued' in the database; make sure a worker looks at it."""
         if self.threaded:
-            self._queue.put(doc_id)
+            self.wake()
         else:
+            self._drain()
+
+    def _claim(self) -> int | None:
+        conn = connect(self.db_path)
+        try:
+            return store.claim_next_document(conn)
+        finally:
+            conn.close()
+
+    def _drain(self) -> None:
+        while (doc_id := self._claim()) is not None:
             self.process(doc_id)
-            self._release_parsers()
+        self._release_parsers()
+
+    def run_forever(self, stop: threading.Event) -> None:
+        last_orphan_scan = 0.0
+        worked = False
+        while not stop.is_set():
+            self._wake.clear()
+            try:
+                doc_id = self._claim()
+            except Exception:
+                logger.exception("認領文件失敗")
+                doc_id = None
+            if doc_id is not None:
+                worked = True
+                try:
+                    self.process(doc_id)
+                except Exception:
+                    logger.exception("處理文件 %s 時發生未預期錯誤", doc_id)
+                continue
+            if worked:
+                self._release_parsers()
+                worked = False
+            self.cleanup()
+            if time.monotonic() - last_orphan_scan >= CLEANUP_INTERVAL_SECONDS:
+                last_orphan_scan = time.monotonic()
+                try:
+                    self.cleanup_orphans()
+                except Exception:
+                    logger.exception("清理孤立檔案失敗")
+            self._wake.wait(self.poll_seconds)
+
+    def cleanup_orphans(self) -> int:
+        """Delete document files and knowledge-base folders that have no database row."""
+        root = Path(self.kb_dir)
+        if not self.kb_dir or not root.is_dir():
+            return 0
+        # List files first, then check the database: a document row always exists
+        # before its file does, so a fresh upload is never mistaken for an orphan.
+        found: list[tuple[int, Path, list[tuple[int, Path]]]] = []
+        for folder in root.iterdir():
+            if folder.is_dir() and folder.name.isdigit():
+                docs = [
+                    (int(f.stem), f)
+                    for f in folder.iterdir()
+                    if f.is_file() and f.suffix == ".pdf" and f.stem.isdigit()
+                ]
+                found.append((int(folder.name), folder, docs))
+        removed = 0
+        conn = connect(self.db_path)
+        try:
+            for kb_id, folder, docs in found:
+                kb_exists = conn.execute(
+                    "SELECT 1 FROM knowledge_bases WHERE id = ?", (kb_id,)
+                ).fetchone()
+                if not kb_exists:
+                    if _remove(folder):
+                        removed += 1
+                    continue
+                for doc_id, f in docs:
+                    row = conn.execute(
+                        "SELECT 1 FROM kb_documents WHERE id = ? AND kb_id = ?", (doc_id, kb_id)
+                    ).fetchone()
+                    if row is None and _remove(f):
+                        removed += 1
+        finally:
+            conn.close()
+        if removed:
+            logger.info("已清理 %d 個孤立檔案或資料夾", removed)
+        return removed
 
     def remove_path(self, path: Path) -> None:
         """Delete a file or folder now, or later when it is no longer in use.
@@ -102,23 +207,6 @@ class IngestWorker:
                 with self._removal_lock:
                     self._pending_removal.discard(path)
 
-    def _run(self) -> None:
-        while True:
-            try:
-                doc_id = self._queue.get(timeout=CLEANUP_INTERVAL_SECONDS)
-            except queue.Empty:
-                self.cleanup()
-                continue
-            if doc_id is None:
-                return
-            try:
-                self.process(doc_id)
-            except Exception:
-                logger.exception("處理文件 %s 時發生未預期錯誤", doc_id)
-            if self._queue.empty():
-                self._release_parsers()
-                self.cleanup()
-
     def _release_parsers(self) -> None:
         for parser in self.parsers.values():
             try:
@@ -135,7 +223,7 @@ class IngestWorker:
 
     def _process(self, conn, doc_id: int) -> None:
         doc = store.get_document(conn, doc_id)
-        if doc is None or doc["status"] != "queued":
+        if doc is None or doc["status"] != "parsing":  # must have been claimed
             return
         parser = self.parsers.get(doc["parser"])
         if parser is None:
@@ -154,7 +242,6 @@ class IngestWorker:
             check_current()  # also stops a long OCR run once the document is deleted
             store.update_document(conn, doc_id, progress_done=done, progress_total=total)
 
-        store.update_document(conn, doc_id, status="parsing", error=None, progress_done=0)
         indexed = False
         try:
             pages = parser.parse(self.file_path(doc["kb_id"], doc_id), on_progress)

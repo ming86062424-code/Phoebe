@@ -293,3 +293,21 @@ def test_upload_does_blocking_work_off_the_event_loop(make_user, monkeypatch):
     kb = _create_kb(alice)
     assert _upload(alice, kb["id"]).status_code == 201
     assert calls == ["worker thread"]
+
+
+def test_external_worker_mode_does_not_start_worker(settings, kb_services):
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    started = []
+    kb_services.worker.start = lambda: started.append("start")
+    kb_services.worker.stop = lambda: started.append("stop")
+    with TestClient(create_app(replace(settings, kb_worker_mode="external"), kb_services)):
+        pass
+    assert started == []
+    with TestClient(create_app(settings, kb_services)):
+        pass
+    assert started == ["start", "stop"]

@@ -108,6 +108,29 @@ def list_unfinished_documents(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def claim_next_document(conn: sqlite3.Connection) -> int | None:
+    """Atomically take the oldest queued document (queued -> parsing); None if there is none."""
+    row = conn.execute(
+        "UPDATE kb_documents SET status = 'parsing', error = NULL, progress_done = 0, updated_at = ? "
+        "WHERE id = (SELECT id FROM kb_documents WHERE status = 'queued' ORDER BY id LIMIT 1) "
+        "AND status = 'queued' RETURNING id",
+        (now_iso(),),
+    ).fetchone()
+    conn.commit()
+    return row["id"] if row else None
+
+
+def requeue_stale_documents(conn: sqlite3.Connection, stale_before: str) -> list[int]:
+    """Put documents whose worker went away (no update since stale_before) back in the queue."""
+    rows = conn.execute(
+        "UPDATE kb_documents SET status = 'queued', progress_done = 0 "
+        "WHERE status IN ('parsing', 'indexing') AND updated_at < ? RETURNING id",
+        (stale_before,),
+    ).fetchall()
+    conn.commit()
+    return sorted(r["id"] for r in rows)
+
+
 def update_document(conn: sqlite3.Connection, doc_id: int, **fields) -> None:
     unknown = set(fields) - UPDATABLE_DOC_FIELDS
     if unknown:

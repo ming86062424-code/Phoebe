@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -74,10 +75,12 @@ def test_unknown_parser_marks_failed(env):
     assert store.get_document(conn, doc["id"])["status"] == "failed"
 
 
-def test_start_requeues_unfinished_documents(env):
+def test_start_requeues_stale_documents(env):
     conn, _, parser, services, add_doc = env
     doc = add_doc()
     store.update_document(conn, doc["id"], status="indexing", progress_done=1)
+    conn.execute("UPDATE kb_documents SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (doc["id"],))
+    conn.commit()
     services.worker.start()
     assert store.get_document(conn, doc["id"])["status"] == "ready"
     assert len(parser.parsed) == 1
@@ -119,6 +122,7 @@ def test_document_replaced_mid_parse_is_not_indexed_as_the_new_one(env):
         return pages
 
     parser.parse = parse_then_replace
+    assert store.claim_next_document(conn) == doc["id"]
     services.worker.process(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert (got["filename"], got["status"]) == ("b.pdf", "queued")
@@ -139,6 +143,64 @@ def test_deleting_a_document_stops_parsing_at_the_next_page(env):
         return [PageText(1, "apple")]
 
     parser.parse = slow_parse
+    assert store.claim_next_document(conn) == doc["id"]
     services.worker.process(doc["id"])
     assert pages_done == [1]
     assert services.index.search(kb["id"], "apple", 5) == []
+
+
+def test_start_leaves_fresh_documents_alone(env):
+    conn, _, parser, services, add_doc = env
+    doc = add_doc()
+    store.update_document(conn, doc["id"], status="parsing")
+    services.worker.start()
+    assert store.get_document(conn, doc["id"])["status"] == "parsing"
+    assert parser.parsed == []
+
+
+def test_enqueue_unthreaded_processes_claimed_documents(env):
+    conn, _, parser, services, add_doc = env
+    first, second = add_doc(), add_doc()
+    services.worker.enqueue(first["id"])
+    assert [store.get_document(conn, d["id"])["status"] for d in (first, second)] == ["ready", "ready"]
+    assert len(parser.parsed) == 2
+
+
+def test_run_forever_stops_on_event(env):
+    _, _, _, services, _ = env
+    stop = threading.Event()
+    stop.set()
+    services.worker.run_forever(stop)  # returns instead of blocking
+
+
+def test_run_forever_processes_then_stops_promptly(env):
+    conn, _, _, services, add_doc = env
+    services.worker.poll_seconds = 30
+    doc = add_doc()
+    stop = threading.Event()
+    t = threading.Thread(target=services.worker.run_forever, args=(stop,))
+    t.start()
+    deadline = time.time() + 10
+    while store.get_document(conn, doc["id"])["status"] != "ready" and time.time() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    services.worker.wake()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert store.get_document(conn, doc["id"])["status"] == "ready"
+
+
+def test_cleanup_orphans_removes_files_without_documents(env):
+    conn, kb, _, services, add_doc = env
+    keep = add_doc()
+    keep_path = services.file_path(kb["id"], keep["id"])
+    orphan = services.file_path(kb["id"], 9999)
+    orphan.write_bytes(b"%PDF")
+    tmp = services.kb_dir / str(kb["id"]) / "upload-abc.tmp"
+    tmp.write_bytes(b"x")
+    gone_kb = services.kb_dir / "777"
+    gone_kb.mkdir()
+    (gone_kb / "1.pdf").write_bytes(b"%PDF")
+    assert services.worker.cleanup_orphans() == 2
+    assert keep_path.exists() and tmp.exists()
+    assert not orphan.exists() and not gone_kb.exists()
