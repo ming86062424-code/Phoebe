@@ -123,3 +123,22 @@ def test_document_replaced_mid_parse_is_not_indexed_as_the_new_one(env):
     got = store.get_document(conn, doc["id"])
     assert (got["filename"], got["status"]) == ("b.pdf", "queued")
     assert services.index.search(kb["id"], "apple", 5) == []
+
+
+def test_deleting_a_document_stops_parsing_at_the_next_page(env):
+    conn, kb, parser, services, add_doc = env
+    doc = add_doc()
+    pages_done = []
+
+    def slow_parse(path, on_progress):
+        for page in (1, 2, 3):
+            if page == 2:
+                store.delete_document(conn, kb["id"], doc["id"])
+            on_progress(page, 3)
+            pages_done.append(page)
+        return [PageText(1, "apple")]
+
+    parser.parse = slow_parse
+    services.worker.process(doc["id"])
+    assert pages_done == [1]
+    assert services.index.search(kb["id"], "apple", 5) == []

@@ -200,3 +200,55 @@ def test_system_prompt_gets_full_chunk_text_not_the_snippet(make_user, fake_chat
     # the UI and the database still get the short snippet
     shown = events[0]["sources"][0]["text"]
     assert len(shown) <= 400 and "九十" not in shown
+
+
+def _locked(monkeypatch, target):
+    """Make deleting `target` fail like Windows does while OCR holds the file open."""
+    import pathlib
+    import shutil
+
+    real_unlink, real_rmtree = pathlib.Path.unlink, shutil.rmtree
+
+    def unlink(self, missing_ok=False):
+        if self == target:
+            raise PermissionError(13, "file in use", str(self))
+        return real_unlink(self, missing_ok=missing_ok)
+
+    def rmtree(path, ignore_errors=False, **kwargs):
+        if target.is_relative_to(path):
+            if ignore_errors:
+                return  # like the real one: silently leaves the files behind
+            raise PermissionError(13, "file in use", str(path))
+        return real_rmtree(path, ignore_errors=ignore_errors, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+    monkeypatch.setattr(shutil, "rmtree", rmtree)
+
+
+def test_delete_document_succeeds_when_file_is_locked(make_user, kb_services, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+    path = kb_services.file_path(kb["id"], doc["id"])
+    _locked(monkeypatch, path)
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 204
+    assert alice.get(f"/api/kbs/{kb['id']}/search", params={"q": "apple"}).json() == []
+    assert path.exists()
+    monkeypatch.undo()
+    kb_services.worker.cleanup()
+    assert not path.exists()
+
+
+def test_delete_kb_succeeds_when_a_file_is_locked(make_user, kb_services, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+    folder = kb_services.kb_dir / str(kb["id"])
+    _locked(monkeypatch, kb_services.file_path(kb["id"], doc["id"]))
+    monkeypatch.setattr(kb_services.index, "delete_kb", lambda kb_id: deleted.append(kb_id))
+    deleted: list[int] = []
+    assert alice.delete(f"/api/kbs/{kb['id']}").status_code == 204
+    assert deleted == [kb["id"]]
+    monkeypatch.undo()
+    kb_services.worker.cleanup()
+    assert not folder.exists()

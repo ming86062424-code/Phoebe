@@ -1,7 +1,9 @@
 import logging
 import queue
+import shutil
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 from app.db import connect
 from app.kb import store
@@ -9,6 +11,21 @@ from app.kb.index import KnowledgeIndex
 from app.kb.parsers.base import Parser, ParseError
 
 logger = logging.getLogger(__name__)
+
+# how often an idle worker retries deleting files that were in use
+CLEANUP_INTERVAL_SECONDS = 60
+
+
+def _remove(path: Path) -> bool:
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+        return True
+    except OSError as e:
+        logger.warning("暫時無法刪除 %s：%s", path, e)
+        return False
 
 
 class _Superseded(Exception):
@@ -36,6 +53,8 @@ class IngestWorker:
         self.threaded = threaded
         self._queue: queue.Queue[int | None] = queue.Queue()
         self._thread: threading.Thread | None = None
+        self._pending_removal: set[Path] = set()
+        self._removal_lock = threading.Lock()
 
     def start(self) -> None:
         """Re-queue documents left unfinished by a previous run, then start the thread."""
@@ -65,9 +84,31 @@ class IngestWorker:
             self.process(doc_id)
             self._release_parsers()
 
+    def remove_path(self, path: Path) -> None:
+        """Delete a file or folder now, or later when it is no longer in use.
+
+        On Windows a PDF that the OCR parser has open can't be deleted yet.
+        """
+        if not _remove(path):
+            with self._removal_lock:
+                self._pending_removal.add(path)
+
+    def cleanup(self) -> None:
+        """Retry deletions that failed earlier."""
+        with self._removal_lock:
+            pending = list(self._pending_removal)
+        for path in pending:
+            if _remove(path):
+                with self._removal_lock:
+                    self._pending_removal.discard(path)
+
     def _run(self) -> None:
         while True:
-            doc_id = self._queue.get()
+            try:
+                doc_id = self._queue.get(timeout=CLEANUP_INTERVAL_SECONDS)
+            except queue.Empty:
+                self.cleanup()
+                continue
             if doc_id is None:
                 return
             try:
@@ -76,6 +117,7 @@ class IngestWorker:
                 logger.exception("處理文件 %s 時發生未預期錯誤", doc_id)
             if self._queue.empty():
                 self._release_parsers()
+                self.cleanup()
 
     def _release_parsers(self) -> None:
         for parser in self.parsers.values():

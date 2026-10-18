@@ -1,4 +1,3 @@
-import shutil
 import sqlite3
 import uuid
 
@@ -110,8 +109,9 @@ def delete_kb(
 ):
     _require_kb(conn, user, kb_id)
     store.delete_kb(conn, user["id"], kb_id)
-    shutil.rmtree(kb.kb_dir / str(kb_id), ignore_errors=True)
+    # the worker notices the deleted rows and stops; files still in use are removed later
     kb.index.delete_kb(kb_id)
+    kb.worker.remove_path(kb.kb_dir / str(kb_id))
     return Response(status_code=204)
 
 
@@ -180,8 +180,9 @@ def delete_document(
     _require_kb(conn, user, kb_id)
     if not store.delete_document(conn, kb_id, doc_id):
         raise HTTPException(status_code=404, detail="找不到文件")
-    kb.file_path(kb_id, doc_id).unlink(missing_ok=True)
+    # the worker notices the deleted row and stops; a file still in use is removed later
     kb.index.delete_document(kb_id, doc_id)
+    kb.worker.remove_path(kb.file_path(kb_id, doc_id))
     return Response(status_code=204)
 
 
