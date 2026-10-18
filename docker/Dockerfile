@@ -55,6 +55,22 @@ FROM base AS worker
 RUN uv sync --frozen --no-dev --group ocr --no-install-project
 COPY app ./app
 RUN chown -R phoebe:phoebe /app
+
+# LiteParse 的 Tesseract 語言檔：預設 chi_tra+eng（含直排 chi_tra_vert）內建於映像，不必在首次 OCR 時下載。
+# 來源固定在 tessdata_best 的指定 commit（2026-10-18 的 main）；其他語言仍會在首次使用時下載。
+ARG TESSDATA_REV=e12c65a915945e4c28e237a9b52bc4a8f39a0cec
+RUN mkdir -p /home/phoebe/.tesseract-rs/tessdata \
+    && chown -R phoebe:phoebe /home/phoebe/.tesseract-rs
+ADD --chown=phoebe:phoebe --chmod=644 \
+    https://github.com/tesseract-ocr/tessdata_best/raw/${TESSDATA_REV}/chi_tra.traineddata \
+    /home/phoebe/.tesseract-rs/tessdata/chi_tra.traineddata
+ADD --chown=phoebe:phoebe --chmod=644 \
+    https://github.com/tesseract-ocr/tessdata_best/raw/${TESSDATA_REV}/chi_tra_vert.traineddata \
+    /home/phoebe/.tesseract-rs/tessdata/chi_tra_vert.traineddata
+ADD --chown=phoebe:phoebe --chmod=644 \
+    https://github.com/tesseract-ocr/tessdata_best/raw/${TESSDATA_REV}/eng.traineddata \
+    /home/phoebe/.tesseract-rs/tessdata/eng.traineddata
+
 USER phoebe
 ENV DB_PATH=/data/app.db \
     KB_DIR=/data/kb

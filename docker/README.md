@@ -64,7 +64,7 @@ vLLM 對主機開放在 http://localhost:8001（容器內為 8000）。
 
 ## 資料備份
 
-資料在 volume 中。備份 `phoebe-data`（建議先 `down`，確保 SQLite 與 Chroma 一致）：
+資料在 volume 中。備份 `phoebe-data`（建議先 `down`，確保 SQLite 與 Chroma 一致）。以下指令請在 PowerShell 執行；若用 Git Bash，需在每個指令前加 `MSYS_NO_PATHCONV=1`，否則 `-C /data` 與 `/backup` 會被轉成 Windows 路徑：
 
 ```
 docker run --rm -v phoebe_phoebe-data:/data -v "$PWD":/backup alpine tar czf /backup/phoebe-data.tgz -C /data .
@@ -77,4 +77,5 @@ docker run --rm -v phoebe_chroma-data:/data -v "$PWD":/backup alpine tar czf /ba
 
 - Gunicorn 只在 Linux 容器內使用；Windows 本機快速測試請用 `uv run uvicorn app.main:create_app --factory`。
 - 映像版本皆已固定；升級 Chroma 時請與 `uv.lock` 中的 chromadb 版本一致（目前 1.5.9）。
-- LiteParse 為 Rust 原生套件，內含 pdfium 與 Tesseract，不需另外安裝 Node 或系統 Tesseract。
+- LiteParse 為 Rust 原生套件，內含 pdfium 與 Tesseract，不需另外安裝 Node 或系統 Tesseract。預設語言（`chi_tra`、`chi_tra_vert`、`eng`，來自 tessdata_best 的固定 commit）已內建於 worker 映像；`LITEPARSE_OCR_LANGUAGE` 改用其他語言時，該語言檔會在第一次 OCR 時下載（需要對外網路，且存在容器可寫層，重建映像後需重新下載）。
+- 若先以 `--profile vllm` 啟動過，`hf-cache` volume 可能由 vLLM 容器以 root 建立，導致 worker（uid 1000）無法寫入模型快取（下載模型時出現 Permission denied）。修正：`docker run --rm -v phoebe_hf-cache:/hf-cache alpine chown -R 1000:1000 /hf-cache`（volume 名稱以 `docker volume ls` 為準）。

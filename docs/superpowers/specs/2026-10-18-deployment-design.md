@@ -60,6 +60,8 @@
 - 現有的文件身分檢查（PR #3 review #1 的修正）保留
 - 新增獨立入口 `python -m app.kb.worker_main`：建立 `KbServices`、執行 worker 迴圈、處理 SIGTERM 優雅結束
 - `KB_WORKER_MODE=embedded`（預設）：維持現在的行為（lifespan 啟動 worker）；`external`：lifespan 不啟動
+- 解析器可用性：web 容器沒有 torch 與 vLLM，無法自行判斷。新資料表 `parser_status (parser_id, available, reason, updated_at)`；worker 以獨立的 daemon 執行緒每 15 秒呼叫各解析器的 `availability()` 並寫入（不放在 `run_forever` 的閒置維護，免得長時間 OCR 讓狀態過期）。`KbServices.availability()`：external 模式讀此表，無資料或 `updated_at` 超過 45 秒 → `(False, "文件解析服務（worker）未啟動")`；embedded 模式維持本機檢查。`GET /api/parsers` 與上傳都經由它
+- 週期維護另會：刪除超過 1 小時的 `upload-*.tmp`；把超過 `KB_STALE_SECONDS` 仍是 `pending` 的文件標為 `failed`（「上傳未完成，請重新上傳」）；`Settings.from_env` 要求 `KB_HEARTBEAT_SECONDS < KB_STALE_SECONDS`
 
 ### 3.3 回覆鎖改為 DB
 - 新資料表 `active_replies (conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, started_at TEXT NOT NULL)`
@@ -107,7 +109,7 @@ docker/
 | `chroma` | `chromadb/chroma:<固定版本>` | volume `chroma-data` |
 | `vllm`（profile `vllm`） | `vllm/vllm-openai:<固定版本>` | `--model ${OCR_MODEL} --dtype float16 --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.35} --max-model-len 8192`；使用 GPU；`hf-cache` volume |
 
-- 所有服務都讀 `env_file: ../.env`（`required: false`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）
+- 所有服務都讀 `env_file: [{path: .env, required: false}]`（即 `docker/.env`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）
 - Docker 專用設定檔 `docker/.env`（範本 `docker/.env.example`，已被 git 忽略並排除於 build context）；指令在 `docker/` 目錄執行，Compose 自動讀取它做變數插值，`env_file: [{path: .env, required: false}]` 供容器環境變數。根目錄 `.env` 只給本機快速測試。compose `environment:` 固定的鍵（DB_PATH、KB_DIR、CHROMA_HOST/PORT、OLLAMA_BASE_URL、KB_WORKER_MODE、VLLM_BASE_URL、HF_HOME）不可由 `.env` 覆寫
 - 啟動順序：`chroma`（healthcheck）→ `web`（healthcheck：`GET /api/me` 回 401 視為健康）→ `worker`；`web`、`worker` 設 `stop_grace_period: 30s`；worker 固定覆寫 `VLLM_BASE_URL=http://vllm:8000/v1`
 - 啟動：`cd docker && docker compose up -d --build`；使用 vLLM：`--profile vllm` 並在 `docker/.env` 設 `OCR_BACKEND=vllm`（worker 的 `VLLM_BASE_URL` 由 compose 固定）
