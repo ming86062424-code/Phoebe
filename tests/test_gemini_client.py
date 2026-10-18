@@ -1,8 +1,9 @@
+import asyncio
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from google.genai import errors
+from google.genai import errors, types
 
 from app.config import Settings
 from app.llm import (
@@ -14,6 +15,7 @@ from app.llm import (
     OllamaChatClient,
 )
 from app.llm.factory import build_chat_client
+from app.llm import gemini as gemini_mod
 from app.llm.gemini import GeminiChatClient
 from app.llm_settings import LlmSettings
 
@@ -28,12 +30,12 @@ MSGS = [
 
 
 def part(text, thought=None):
-    return SimpleNamespace(text=text, thought=thought)
+    return types.Part(text=text, thought=thought)
 
 
 def resp(*parts):
-    return SimpleNamespace(
-        candidates=[SimpleNamespace(content=SimpleNamespace(parts=list(parts)))]
+    return types.GenerateContentResponse(
+        candidates=[types.Candidate(content=types.Content(role="model", parts=list(parts)))]
     )
 
 
@@ -43,34 +45,42 @@ def api_error(code, message="boom"):
 
 
 class FakeModels:
-    def __init__(self, chunks=(), error=None, error_after=None, models=()):
+    """Lazy like the SDK: errors surface on iteration, not on await."""
+
+    def __init__(self, chunks=(), error=None, error_after=0, models=(), hang_after=None):
         self.chunks = list(chunks)
         self.error = error
         self.error_after = error_after
         self.models = list(models)
+        self.hang_after = hang_after
         self.calls = []
 
     async def generate_content_stream(self, *, model, contents, config=None):
         self.calls.append({"model": model, "contents": contents, "config": config})
-        if self.error is not None and self.error_after is None:
-            raise self.error
 
         async def gen():
             for i, chunk in enumerate(self.chunks):
+                if self.hang_after == i:
+                    await asyncio.Event().wait()
                 if self.error is not None and i == self.error_after:
                     raise self.error
                 yield chunk
+            if self.hang_after is not None and self.hang_after >= len(self.chunks):
+                await asyncio.Event().wait()
             if self.error is not None and self.error_after >= len(self.chunks):
                 raise self.error
 
         return gen()
 
     async def list(self, *, config=None):
+        self.list_config = config
         if self.error is not None:
             raise self.error
 
         async def gen():
-            for m in self.models:
+            for i, m in enumerate(self.models):
+                if self.hang_after == i:
+                    await asyncio.Event().wait()
                 yield m
 
         return gen()
@@ -169,7 +179,7 @@ async def test_gemini_error_message_has_no_key():
 
 async def test_gemini_list_models_filters_and_sorts():
     def m(name, actions):
-        return SimpleNamespace(name=name, supported_actions=actions)
+        return types.Model(name=name, supported_actions=actions)
 
     models = FakeModels(
         models=[
@@ -181,6 +191,28 @@ async def test_gemini_list_models_filters_and_sorts():
         ]
     )
     assert await make(models).list_models() == ["gemini-2.5-flash", "gemini-2.5-pro"]
+
+
+async def test_gemini_first_chunk_timeout(monkeypatch):
+    monkeypatch.setattr(gemini_mod, "OPEN_TIMEOUT", 0.05)
+    with pytest.raises(LlmUnavailable, match="無法連線到 Gemini"):
+        await collect(make(FakeModels(hang_after=0, chunks=[resp(part("x"))])))
+
+
+async def test_gemini_unparsable_response_never_escapes():
+    err = errors.UnknownApiResponseError("junk")
+    with pytest.raises(LlmUnavailable):
+        await collect(make(FakeModels(chunks=[resp(part("a"))], error=err)))
+    models = FakeModels(chunks=[resp(part("a"))], error=err, error_after=1)
+    with pytest.raises(LlmStreamError):
+        await collect(make(models))
+
+
+async def test_gemini_list_models_whole_pagination_timeout(monkeypatch):
+    monkeypatch.setattr(gemini_mod, "OPEN_TIMEOUT", 0.05)
+    m = types.Model(name="models/gemini-a", supported_actions=["generateContent"])
+    with pytest.raises(LlmUnavailable, match="無法連線到 Gemini"):
+        await make(FakeModels(models=[m, m], hang_after=1)).list_models()
 
 
 async def test_gemini_list_models_error_maps():

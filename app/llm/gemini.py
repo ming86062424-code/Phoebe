@@ -86,33 +86,53 @@ class GeminiChatClient:
             temperature=temperature,
             thinking_config=types.ThinkingConfig(include_thoughts=self.think),
         )
+        started = False
         try:
-            stream = await asyncio.wait_for(
-                self._sdk().aio.models.generate_content_stream(
-                    model=self.model, contents=contents, config=config
-                ),
-                OPEN_TIMEOUT,
+            # The SDK builds the generator on await; the HTTP request happens on
+            # the first __anext__, so the open timeout bounds the first chunk.
+            stream = await self._sdk().aio.models.generate_content_stream(
+                model=self.model, contents=contents, config=config
             )
-            async for chunk in stream:
+            it = stream.__aiter__()
+            try:
+                chunk = await asyncio.wait_for(anext(it), OPEN_TIMEOUT)
+            except StopAsyncIteration:
+                return
+            while True:
+                started = True
                 for candidate in chunk.candidates or []:
                     content = candidate.content
                     for p in (content.parts if content else None) or []:
                         if not p.text:
                             continue
                         yield ChatDelta("thinking" if p.thought else "content", p.text)
+                try:
+                    chunk = await anext(it)
+                except StopAsyncIteration:
+                    return
+        except errors.UnknownApiResponseError:
+            if started:
+                raise LlmStreamError("Gemini 回傳無法解析的資料") from None
+            raise LlmUnavailable(UNAVAILABLE) from None
         except (errors.APIError, *_TRANSPORT_ERRORS) as e:
             raise self._map(e) from None
 
     async def list_models(self) -> list[str]:
-        names: list[str] = []
-        try:
-            pager = await asyncio.wait_for(self._sdk().aio.models.list(), OPEN_TIMEOUT)
+        async def collect() -> list[str]:
+            names: list[str] = []
+            pager = await self._sdk().aio.models.list(config={"page_size": 1000})
             async for m in pager:
                 name = (m.name or "").removeprefix("models/")
                 if "generateContent" in (m.supported_actions or []) and name.startswith(
                     "gemini"
                 ):
                     names.append(name)
+            return names
+
+        try:
+            names = await asyncio.wait_for(collect(), OPEN_TIMEOUT)
+        except errors.UnknownApiResponseError:
+            raise LlmStreamError("Gemini 回傳無法解析的資料") from None
         except (errors.APIError, *_TRANSPORT_ERRORS) as e:
             raise self._map(e) from None
         return sorted(names)
