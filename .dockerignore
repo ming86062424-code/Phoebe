@@ -1,10 +1,15 @@
-.venv
-**/node_modules
+# 預設全部排除，只放行 build 需要的檔案（新增 build 輸入時請在此明確放行）
+*
+
+!pyproject.toml
+!uv.lock
+!app/
+!docker/gunicorn.conf.py
+!frontend/
+frontend/node_modules
 frontend/dist
-data
-.git
-.superpowers
+
+# 放行的資料夾裡仍然排除這些
 **/__pycache__
 **/*.pyc
 **/.env
-dev_history

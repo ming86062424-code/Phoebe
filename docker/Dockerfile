@@ -35,14 +35,16 @@ RUN useradd --uid 1000 --create-home --home-dir /home/phoebe phoebe \
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+# uv 快取放在 BuildKit cache mount，不會進入任何映像層（`docker builder prune` 可清除）
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    UV_CACHE_DIR=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 
 # ---- web：Gunicorn，不含 torch ----
 FROM base AS web
-COPY app ./app
-COPY docker/gunicorn.conf.py docker/gunicorn.conf.py
-COPY --from=frontend /frontend/dist ./frontend/dist
-RUN chown -R phoebe:phoebe /app
+# 程式碼唯讀即可（執行時只寫 /data、/hf-cache 與家目錄快取），不需要遞迴 chown 產生額外映像層
+COPY --chown=phoebe:phoebe app ./app
+COPY --chown=phoebe:phoebe docker/gunicorn.conf.py docker/gunicorn.conf.py
+COPY --chown=phoebe:phoebe --from=frontend /frontend/dist ./frontend/dist
 USER phoebe
 ENV KB_WORKER_MODE=external \
     DB_PATH=/data/app.db \
@@ -57,16 +59,18 @@ FROM base AS worker
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
-RUN uv sync --frozen --no-dev --group ocr --no-install-project
-COPY app ./app
-RUN chown -R phoebe:phoebe /app
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    UV_CACHE_DIR=/root/.cache/uv uv sync --frozen --no-dev --group ocr --no-install-project
+COPY --chown=phoebe:phoebe app ./app
 
 # LiteParse 的 Tesseract 語言檔：預設 chi_tra+eng（含直排 chi_tra_vert）內建於映像，不必在首次 OCR 時下載。
 # 來源固定在 tessdata_best 的指定 commit（2026-10-18 的 main）；其他語言仍會在首次使用時下載。
 ARG TESSDATA_REV=e12c65a915945e4c28e237a9b52bc4a8f39a0cec
-# 家目錄整個交給 phoebe：torch 的 ~/.cache 與 Triton 的 ~/.triton 都要能在執行時建立
+# torch 的 ~/.cache、Triton 的 ~/.triton 與 Tesseract 語言檔目錄要能在執行時寫入；
+# 只 chown 這幾個（空的）目錄，不遞迴處理整個家目錄
 RUN mkdir -p /home/phoebe/.tesseract-rs/tessdata /home/phoebe/.cache /home/phoebe/.triton \
-    && chown -R phoebe:phoebe /home/phoebe
+    && chown phoebe:phoebe /home/phoebe/.tesseract-rs /home/phoebe/.tesseract-rs/tessdata \
+       /home/phoebe/.cache /home/phoebe/.triton
 ADD --chown=phoebe:phoebe --chmod=644 \
     https://github.com/tesseract-ocr/tessdata_best/raw/${TESSDATA_REV}/chi_tra.traineddata \
     /home/phoebe/.tesseract-rs/tessdata/chi_tra.traineddata

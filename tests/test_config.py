@@ -139,3 +139,26 @@ def test_vllm_service_follows_official_flags():
     assert json.loads(command[i + 1]) == {"enable_thinking": False}
     assert vllm["image"] == "vllm/vllm-openai:v0.30.0"
     assert "float16" in command
+
+
+def test_dockerignore_is_an_allowlist_covering_dockerfile_copies():
+    lines = [
+        ln.strip()
+        for ln in (PROJECT_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    assert lines[0] == "*"
+    allowed = {ln[1:].rstrip("/") for ln in lines if ln.startswith("!")}
+    dockerfile = (PROJECT_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    sources = []
+    for ln in dockerfile.splitlines():
+        m = re.match(r"COPY\s+((?:--\S+\s+)*)(.+)$", ln)
+        if not m or "--from=" in m.group(1):
+            continue
+        *srcs, _dest = m.group(2).split()
+        sources += [s.rstrip("/") for s in srcs]
+    assert sources
+    for src in sources:
+        # a source is reachable if it, or one of its parent folders, is allowed
+        parts = src.split("/")
+        assert any("/".join(parts[: i + 1]) in allowed for i in range(len(parts))), src

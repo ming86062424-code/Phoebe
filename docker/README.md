@@ -81,3 +81,5 @@ docker run --rm -v phoebe_chroma-data:/data -v "$PWD":/backup alpine tar czf /ba
 - LiteParse 為 Rust 原生套件，內含 pdfium 與 Tesseract，不需另外安裝 Node 或系統 Tesseract。預設語言（`chi_tra`、`chi_tra_vert`、`eng`，來自 tessdata_best 的固定 commit）已內建於 worker 映像；`LITEPARSE_OCR_LANGUAGE` 改用其他語言時，該語言檔會在第一次 OCR 時下載（需要對外網路，且存在容器可寫層，重建映像後需重新下載）。
 - 若先以 `--profile vllm` 啟動過，`hf-cache` volume 可能由 vLLM 容器以 root 建立，導致 worker（uid 1000）無法寫入模型快取（下載模型時出現 Permission denied）。修正：`docker run --rm -v phoebe_hf-cache:/hf-cache alpine chown -R 1000:1000 /hf-cache`（volume 名稱以 `docker volume ls` 為準）。
 - worker 映像內含 `gcc` 與 `libc6-dev`：Linux 版 torch 附帶 Triton，Qwen3.5（LightOnOCR）執行時會即時編譯 Triton kernel，沒有 C 編譯器會出現「Failed to find C compiler」而 OCR 失敗。編譯快取放在 `/home/phoebe/.triton`（`TRITON_CACHE_DIR`），家目錄歸 `phoebe` 所有。web 映像不需要，因此不含編譯器。
+- 映像大小：worker 預期約 7–8 GB（CUDA 函式庫約 3.6 GB、torch 約 1.7 GB、triton 約 0.9 GB），web 映像小得多。uv 的下載快取放在 BuildKit cache mount（`/root/.cache/uv`），不會進入映像層；`docker builder prune` 可清除它。程式碼以 `COPY --chown` 放入，不做遞迴 `chown`，避免複製整棵目錄樹。
+- 根目錄 `.dockerignore` 是白名單（先 `*` 全部排除，再用 `!` 放行 build 需要的檔案）。Dockerfile 新增 `COPY` 來源時，必須同步在 `.dockerignore` 明確放行（`tests/test_config.py` 會檢查）。
