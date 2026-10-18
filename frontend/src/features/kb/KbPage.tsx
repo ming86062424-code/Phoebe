@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BookOpen, Plus, Trash2 } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
-import { api } from '../../api/client'
+import { api, errorText } from '../../api/client'
 import type { KnowledgeBase } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
 import KbDetail from './KbDetail'
@@ -9,10 +9,6 @@ import styles from './KbPage.module.css'
 
 function parseId(raw: string | undefined): number | null {
   return raw && /^\d+$/.test(raw) ? Number(raw) : null
-}
-
-function errorText(e: unknown, fallback: string): string {
-  return e instanceof Error ? e.message : fallback
 }
 
 export default function KbPage() {

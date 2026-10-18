@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
 import { useMediaQuery } from '../../shell/useMediaQuery'
@@ -43,15 +43,7 @@ export default function ChatPage() {
     onFinished: refresh,
   })
 
-  const { loadError, selectKb } = chat
-  const changeKb = useCallback(
-    (id: number | null) => {
-      void selectKb(id).then((err) => {
-        if (err) setNotice(err)
-      })
-    },
-    [selectKb],
-  )
+  const { loadError } = chat
   const [shownError, setShownError] = useState<string | null>(null)
   if (loadError !== shownError && (loadError || shownError)) {
     // keep the message visible after useChat clears it on the redirect to #/chat
@@ -95,8 +87,9 @@ export default function ChatPage() {
           </button>
           <KbSelector
             value={chat.kbId}
+            error={chat.kbError}
             disabled={chat.streaming || chat.loading}
-            onChange={changeKb}
+            onChange={(id) => void chat.selectKb(id)}
           />
         </div>
         {notice && (

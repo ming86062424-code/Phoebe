@@ -56,3 +56,11 @@ describe('api client', () => {
     await expect(api.logout()).resolves.toBeUndefined()
   })
 })
+
+describe('errorText (#10)', () => {
+  it('uses the error message or the fallback', async () => {
+    const { errorText, ApiError } = await import('./client')
+    expect(errorText(new ApiError(404, '找不到'), '失敗')).toBe('找不到')
+    expect(errorText('boom', '失敗')).toBe('失敗')
+  })
+})

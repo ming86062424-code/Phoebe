@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Pencil, RotateCcw, Search, Trash2, Upload } from 'lucide-react'
-import { api } from '../../api/client'
+import { api, errorText } from '../../api/client'
 import type { KbDocument, KnowledgeBase, ParserInfo, Source } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
 import styles from './KbDetail.module.css'
@@ -13,10 +13,6 @@ const STATUS_TEXT: Record<KbDocument['status'], string> = {
   indexing: '建立索引中',
   ready: '完成',
   failed: '失敗',
-}
-
-function errorText(e: unknown, fallback: string): string {
-  return e instanceof Error ? e.message : fallback
 }
 
 function formatSize(bytes: number): string {

@@ -1,9 +1,25 @@
-.selector {
+.wrap {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   margin-left: auto;
+}
+
+.selector {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--color-text-muted);
+}
+
+.error {
+  margin-left: auto;
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+.wrap .error {
+  margin-left: 0;
 }
 
 .selector select {

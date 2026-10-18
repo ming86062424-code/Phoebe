@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, api } from '../../api/client'
+import { ApiError, api, errorText } from '../../api/client'
 import { readEvents } from '../../api/stream'
 import { useNavGuard } from '../../shell/navGuard'
 import {
@@ -66,6 +66,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
   const counterRef = useRef(0)
   // knowledge base used by the conversation; for a new chat it's applied once the conversation exists
   const [kbId, setKbId] = useState<number | null>(null)
+  const [kbError, setKbError] = useState<string | null>(null)
   const kbIdRef = useRef<number | null>(null)
   const applyKbId = useCallback((id: number | null) => {
     kbIdRef.current = id
@@ -93,6 +94,9 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     createdIdRef.current = null
     persistedRef.current = true
     uncertainRef.current = false
+    // until the server says otherwise, the conversation uses no knowledge base
+    applyKbId(null)
+    setKbError(null)
     setLoadError(null)
     setItems([])
     setLoading(conversationId !== null)
@@ -224,7 +228,16 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
           id = created.id
           createdIdRef.current = id
           onConversationCreated(id)
-          if (kbIdRef.current !== null) await api.setConversationKb(id, kbIdRef.current)
+          if (kbIdRef.current !== null) {
+            try {
+              await api.setConversationKb(id, kbIdRef.current)
+            } catch (e) {
+              if (signal.aborted) throw abortError()
+              // send without the knowledge base rather than losing the message
+              applyKbId(null)
+              setKbError(errorText(e, '無法設定知識庫'))
+            }
+          }
         }
         try {
           const res = await api.sendMessage(id, text, signal)
@@ -271,20 +284,20 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     await run(assistantKey, (signal) => api.regenerate(id, signal), { reloadOn409: true })
   }
 
-  /** Choose the knowledge base; returns an error message when saving fails. */
+  /** Choose the knowledge base; a failure to save it ends up in kbError. */
   const selectKb = useCallback(
-    async (id: number | null): Promise<string | null> => {
-      if (id === kbIdRef.current) return null
+    async (id: number | null): Promise<void> => {
+      setKbError(null)
+      if (id === kbIdRef.current) return
       if (conversationId === null) {
         applyKbId(id)
-        return null
+        return
       }
       try {
         const detail = await api.setConversationKb(conversationId, id)
         if (activeIdRef.current === conversationId) applyKbId(detail.kb_id)
-        return null
       } catch (e) {
-        return e instanceof Error ? e.message : '無法設定知識庫'
+        if (activeIdRef.current === conversationId) setKbError(errorText(e, '無法設定知識庫'))
       }
     },
     [conversationId, applyKbId],
@@ -292,6 +305,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
 
   return {
     kbId,
+    kbError,
     selectKb,
     items,
     streaming,

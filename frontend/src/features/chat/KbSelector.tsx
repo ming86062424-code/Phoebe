@@ -7,11 +7,14 @@ import styles from './KbSelector.module.css'
 interface Props {
   value: number | null
   disabled: boolean
+  /** problem saving the choice, shown next to the selector */
+  error: string | null
   onChange(id: number | null): void
 }
 
-export default function KbSelector({ value, disabled, onChange }: Props) {
+export default function KbSelector({ value, disabled, error, onChange }: Props) {
   const [kbs, setKbs] = useState<KnowledgeBase[] | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -20,7 +23,7 @@ export default function KbSelector({ value, disabled, onChange }: Props) {
         if (!cancelled) setKbs(Array.isArray(list) ? list : [])
       },
       () => {
-        if (!cancelled) setKbs([])
+        if (!cancelled) setLoadFailed(true)
       },
     )
     return () => {
@@ -28,29 +31,41 @@ export default function KbSelector({ value, disabled, onChange }: Props) {
     }
   }, [])
 
-  // the selected knowledge base may have been deleted
-  const missing = kbs !== null && value !== null && !kbs.some((k) => k.id === value)
-  useEffect(() => {
-    if (missing) onChange(null)
-  }, [missing, onChange])
-
-  if (kbs === null || kbs.length === 0) return null
+  // Never change the conversation on our own: a failed load or a deleted knowledge
+  // base is only shown, and the user decides what to pick.
+  if (loadFailed) {
+    return (
+      <div role="alert" className={styles.error}>
+        無法載入知識庫列表
+      </div>
+    )
+  }
+  if (kbs === null || (kbs.length === 0 && value === null)) return null
+  const missing = value !== null && !kbs.some((k) => k.id === value)
   return (
-    <label className={styles.selector}>
-      <BookOpen size={16} aria-hidden="true" />
-      <select
-        aria-label="知識庫"
-        value={value === null || missing ? '' : String(value)}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-      >
-        <option value="">不使用知識庫</option>
-        {kbs.map((k) => (
-          <option key={k.id} value={k.id}>
-            {k.name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className={styles.wrap}>
+      <label className={styles.selector}>
+        <BookOpen size={16} aria-hidden="true" />
+        <select
+          aria-label="知識庫"
+          value={value === null ? '' : String(value)}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        >
+          <option value="">不使用知識庫</option>
+          {missing && <option value={String(value)}>（知識庫不存在）</option>}
+          {kbs.map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && (
+        <span role="alert" className={styles.error}>
+          {error}
+        </span>
+      )}
+    </div>
   )
 }

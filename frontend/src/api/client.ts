@@ -31,6 +31,11 @@ export function detailText(data: unknown, status: number): string {
   return `發生錯誤（${status}）`
 }
 
+/** Message to show for a failed call: the error's own message, else the fallback. */
+export function errorText(e: unknown, fallback: string): string {
+  return e instanceof Error ? e.message : fallback
+}
+
 async function request(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(path, init)
   if (res.status === 401) {
