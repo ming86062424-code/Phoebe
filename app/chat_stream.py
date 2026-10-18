@@ -38,10 +38,16 @@ async def ndjson_reply(
     conversation_id: int,
     db_path: str,
     release: Callable[[], None],
+    sources: list[dict] | None = None,
 ) -> StreamingResponse:
-    """Stream the reply; release() runs once the reply ends, however it ends."""
+    """Stream the reply; release() runs once the reply ends, however it ends.
+
+    When sources is given, they are emitted first and saved with the reply.
+    """
     try:
-        return await _ndjson_reply(client, history, conversation_id, db_path, release)
+        return await _ndjson_reply(
+            client, history, conversation_id, db_path, release, sources
+        )
     except BaseException:
         release()
         raise
@@ -53,6 +59,7 @@ async def _ndjson_reply(
     conversation_id: int,
     db_path: str,
     release: Callable[[], None],
+    sources: list[dict] | None,
 ) -> StreamingResponse:
     stream = client.stream_chat(history)
     try:
@@ -75,6 +82,8 @@ async def _ndjson_reply(
             return _line({"type": delta.kind, "text": delta.text})
 
         try:
+            if sources is not None:
+                yield _line({"type": "sources", "sources": sources})
             try:
                 if first is not None:
                     yield handle(first)
@@ -88,7 +97,7 @@ async def _ndjson_reply(
             save_conn = connect(db_path)
             try:
                 message_id = conversations.add_message(
-                    save_conn, conversation_id, "assistant", "".join(parts)
+                    save_conn, conversation_id, "assistant", "".join(parts), sources
                 )
             except sqlite3.Error:
                 # e.g. the conversation was deleted in another tab mid-stream

@@ -5,6 +5,7 @@ import { useMediaQuery } from '../../shell/useMediaQuery'
 import { usePersistentState } from '../../shell/usePersistentState'
 import Composer from './Composer'
 import ConversationList from './ConversationList'
+import KbSelector from './KbSelector'
 import MessageList from './MessageList'
 import { useChat } from './useChat'
 import styles from './ChatPage.module.css'
@@ -84,6 +85,12 @@ export default function ChatPage() {
           >
             {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button>
+          <KbSelector
+            value={chat.kbId}
+            error={chat.kbError}
+            disabled={chat.streaming || chat.loading}
+            onChange={(id) => void chat.selectKb(id)}
+          />
         </div>
         {notice && (
           <div role="alert" className={styles.notice}>

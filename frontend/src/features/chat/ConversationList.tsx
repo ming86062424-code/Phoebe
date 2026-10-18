@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
-import { api } from '../../api/client'
+import { api, errorText } from '../../api/client'
 import type { Conversation } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
 import styles from './ConversationList.module.css'
@@ -35,7 +35,7 @@ export default function ConversationList({
         setError(null)
       },
       (e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : '無法載入對話列表')
+        if (!cancelled) setError(errorText(e, '無法載入對話列表'))
       },
     )
     return () => {
@@ -52,7 +52,7 @@ export default function ConversationList({
       setConversations((prev) => prev.filter((c) => c.id !== target.id))
       onDeleted(target.id)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '刪除失敗')
+      setError(errorText(e, '刪除失敗'))
     }
   }
 

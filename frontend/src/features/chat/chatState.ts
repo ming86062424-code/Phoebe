@@ -1,4 +1,4 @@
-import type { Message, StreamEvent } from '../../api/types'
+import type { Message, Source, StreamEvent } from '../../api/types'
 
 export interface ChatItem {
   key: string
@@ -10,6 +10,7 @@ export interface ChatItem {
   status: 'done' | 'streaming' | 'error'
   error?: string
   interrupted?: boolean
+  sources?: Source[]
 }
 
 export const INTERRUPTED = '回覆中斷'
@@ -22,6 +23,7 @@ export function fromMessages(messages: Message[]): ChatItem[] {
     content: m.content,
     thinking: '',
     status: 'done',
+    ...(m.sources ? { sources: m.sources } : {}),
   }))
 }
 
@@ -44,6 +46,8 @@ export function failItem(item: ChatItem, detail: string, now: number): ChatItem 
 
 export function applyEvent(item: ChatItem, event: StreamEvent, now: number): ChatItem {
   switch (event.type) {
+    case 'sources':
+      return { ...item, sources: event.sources }
     case 'thinking':
       return {
         ...item,

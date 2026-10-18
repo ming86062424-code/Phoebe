@@ -1,4 +1,12 @@
-import type { Conversation, ConversationDetail, User } from './types'
+import type {
+  Conversation,
+  ConversationDetail,
+  KbDocument,
+  KnowledgeBase,
+  ParserInfo,
+  Source,
+  User,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -21,6 +29,11 @@ export function detailText(data: unknown, status: number): string {
       .join('\n')
   }
   return `發生錯誤（${status}）`
+}
+
+/** Message to show for a failed call: the error's own message, else the fallback. */
+export function errorText(e: unknown, fallback: string): string {
+  return e instanceof Error ? e.message : fallback
 }
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
@@ -80,4 +93,26 @@ export const api = {
     request(`/api/conversations/${id}/messages`, { ...jsonInit('POST', { content }), signal }),
   regenerate: (id: number, signal?: AbortSignal) =>
     request(`/api/conversations/${id}/regenerate`, { ...jsonInit('POST'), signal }),
+  setConversationKb: (id: number, kbId: number | null) =>
+    json<ConversationDetail>(`/api/conversations/${id}`, jsonInit('PATCH', { kb_id: kbId })),
+  listParsers: () => json<ParserInfo[]>('/api/parsers'),
+  listKbs: () => json<KnowledgeBase[]>('/api/kbs'),
+  createKb: (name: string, description = '') =>
+    json<KnowledgeBase>('/api/kbs', jsonInit('POST', { name, description })),
+  updateKb: (id: number, patch: { name?: string; description?: string }) =>
+    json<KnowledgeBase>(`/api/kbs/${id}`, jsonInit('PATCH', patch)),
+  deleteKb: (id: number) => empty(`/api/kbs/${id}`, jsonInit('DELETE')),
+  listDocuments: (kbId: number) => json<KbDocument[]>(`/api/kbs/${kbId}/documents`),
+  uploadDocument: (kbId: number, file: File, parser: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('parser', parser)
+    return json<KbDocument>(`/api/kbs/${kbId}/documents`, { method: 'POST', body: form })
+  },
+  deleteDocument: (kbId: number, docId: number) =>
+    empty(`/api/kbs/${kbId}/documents/${docId}`, jsonInit('DELETE')),
+  retryDocument: (kbId: number, docId: number) =>
+    json<KbDocument>(`/api/kbs/${kbId}/documents/${docId}/retry`, jsonInit('POST')),
+  search: (kbId: number, q: string) =>
+    json<Source[]>(`/api/kbs/${kbId}/search?q=${encodeURIComponent(q)}`),
 }

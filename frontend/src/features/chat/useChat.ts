@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, api } from '../../api/client'
+import { ApiError, api, errorText } from '../../api/client'
 import { readEvents } from '../../api/stream'
 import { useNavGuard } from '../../shell/navGuard'
 import {
@@ -20,8 +20,12 @@ interface Options {
 }
 
 async function loadItems(id: number): Promise<ChatItem[]> {
+  return (await loadConversation(id)).items
+}
+
+async function loadConversation(id: number): Promise<{ items: ChatItem[]; kbId: number | null }> {
   const detail = await api.getConversation(id)
-  return fromMessages(detail.messages)
+  return { items: fromMessages(detail.messages), kbId: detail.kb_id ?? null }
 }
 
 function loadErrorText(e: unknown): string {
@@ -60,6 +64,14 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
   const activeIdRef = useRef(conversationId)
   const createdIdRef = useRef<number | null>(null)
   const counterRef = useRef(0)
+  // knowledge base used by the conversation; for a new chat it's applied once the conversation exists
+  const [kbId, setKbId] = useState<number | null>(null)
+  const [kbError, setKbError] = useState<string | null>(null)
+  const kbIdRef = useRef<number | null>(null)
+  const applyKbId = useCallback((id: number | null) => {
+    kbIdRef.current = id
+    setKbId(id)
+  }, [])
 
   /** Stop the running reply; it will not touch state again. */
   const abortRun = useCallback(() => {
@@ -82,16 +94,20 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     createdIdRef.current = null
     persistedRef.current = true
     uncertainRef.current = false
+    // until the server says otherwise, the conversation uses no knowledge base
+    applyKbId(null)
+    setKbError(null)
     setLoadError(null)
     setItems([])
     setLoading(conversationId !== null)
     if (conversationId === null) return
     let cancelled = false
-    loadItems(conversationId).then(
+    loadConversation(conversationId).then(
       (loaded) => {
         if (cancelled) return
         // a reply started meanwhile owns the items: do not overwrite it
-        if (!streamingRef.current) setItems(loaded)
+        if (!streamingRef.current) setItems(loaded.items)
+        applyKbId(loaded.kbId)
         setLoading(false)
       },
       (e) => {
@@ -103,7 +119,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     return () => {
       cancelled = true
     }
-  }, [conversationId, abortRun])
+  }, [conversationId, applyKbId, abortRun])
 
   useEffect(() => {
     const leave = () => {
@@ -212,6 +228,16 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
           id = created.id
           createdIdRef.current = id
           onConversationCreated(id)
+          if (kbIdRef.current !== null) {
+            try {
+              await api.setConversationKb(id, kbIdRef.current)
+            } catch (e) {
+              if (signal.aborted) throw abortError()
+              // send without the knowledge base rather than losing the message
+              applyKbId(null)
+              setKbError(errorText(e, '無法設定知識庫'))
+            }
+          }
         }
         try {
           const res = await api.sendMessage(id, text, signal)
@@ -258,7 +284,29 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
     await run(assistantKey, (signal) => api.regenerate(id, signal), { reloadOn409: true })
   }
 
+  /** Choose the knowledge base; a failure to save it ends up in kbError. */
+  const selectKb = useCallback(
+    async (id: number | null): Promise<void> => {
+      setKbError(null)
+      if (id === kbIdRef.current) return
+      if (conversationId === null) {
+        applyKbId(id)
+        return
+      }
+      try {
+        const detail = await api.setConversationKb(conversationId, id)
+        if (activeIdRef.current === conversationId) applyKbId(detail.kb_id)
+      } catch (e) {
+        if (activeIdRef.current === conversationId) setKbError(errorText(e, '無法設定知識庫'))
+      }
+    },
+    [conversationId, applyKbId],
+  )
+
   return {
+    kbId,
+    kbError,
+    selectKb,
     items,
     streaming,
     canRetry: canRetryOf(items, streaming),

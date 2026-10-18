@@ -10,12 +10,35 @@ def settings(tmp_path):
     return Settings(
         db_path=str(tmp_path / "test.db"),
         frontend_dist=str(tmp_path / "no-dist"),
+        kb_dir=str(tmp_path / "kb"),
+        chroma_dir=str(tmp_path / "chroma"),
     )
 
 
 @pytest.fixture
-def app(settings):
-    return create_app(settings)
+def fake_parser():
+    from tests.fakes import FakeParser
+
+    return FakeParser()
+
+
+@pytest.fixture
+def kb_services(settings, fake_parser):
+    from app.kb.parsers.liteparse_parser import LiteParseParser
+    from app.kb.services import build_kb_services
+    from tests.fakes import KeywordEmbedding
+
+    return build_kb_services(
+        settings,
+        embed_model=KeywordEmbedding(),
+        parsers=[LiteParseParser("eng"), fake_parser],
+        threaded=False,
+    )
+
+
+@pytest.fixture
+def app(settings, kb_services):
+    return create_app(settings, kb_services)
 
 
 @pytest.fixture
