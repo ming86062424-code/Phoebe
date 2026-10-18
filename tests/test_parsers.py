@@ -25,8 +25,9 @@ def test_liteparse_raises_parse_error_on_garbage(tmp_path):
         LiteParseParser("eng").parse(str(path), lambda d, t: None)
 
 
-def test_lightonocr_uses_greedy_decoding():
-    """Sampling makes OCR text differ between runs; greedy decoding is reproducible."""
+def test_lightonocr_generate_kwargs():
+    """Sampling makes OCR text differ between runs; greedy decoding is reproducible.
+    The model config ships use_cache=false, which recomputes the whole prompt per token."""
     torch = __import__("pytest").importorskip("torch")
 
     from app.kb.parsers.lightonocr import LightOnOcrParser
@@ -57,3 +58,4 @@ def test_lightonocr_uses_greedy_decoding():
     assert parser._ocr_image(object()) == "文字"
     assert parser._model.kwargs["do_sample"] is False
     assert "temperature" not in parser._model.kwargs
+    assert parser._model.kwargs["use_cache"] is True
