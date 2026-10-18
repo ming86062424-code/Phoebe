@@ -113,3 +113,13 @@ def test_heartbeat_must_be_shorter_than_stale_timeout(monkeypatch):
         Settings.from_env()
     monkeypatch.setenv("KB_HEARTBEAT_SECONDS", "119")
     assert Settings.from_env().kb_heartbeat_seconds == 119
+
+
+def test_reply_lock_ttl_must_exceed_heartbeat(monkeypatch):
+    from app.config import REPLY_HEARTBEAT_SECONDS
+
+    monkeypatch.setenv("REPLY_LOCK_TTL_SECONDS", str(REPLY_HEARTBEAT_SECONDS))
+    with pytest.raises(ValueError, match="REPLY_LOCK_TTL_SECONDS"):
+        Settings.from_env()
+    monkeypatch.setenv("REPLY_LOCK_TTL_SECONDS", str(REPLY_HEARTBEAT_SECONDS + 1))
+    assert Settings.from_env().reply_lock_ttl_seconds == REPLY_HEARTBEAT_SECONDS + 1

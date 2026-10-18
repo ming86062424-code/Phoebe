@@ -216,3 +216,65 @@ async def test_streaming_reply_refreshes_its_lock(app, settings, monkeypatch):
         fake.gate.set()
         await _soon(first)
         assert started_at() is None
+
+
+class SlowStartChatClient:
+    """First delta arrives only after `delay` seconds (cold-loading model)."""
+
+    def __init__(self, delay):
+        self.delay = delay
+
+    async def stream_chat(self, messages):
+        await asyncio.sleep(self.delay)
+        yield ChatDelta("content", "好")
+
+
+class UnavailableChatClient:
+    async def stream_chat(self, messages):
+        from app.ollama_client import OllamaUnavailable
+
+        raise OllamaUnavailable("down")
+        yield  # pragma: no cover
+
+
+def _active_rows(db_path):
+    conn = connect(db_path)
+    try:
+        return conn.execute("SELECT 1 FROM active_replies").fetchall()
+    finally:
+        conn.close()
+
+
+async def test_lock_held_while_waiting_for_first_delta(settings, kb_services, monkeypatch):
+    import dataclasses
+
+    from app import chat_stream
+    from app.main import create_app
+
+    monkeypatch.setattr(chat_stream, "REPLY_HEARTBEAT_SECONDS", 0.2)
+    app = create_app(dataclasses.replace(settings, reply_lock_ttl_seconds=1), kb_services)
+    app.dependency_overrides[get_chat_client] = lambda: SlowStartChatClient(2.0)
+    async with _client(app) as c:
+        cid = (await c.post("/api/conversations")).json()["id"]
+        first = asyncio.create_task(
+            c.post(f"/api/conversations/{cid}/messages", json={"content": "嗨"})
+        )
+        await asyncio.sleep(1.6)  # past the TTL, still before the first delta
+        again = await _soon(
+            c.post(f"/api/conversations/{cid}/messages", json={"content": "再一次"})
+        )
+        assert again.status_code == 409
+        done = await _soon(first)
+        assert json.loads(done.text.splitlines()[-1])["type"] == "done"
+        assert _active_rows(settings.db_path) == []
+
+
+async def test_prestream_failure_releases_lock_and_stops_keep_alive(app, settings):
+    app.dependency_overrides[get_chat_client] = lambda: UnavailableChatClient()
+    async with _client(app) as c:
+        cid = (await c.post("/api/conversations")).json()["id"]
+        r = await _soon(c.post(f"/api/conversations/{cid}/messages", json={"content": "嗨"}))
+        assert r.status_code == 503
+        await asyncio.sleep(0.1)
+        assert _active_rows(settings.db_path) == []
+        assert not [t for t in asyncio.all_tasks() if "_keep_alive" in repr(t)]

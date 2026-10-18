@@ -74,6 +74,7 @@ async def send_message(
     release = await run_in_threadpool(
         claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
     )
+    release.start_keep_alive()
     try:
         conversations.add_message(conn, conversation_id, "user", body.content)
         conversations.set_title_if_empty(conn, conversation_id, body.content.strip()[:30])
@@ -103,6 +104,7 @@ async def regenerate(
     release = await run_in_threadpool(
         claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
     )
+    release.start_keep_alive()
     history = conversations.get_history(conn, conversation_id)
     if not history or history[-1]["role"] != "user":
         release()

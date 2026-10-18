@@ -13,13 +13,11 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from app import conversations
+from app.config import REPLY_HEARTBEAT_SECONDS
 from app.db import connect, now_iso
 from app.ollama_client import ChatDelta, OllamaClient, OllamaError, OllamaUnavailable
 
 logger = logging.getLogger(__name__)
-
-# how often a streaming reply refreshes its lock (REPLY_LOCK_TTL_SECONDS must be longer)
-REPLY_HEARTBEAT_SECONDS = 30
 
 UNAVAILABLE_DETAIL = "無法連線到 Ollama"
 INTERRUPTED_DETAIL = "回覆中斷"
@@ -35,6 +33,23 @@ class ReplyLock:
         self.conversation_id = conversation_id
         self.started_at = started_at
         self._mutex = threading.Lock()
+        self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def start_keep_alive(self, interval: float | None = None) -> None:
+        """Refresh the lock in the background until it is released (call from the event loop)."""
+        interval = REPLY_HEARTBEAT_SECONDS if interval is None else interval
+        self._loop = asyncio.get_running_loop()
+        self._task = self._loop.create_task(_keep_alive(self, interval))
+
+    def _stop_keep_alive(self) -> None:
+        task, loop = self._task, self._loop
+        if task is None or loop is None:
+            return
+        try:  # release() may run in a worker thread (background task)
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:  # loop already closed
+            pass
 
     def touch(self) -> bool:
         """Refresh started_at; False when this lock no longer owns the row."""
@@ -55,6 +70,7 @@ class ReplyLock:
             return True
 
     def __call__(self) -> None:
+        self._stop_keep_alive()
         # Match started_at so a stale release can't drop a newer claim.
         with self._mutex:
             conn = connect(self.db_path)
@@ -97,11 +113,9 @@ def claim_reply(db_path: str, conversation_id: int, ttl_seconds: int) -> ReplyLo
     return ReplyLock(db_path, conversation_id, started_at)
 
 
-async def _keep_alive(release: Callable[[], None], interval: float) -> None:
+async def _keep_alive(lock: ReplyLock, interval: float) -> None:
     """Refresh the reply lock while the stream runs, so a dead process's lock expires fast."""
-    touch = getattr(release, "touch", None)
-    if touch is None:
-        return
+    touch = lock.touch
     while True:
         await asyncio.sleep(interval)
         try:
@@ -158,7 +172,6 @@ async def _ndjson_reply(
 
     async def body_iter():
         parts: list[str] = []
-        keep_alive = asyncio.create_task(_keep_alive(release, REPLY_HEARTBEAT_SECONDS))
 
         def handle(delta: ChatDelta) -> str:
             if delta.kind == "content":
@@ -191,7 +204,6 @@ async def _ndjson_reply(
                 save_conn.close()
             yield _line({"type": "done", "message_id": message_id})
         finally:
-            keep_alive.cancel()
             release()
 
     # The background task covers a client that disconnects before the body starts.

@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FALSY_VALUES = ("false", "0", "no", "off")
+# how often a streaming reply refreshes its lock; REPLY_LOCK_TTL_SECONDS must exceed it
+REPLY_HEARTBEAT_SECONDS = 30
 
 
 def env_file_path() -> Path:
@@ -87,4 +89,8 @@ class Settings:
         )
         if settings.kb_heartbeat_seconds >= settings.kb_stale_seconds:
             raise ValueError("KB_HEARTBEAT_SECONDS 必須小於 KB_STALE_SECONDS")
+        if settings.reply_lock_ttl_seconds <= REPLY_HEARTBEAT_SECONDS:
+            raise ValueError(
+                f"REPLY_LOCK_TTL_SECONDS 必須大於 {REPLY_HEARTBEAT_SECONDS}（回覆鎖的更新間隔）"
+            )
         return settings
