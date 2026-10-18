@@ -12,7 +12,7 @@ from app.deps import get_chat_client, get_db, get_kb_services, get_settings
 from app.kb import store as kb_store
 from app.kb.rag import build_system_prompt
 from app.kb.services import KbServices
-from app.ollama_client import OllamaClient
+from app.llm import ChatClient
 
 router = APIRouter(prefix="/api")
 
@@ -65,7 +65,7 @@ async def send_message(
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    client: OllamaClient = Depends(get_chat_client),
+    client: ChatClient = Depends(get_chat_client),
     kb: KbServices = Depends(get_kb_services),
 ):
     conv = conversations.get_conversation(conn, user["id"], conversation_id)
@@ -95,7 +95,7 @@ async def regenerate(
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    client: OllamaClient = Depends(get_chat_client),
+    client: ChatClient = Depends(get_chat_client),
     kb: KbServices = Depends(get_kb_services),
 ):
     conv = conversations.get_conversation(conn, user["id"], conversation_id)

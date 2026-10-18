@@ -149,3 +149,51 @@ async def test_same_line_thinking_before_content():
     body = ndjson({"message": {"thinking": "a", "content": "b"}}, {"done": True})
     client = make_client(lambda request: httpx.Response(200, content=body))
     assert await collect(client) == [ChatDelta("thinking", "a"), ChatDelta("content", "b")]
+
+
+async def test_ollama_sends_system_and_temperature():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=ndjson({"done": True}))
+
+    client = make_client(handler)
+    messages = [{"role": "user", "content": "hi"}]
+    async for _ in client.stream_chat(messages, system="你是助理", temperature=0.5):
+        pass
+    assert seen["body"]["messages"] == [{"role": "system", "content": "你是助理"}, *messages]
+    assert seen["body"]["options"] == {"temperature": 0.5}
+    assert messages == [{"role": "user", "content": "hi"}]
+
+
+async def test_ollama_omits_temperature_when_none():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=ndjson({"done": True}))
+
+    await collect(make_client(handler))
+    assert "options" not in seen["body"]
+    assert seen["body"]["messages"] == [{"role": "user", "content": "hi"}]
+
+
+async def test_ollama_list_models_excludes_embedding_models():
+    body = {"models": [{"name": "gemma4:e4b"}, {"name": "bge-m3:latest"}, {"name": "nomic-embed-text"}]}
+
+    def handler(request):
+        assert request.url.path == "/api/tags"
+        return httpx.Response(200, json=body)
+
+    assert await make_client(handler).list_models() == ["gemma4:e4b", "bge-m3:latest"]
+
+
+async def test_ollama_availability():
+    ok = make_client(lambda request: httpx.Response(200, json={"models": []}))
+    assert await ok.availability() == (True, "")
+
+    def refuse(request):
+        raise httpx.ConnectError("refused")
+
+    assert await make_client(refuse).availability() == (False, "無法連線到 Ollama")

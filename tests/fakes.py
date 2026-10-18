@@ -1,4 +1,4 @@
-from app.ollama_client import ChatDelta
+from app.llm import ChatDelta
 
 
 class FakeChatClient:
@@ -15,10 +15,28 @@ class FakeChatClient:
         )
         self.error = error
         self.error_after = error_after
-        self.calls: list[list[dict]] = []
+        self.calls: list[dict] = []
 
-    async def stream_chat(self, messages: list[dict]):
-        self.calls.append([dict(m) for m in messages])
+    async def list_models(self) -> list[str]:
+        return ["fake-model"]
+
+    async def availability(self) -> tuple[bool, str]:
+        return True, ""
+
+    async def stream_chat(
+        self,
+        messages: list[dict],
+        *,
+        system: str | None = None,
+        temperature: float | None = None,
+    ):
+        self.calls.append(
+            {
+                "messages": [dict(m) for m in messages],
+                "system": system,
+                "temperature": temperature,
+            }
+        )
         if self.error is not None and self.error_after is None:
             raise self.error
         for i, delta in enumerate(self.deltas):

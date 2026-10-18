@@ -44,7 +44,7 @@ def test_history_and_db_exclude_thinking(make_user, fake_chat):
     cid = _new_conv(c)
     _send(c, cid, "第一句")
     _send(c, cid, "第二句")
-    assert fake_chat.calls[1][1] == {"role": "assistant", "content": "你好"}
+    assert fake_chat.calls[1]["messages"][1] == {"role": "assistant", "content": "你好"}
     assert _messages(c, cid)[1]["content"] == "你好"
 
 
@@ -115,7 +115,7 @@ def test_second_turn_sends_full_history(make_user, fake_chat):
     cid = _new_conv(c)
     _send(c, cid, "第一句")
     _send(c, cid, "第二句")
-    assert fake_chat.calls[1] == [
+    assert fake_chat.calls[1]["messages"] == [
         {"role": "user", "content": "第一句"},
         {"role": "assistant", "content": "你好"},
         {"role": "user", "content": "第二句"},
@@ -197,7 +197,7 @@ def test_regenerate_answers_last_user_message(make_user, app):
     assert r.status_code == 200
     assert events(r)[-1]["type"] == "done"
     assert [m["role"] for m in _messages(c, cid)] == ["user", "assistant"]
-    assert fake.calls[-1] == [{"role": "user", "content": "嗨"}]
+    assert fake.calls[-1]["messages"] == [{"role": "user", "content": "嗨"}]
 
 
 def test_regenerate_409_when_already_answered(make_user, fake_chat):
@@ -244,7 +244,7 @@ class DeletingChatClient:
     def __init__(self, db_path):
         self.db_path = db_path
 
-    async def stream_chat(self, messages):
+    async def stream_chat(self, messages, *, system=None, temperature=None):
         from app.db import connect
 
         yield ChatDelta("content", "你")
