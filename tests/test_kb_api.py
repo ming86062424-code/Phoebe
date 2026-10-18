@@ -252,3 +252,44 @@ def test_delete_kb_succeeds_when_a_file_is_locked(make_user, kb_services, monkey
     monkeypatch.undo()
     kb_services.worker.cleanup()
     assert not folder.exists()
+
+
+def test_oversized_upload_is_rejected_before_the_body_is_parsed(make_user, app, settings, monkeypatch):
+    import dataclasses
+
+    from starlette.requests import Request
+
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    app.state.settings = dataclasses.replace(settings, max_upload_mb=0)
+
+    async def no_parsing(self, *args, **kwargs):
+        raise AssertionError("the body should not be parsed")
+
+    monkeypatch.setattr(Request, "form", no_parsing)
+    r = _upload(alice, kb["id"], content=b"%PDF-" + b"x" * 300_000)
+    assert r.status_code == 413
+    assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
+
+
+def test_upload_does_blocking_work_off_the_event_loop(make_user, monkeypatch):
+    import asyncio
+
+    from app.kb import store as kb_store
+
+    calls = []
+    real = kb_store.create_document
+
+    def create_document(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+            calls.append("event loop")
+        except RuntimeError:
+            calls.append("worker thread")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(kb_store, "create_document", create_document)
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    assert _upload(alice, kb["id"]).status_code == 201
+    assert calls == ["worker thread"]

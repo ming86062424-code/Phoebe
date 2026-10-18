@@ -1,7 +1,8 @@
 import sqlite3
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from starlette.datastructures import UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
@@ -16,6 +17,8 @@ router = APIRouter(prefix="/api")
 MAX_NAME_LENGTH = 50
 MAX_DESCRIPTION_LENGTH = 500
 UPLOAD_CHUNK = 1024 * 1024
+# room for the multipart boundaries and the parser field around the file itself
+MULTIPART_OVERHEAD = 64 * 1024
 
 
 def _clean_name(v: str) -> str:
@@ -126,15 +129,27 @@ def list_documents(
 @router.post("/kbs/{kb_id}/documents", status_code=201)
 async def upload_document(
     kb_id: int,
-    file: UploadFile = File(...),
-    parser: str = Form("liteparse"),
+    request: Request,
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
+    """multipart form: file (PDF) and parser (default liteparse)."""
     _require_kb(conn, user, kb_id)
-    chosen = kb.parsers.get(parser)
+    limit = settings.max_upload_mb * 1024 * 1024
+    too_big = HTTPException(status_code=413, detail=f"檔案超過 {settings.max_upload_mb}MB 上限")
+    # The form is parsed here rather than by FastAPI so an oversized upload is
+    # refused before its body is read.
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit + MULTIPART_OVERHEAD:
+        raise too_big
+    form = await request.form()
+    file = form.get("file")
+    parser = form.get("parser", "liteparse")
+    if not isinstance(file, UploadFile):
+        raise HTTPException(status_code=422, detail="請選擇要上傳的檔案")
+    chosen = kb.parsers.get(parser) if isinstance(parser, str) else None
     if chosen is None:
         raise HTTPException(status_code=422, detail="未知的解析器")
     available, reason = chosen.availability()
@@ -144,29 +159,34 @@ async def upload_document(
     if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=422, detail="目前只支援 PDF 檔")
 
-    folder = kb.kb_dir / str(kb_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    tmp = folder / f"upload-{uuid.uuid4().hex}.tmp"
-    limit = settings.max_upload_mb * 1024 * 1024
-    size = 0
+    def save() -> dict:
+        # blocking file and database work, run in a worker thread
+        folder = kb.kb_dir / str(kb_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / f"upload-{uuid.uuid4().hex}.tmp"
+        size = 0
+        try:
+            file.file.seek(0)
+            with tmp.open("wb") as out:
+                while chunk := file.file.read(UPLOAD_CHUNK):
+                    size += len(chunk)
+                    if size > limit:
+                        raise too_big
+                    out.write(chunk)
+            with tmp.open("rb") as f:
+                if f.read(5) != b"%PDF-":
+                    raise HTTPException(status_code=422, detail="檔案不是有效的 PDF")
+            doc = store.create_document(conn, kb_id, filename[:200], chosen.id, size)
+            tmp.replace(kb.file_path(kb_id, doc["id"]))
+        finally:
+            tmp.unlink(missing_ok=True)
+        kb.worker.enqueue(doc["id"])
+        return store.get_document(conn, doc["id"])
+
     try:
-        with tmp.open("wb") as out:
-            while chunk := await file.read(UPLOAD_CHUNK):
-                size += len(chunk)
-                if size > limit:
-                    raise HTTPException(
-                        status_code=413, detail=f"檔案超過 {settings.max_upload_mb}MB 上限"
-                    )
-                out.write(chunk)
-        with tmp.open("rb") as f:
-            if f.read(5) != b"%PDF-":
-                raise HTTPException(status_code=422, detail="檔案不是有效的 PDF")
-        doc = store.create_document(conn, kb_id, filename[:200], parser, size)
-        tmp.replace(kb.file_path(kb_id, doc["id"]))
+        return await run_in_threadpool(save)
     finally:
-        tmp.unlink(missing_ok=True)
-    kb.worker.enqueue(doc["id"])
-    return store.get_document(conn, doc["id"])
+        await form.close()
 
 
 @router.delete("/kbs/{kb_id}/documents/{doc_id}", status_code=204)
