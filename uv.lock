@@ -2493,6 +2493,7 @@ dependencies = [
     { name = "llama-index-embeddings-ollama" },
     { name = "llama-index-vector-stores-chroma" },
     { name = "pypdfium2" },
+    { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "uvicorn" },
 ]
@@ -2524,6 +2525,7 @@ requires-dist = [
     { name = "llama-index-embeddings-ollama", specifier = ">=0.10.0" },
     { name = "llama-index-vector-stores-chroma", specifier = ">=0.6.0" },
     { name = "pypdfium2", specifier = ">=5.14.0" },
+    { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]

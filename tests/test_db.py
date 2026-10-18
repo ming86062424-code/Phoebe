@@ -218,3 +218,9 @@ def test_migration_adds_autoincrement_and_keeps_rows(tmp_path):
     ).lastrowid
     assert new_id > 8
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_connect_enables_wal_and_busy_timeout(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
