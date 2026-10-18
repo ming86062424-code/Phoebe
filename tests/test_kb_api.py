@@ -138,9 +138,8 @@ def test_chat_with_kb_streams_and_saves_sources(make_user, fake_chat, fake_parse
     events = _stream_events(r)
     assert events[0]["type"] == "sources"
     assert events[0]["sources"][0]["page"] == 3
-    system = fake_chat.calls[0]["messages"][0]
-    assert system["role"] == "system"
-    assert "員工手冊" in system["content"] and "rocket fuel" in system["content"]
+    system = fake_chat.calls[0]["system"]
+    assert "員工手冊" in system and "rocket fuel" in system
     assert fake_chat.calls[0]["messages"][-1] == {"role": "user", "content": "rocket fuel"}
 
     saved = alice.get(f"/api/conversations/{cid}").json()["messages"]
@@ -196,7 +195,7 @@ def test_system_prompt_gets_full_chunk_text_not_the_snippet(make_user, fake_chat
     events = _stream_events(
         alice.post(f"/api/conversations/{cid}/messages", json={"content": "密碼 更換"})
     )
-    assert "九十" in fake_chat.calls[0]["messages"][0]["content"]
+    assert "九十" in fake_chat.calls[0]["system"]
     # the UI and the database still get the short snippet
     shown = events[0]["sources"][0]["text"]
     assert len(shown) <= 400 and "九十" not in shown
