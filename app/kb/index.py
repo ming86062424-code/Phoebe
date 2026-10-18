@@ -5,6 +5,7 @@ import chromadb
 from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.schema import MetadataMode
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from app.kb.parsers.base import PageText
@@ -71,6 +72,13 @@ class KnowledgeIndex:
         nodes = self._splitter.get_nodes_from_documents(docs)
         if not nodes:
             return 0
+        # Embedding calls Ollama and can take minutes for a big PDF: do it before taking
+        # the lock so searches keep working. insert_nodes reuses these embeddings.
+        embeddings = self._embed_model.get_text_embedding_batch(
+            [n.get_content(metadata_mode=MetadataMode.EMBED) for n in nodes]
+        )
+        for node, embedding in zip(nodes, embeddings, strict=True):
+            node.embedding = embedding
         with self._lock:
             index, _ = self._index(kb_id)
             index.insert_nodes(nodes)
