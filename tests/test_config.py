@@ -133,12 +133,36 @@ def test_vllm_service_follows_official_flags():
         (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
     )
     vllm = compose["services"]["vllm"]
+    assert "profiles" not in vllm  # a default service
     command = vllm["command"]
-    assert "--trust-remote-code" in command
-    i = command.index("--default-chat-template-kwargs")
-    assert json.loads(command[i + 1]) == {"enable_thinking": False}
     assert vllm["image"] == "vllm/vllm-openai:v0.30.0"
-    assert "float16" in command
+    for flag in ("--trust-remote-code", "--no-enable-prefix-caching", "float16"):
+        assert flag in command
+    flags = {command[i + 1] for i, c in enumerate(command) if c.startswith("--") and i + 1 < len(command)}
+    kwargs = command[command.index("--default-chat-template-kwargs") + 1]
+    assert json.loads(kwargs) == {"enable_thinking": False}
+    assert json.loads(command[command.index("--limit-mm-per-prompt") + 1]) == {"image": 1}
+    assert command[command.index("--mm-processor-cache-gb") + 1] == "0"
+    assert "${VLLM_MAX_MODEL_LEN:-18000}" in command
+    assert "${VLLM_GPU_UTIL:-0.85}" in command
+    assert flags
+    assert "healthcheck" in vllm
+    assert "hf-cache:/root/.cache/huggingface" in vllm["volumes"]
+
+
+def test_worker_uses_vllm_and_has_no_gpu():
+    import yaml
+
+    compose = yaml.safe_load(
+        (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    worker = compose["services"]["worker"]
+    assert worker["environment"]["OCR_BACKEND"] == "vllm"
+    assert worker["environment"]["VLLM_BASE_URL"] == "http://vllm:8000/v1"
+    assert worker["depends_on"]["vllm"]["condition"] == "service_healthy"
+    assert "deploy" not in worker
+    assert "HF_HOME" not in worker["environment"]
+    assert not any("hf-cache" in v for v in worker.get("volumes", []))
 
 
 def test_dockerignore_is_an_allowlist_covering_dockerfile_copies():

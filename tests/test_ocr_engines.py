@@ -10,6 +10,7 @@ from app.kb.parsers.ocr_engines import (
     TransformersOcrEngine,
     VllmOcrEngine,
     build_ocr_engine,
+    fix_escaped_dollars,
 )
 
 BASE = "http://vllm:8001/v1"
@@ -32,8 +33,9 @@ def test_vllm_ocr_sends_png_data_url_and_parses_reply():
     assert seen["path"] == "/v1/chat/completions"
     body = seen["body"]
     assert body["model"] == "ocr-model"
-    assert body["temperature"] == 0.2
-    assert body["top_p"] == 0.9
+    assert body["temperature"] == 0.1
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "top_p" not in body
     assert body["max_tokens"] == 4096
     part = body["messages"][0]["content"][0]
     assert part["type"] == "image_url"
@@ -63,3 +65,24 @@ def test_build_ocr_engine_selects_backend(monkeypatch):
     assert isinstance(build_ocr_engine(Settings.from_env()), TransformersOcrEngine)
     monkeypatch.setenv("OCR_BACKEND", "vllm")
     assert isinstance(build_ocr_engine(Settings.from_env()), VllmOcrEngine)
+
+
+def test_fix_escaped_dollars_repairs_math_but_not_prices():
+    assert fix_escaped_dollars(r"設 \$x^2\$ 為正") == "設 $x^2$ 為正"
+    assert fix_escaped_dollars(r"\$\$a+b\$\$") == "$$a+b$$"
+    block = "a\n" + r"\$\$" + "\nx = 1\n" + r"\$\$"
+    assert fix_escaped_dollars(block) == "a\n$$\nx = 1\n$$"
+    # prices and lone escapes stay as they are
+    assert fix_escaped_dollars(r"NT\$ 1,280") == r"NT\$ 1,280"
+    assert fix_escaped_dollars(r"\$5") == r"\$5"
+    assert fix_escaped_dollars(r"\$5 and \$6") == r"\$5 and \$6"
+    assert fix_escaped_dollars("no dollars") == "no dollars"
+
+
+def test_vllm_ocr_output_is_repaired():
+    engine = _engine(
+        lambda request: httpx.Response(
+            200, json={"choices": [{"message": {"content": r"\$x\$"}}]}
+        )
+    )
+    assert engine.ocr(Image.new("RGB", (8, 8))) == "$x$"

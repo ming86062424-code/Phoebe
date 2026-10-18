@@ -79,7 +79,8 @@
 ### 3.6 OCR 後端
 - `LightOnOcrParser` 拆成「把 PDF 轉成頁面影像」與「對一張影像做 OCR」兩層；OCR 由 `OcrEngine` 協定提供：`ocr(image) -> str`、`availability() -> tuple[bool, str]`、`release()`
   - `TransformersOcrEngine`：現有的本機 transformers 實作（含卸載 Ollama 模型、fp16／bf16 判斷）
-  - `VllmOcrEngine`：以 httpx 呼叫 `{VLLM_BASE_URL}/chat/completions`，影像以 base64 PNG data URL 送出，`temperature=0.2`、`top_p=0.9`、`max_tokens=4096`（依 LightOnOCR 官方模型卡；transformers 引擎同樣以 `do_sample=True, temperature=0.2` 取樣，故重跑結果可能略有差異，取代先前的貪婪解碼），模型名用 `OCR_MODEL`；`availability()` 以 `GET {VLLM_BASE_URL}/models` 檢查，連不上時回「OCR 服務（vLLM）未啟動」
+  - `VllmOcrEngine`：以 httpx 呼叫 `{VLLM_BASE_URL}/chat/completions`，影像以 base64 PNG data URL 送出，只送頁面影像、`temperature=0.1`、`chat_template_kwargs={"enable_thinking": false}`、`max_tokens=4096`（依 LightOnOCR 官方 README：不要用貪婪解碼；transformers 引擎同樣 `do_sample=True, temperature=0.1`，故重跑結果可能略有差異）。兩個引擎的輸出都會經 `fix_escaped_dollars()`，把成對的跳脫數學分隔符號還原成 `$…$`，單獨出現的金額不動，模型名用 `OCR_MODEL`；`availability()` 以 `GET {VLLM_BASE_URL}/models` 檢查，連不上時回「OCR 服務（vLLM）未啟動」
+- Docker 預設 `OCR_BACKEND=vllm`（worker 於 compose 固定）：GPU 專用於 OCR，vllm 以官方 0.8B 參數啟動（`--trust-remote-code --limit-mm-per-prompt '{"image": 1}' --default-chat-template-kwargs '{"enable_thinking": false}' --mm-processor-cache-gb 0 --no-enable-prefix-caching --max-model-len 18000`），Turing 加 `--dtype float16`；頁面 400 DPI 算繪、縮圖到最長邊 2048。Ollama 卸載模型只在 transformers 引擎（本機快速測試）保留
 - `OCR_BACKEND` 決定使用哪個；transformers／torch 只在 `transformers` 引擎被用到時才 import，所以 `vllm` 模式的映像不需要 torch
 - 文件標示的 parser id 不變（仍為 `lightonocr`），使用者介面不需改
 
@@ -94,7 +95,7 @@
 ```
 docker/
 ├── Dockerfile            # 多階段：frontend（node 24 建置）→ web（python 3.12 slim + uv，無 torch）→ worker（加上 ocr 依賴與 CUDA 版 torch）
-├── docker-compose.yml           # 正式部署：web、worker、chroma；profile vllm 加入 vllm 服務
+├── docker-compose.yml           # 正式部署：web、worker、chroma；vllm 為預設服務
 ├── gunicorn.conf.py
 ├── .dockerignore 的內容放在根目錄 .dockerignore（Docker 規定位置；compose 以根目錄為 build context）
 └── README.md             # 部署說明（中文）
@@ -105,21 +106,21 @@ docker/
 | 服務 | 映像／target | 說明 |
 |---|---|---|
 | `web` | Dockerfile target `web` | Gunicorn；port `${PHOEBE_PORT:-8000}:8000`；`KB_WORKER_MODE=external`；`CHROMA_HOST=chroma`；`OLLAMA_BASE_URL=http://host.docker.internal:11434`；`DB_PATH`、`KB_DIR` 指向 `/data` volume |
-| `worker` | target `worker` | `python -m app.kb.worker_main`；同樣的 `/data` volume；`OCR_BACKEND` 預設 `transformers` 並要求 GPU（`deploy.resources.reservations.devices: nvidia`）；`HF_HOME` 指向 `hf-cache` volume |
+| `worker` | target `worker` | `python -m app.kb.worker_main`；同樣的 `/data` volume；`OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`（固定）；不含 torch、不使用 GPU；等 `vllm` healthy 才啟動 |
 | `chroma` | `chromadb/chroma:<固定版本>` | volume `chroma-data` |
-| `vllm`（profile `vllm`） | `vllm/vllm-openai:<固定版本>` | `--model ${OCR_MODEL} --dtype float16 --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.35} --max-model-len 8192 --trust-remote-code --default-chat-template-kwargs '{"enable_thinking": false}'`，映像 `v0.30.0`；使用 GPU；`hf-cache` volume |
+| `vllm`（預設服務） | `vllm/vllm-openai:v0.30.0` | 官方 0.8B 參數（見 §3.6）、`--dtype float16`、`--gpu-memory-utilization ${VLLM_GPU_UTIL:-0.85}`、`--max-model-len ${VLLM_MAX_MODEL_LEN:-18000}`；port `8001:8000`；使用 GPU；`hf-cache` 掛在 `/root/.cache/huggingface`；healthcheck `GET /health`，`start_period` 600 秒 |
 
 - 所有服務都讀 `env_file: [{path: .env, required: false}]`（即 `docker/.env`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）
 - Docker 專用設定檔 `docker/.env`（範本 `docker/.env.example`，已被 git 忽略並排除於 build context）；指令在 `docker/` 目錄執行，Compose 自動讀取它做變數插值，`env_file: [{path: .env, required: false}]` 供容器環境變數。根目錄 `.env` 只給本機快速測試。compose `environment:` 固定的鍵（DB_PATH、KB_DIR、CHROMA_HOST/PORT、OLLAMA_BASE_URL、KB_WORKER_MODE、VLLM_BASE_URL、HF_HOME）不可由 `.env` 覆寫
 - 啟動順序：`chroma`（healthcheck）→ `web`（healthcheck：`GET /api/me` 回 401 視為健康）→ `worker`；`web`、`worker` 設 `stop_grace_period: 30s`；worker 固定覆寫 `VLLM_BASE_URL=http://vllm:8000/v1`
-- 啟動：`cd docker && docker compose up -d --build`；使用 vLLM：`--profile vllm` 並在 `docker/.env` 設 `OCR_BACKEND=vllm`（worker 的 `VLLM_BASE_URL` 由 compose 固定）
+- 啟動：`cd docker && docker compose up -d --build`；vLLM 為預設服務，worker 的 `OCR_BACKEND`、`VLLM_BASE_URL` 由 compose 固定
 - 主機 Ollama：`host.docker.internal`；README 說明若連不上需讓 Ollama 監聽 `0.0.0.0`（`OLLAMA_HOST`）
-- **6GB 顯存限制**：worker 的 transformers OCR 會先請 Ollama 卸載模型（沿用現有行為）；vLLM 常駐會與 Ollama 搶顯存，README 需說明 `VLLM_GPU_UTIL` 的取捨與「vLLM 模式下聊天模型可能變慢或需要改用較小模型」
+- **GPU 專用於 OCR**：對話模型可放雲端，不替 Ollama 保留顯存；RTX 2060（6GB，Turing 無 bf16）以 fp16、`VLLM_GPU_UTIL` 0.85 執行
 
 ### 3.9 快速測試
 - `cp .env.example .env` → 依需要修改 → `uv sync --group ocr`（要用 OCR 時）→ `uv run uvicorn app.main:create_app --factory --reload`
 - 預設 `KB_WORKER_MODE=embedded`、`OCR_BACKEND=transformers`、Chroma 本機模式 → Windows 上不需要 Docker、也不會碰到 vLLM
-- 也可只用 Docker 跑 vLLM（`cd docker && docker compose --profile vllm up -d vllm`）並在本機 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（compose 把 vllm 的 8000 對應到主機 8001）
+- 也可只用 Docker 跑 vLLM（`cd docker && docker compose up -d vllm`）並在本機 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（compose 把 vllm 的 8000 對應到主機 8001）
 
 ## 4. 錯誤處理
 - `OCR_BACKEND` 值不合法 → 啟動時拋出清楚的錯誤訊息

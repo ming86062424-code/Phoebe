@@ -2,6 +2,7 @@ import base64
 import importlib.util
 import io
 import logging
+import re
 from typing import Protocol
 
 import httpx
@@ -14,9 +15,24 @@ logger = logging.getLogger(__name__)
 # the model card uses 1024 in its transformers example and 4096 for vLLM; use 4096 so
 # dense pages aren't truncated
 MAX_NEW_TOKENS = 4096
-# sampling settings from the official model card
-TEMPERATURE = 0.2
-TOP_P = 0.9
+# LightOnOCR README: "use temperature 0.1, not greedy decoding"
+TEMPERATURE = 0.1
+
+_ESCAPED_DOLLAR = chr(92) + "$"  # backslash followed by a dollar sign
+_DISPLAY_MATH = re.compile(re.escape(_ESCAPED_DOLLAR * 2) + r"(.+?)" + re.escape(_ESCAPED_DOLLAR * 2), re.DOTALL)
+# inline math: no line break, no leading or trailing space (so "\$5 and \$6" is left alone)
+_INLINE_MATH = re.compile(
+    re.escape(_ESCAPED_DOLLAR) + r"(?=\S)([^\n$" + re.escape(chr(92)) + r"]*?\S)" + re.escape(_ESCAPED_DOLLAR)
+)
+
+
+def fix_escaped_dollars(text: str) -> str:
+    r"""Turn escaped math delimiters (\$x\$) back into $x$, as the official client does.
+
+    Only matched pairs are touched; a lone \$ (a price such as NT\$ 1,280) stays.
+    """
+    text = _DISPLAY_MATH.sub(lambda m: "$$" + m.group(1) + "$$", text)
+    return _INLINE_MATH.sub(lambda m: "$" + m.group(1) + "$", text)
 VLLM_UNAVAILABLE = "OCR 服務（vLLM）未啟動"
 
 
@@ -95,7 +111,7 @@ class TransformersOcrEngine:
             return_tensors="pt",
             enable_thinking=False,
         ).to(self._model.device)
-        # Official sampling settings (temperature 0.2), so re-running OCR may differ slightly.
+        # Official sampling settings (temperature 0.1), so re-running OCR may differ slightly.
         # The model config ships use_cache=false; without the KV cache every new
         # token recomputes the whole ~3k-token image prompt (~18x slower).
         with torch.inference_mode():
@@ -107,7 +123,8 @@ class TransformersOcrEngine:
                 use_cache=True,
             )
         new_tokens = out[0, inputs["input_ids"].shape[1] :]
-        return self._processor.decode(new_tokens, skip_special_tokens=True).strip()
+        text = self._processor.decode(new_tokens, skip_special_tokens=True).strip()
+        return fix_escaped_dollars(text)
 
     def release(self) -> None:
         if self._model is None:
@@ -155,14 +172,14 @@ class VllmOcrEngine:
                 }
             ],
             "temperature": TEMPERATURE,
-            "top_p": TOP_P,
+            "chat_template_kwargs": {"enable_thinking": False},
             "max_tokens": MAX_NEW_TOKENS,
         }
         try:
             with self._client(300) as client:
                 resp = client.post(f"{self.base_url}/chat/completions", json=body)
                 resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            return fix_escaped_dollars(resp.json()["choices"][0]["message"]["content"].strip())
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
             raise ParseError(f"OCR 服務（vLLM）呼叫失敗：{e}") from e
 

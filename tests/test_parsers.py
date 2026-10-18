@@ -26,7 +26,7 @@ def test_liteparse_raises_parse_error_on_garbage(tmp_path):
 
 
 def test_lightonocr_generate_kwargs():
-    """Official model-card sampling (temperature 0.2). The model config ships use_cache=false, which recomputes the whole prompt per token."""
+    """Official model-card sampling (temperature 0.1). The model config ships use_cache=false, which recomputes the whole prompt per token."""
     torch = __import__("pytest").importorskip("torch")
 
     from app.kb.parsers.ocr_engines import TransformersOcrEngine
@@ -56,7 +56,7 @@ def test_lightonocr_generate_kwargs():
     parser._model, parser._processor = FakeModel(), FakeProcessor()
     assert parser.ocr(object()) == "文字"
     assert parser._model.kwargs["do_sample"] is True
-    assert parser._model.kwargs["temperature"] == 0.2
+    assert parser._model.kwargs["temperature"] == 0.1
     assert parser._model.kwargs["use_cache"] is True
 
 

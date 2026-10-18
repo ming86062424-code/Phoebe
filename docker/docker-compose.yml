@@ -78,33 +78,26 @@ services:
     depends_on:
       web:
         condition: service_healthy
+      vllm:
+        condition: service_healthy
     stop_grace_period: 30s
     environment:
+      OCR_BACKEND: vllm
       VLLM_BASE_URL: http://vllm:8000/v1
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       DB_PATH: /data/app.db
       KB_DIR: /data/kb
-      HF_HOME: /hf-cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - phoebe-data:/data
-      - hf-cache:/hf-cache
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
-  # 選用：docker compose --profile vllm up -d，並在 docker/.env 設 OCR_BACKEND=vllm
-  # （worker 的 VLLM_BASE_URL 由本檔固定指向此服務）
+  # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
+  # 只想給本機快速測試用：docker compose up -d vllm（對主機開放 8001）
   vllm:
     <<: *env
-    profiles: [vllm]
     image: vllm/vllm-openai:v0.30.0
     restart: unless-stopped
     ports:
@@ -112,20 +105,36 @@ services:
     command:
       - --model
       - ${OCR_MODEL:-lightonai/LightOnOCR-3-0.8B}
+      - --trust-remote-code
+      - --limit-mm-per-prompt
+      - '{"image": 1}'
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+      - --mm-processor-cache-gb
+      - "0"
+      - --no-enable-prefix-caching
+      # RTX 2060（Turing）不支援 bfloat16
       - --dtype
       - float16
       - --gpu-memory-utilization
-      - ${VLLM_GPU_UTIL:-0.35}
+      - ${VLLM_GPU_UTIL:-0.85}
       - --max-model-len
-      - "8192"
-      - --trust-remote-code
-      - --default-chat-template-kwargs
-      - '{"enable_thinking": false}'
+      - ${VLLM_MAX_MODEL_LEN:-18000}
     ipc: host
-    environment:
-      HF_HOME: /hf-cache
     volumes:
-      - hf-cache:/hf-cache
+      # vLLM 映像以 root 執行，Hugging Face 預設快取在 /root/.cache/huggingface
+      - hf-cache:/root/.cache/huggingface
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      # 首次啟動要下載並載入模型
+      start_period: 600s
     deploy:
       resources:
         reservations:

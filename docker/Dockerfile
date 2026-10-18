@@ -52,25 +52,17 @@ ENV KB_WORKER_MODE=external \
 EXPOSE 8000
 CMD ["gunicorn", "-c", "docker/gunicorn.conf.py", "app.main:create_app()"]
 
-# ---- worker：加上 ocr 依賴（CUDA 版 torch、transformers）----
+# ---- worker：只做文件解析與索引；OCR 交給 vllm 服務，不含 torch ----
 FROM base AS worker
-# Linux 版 torch 附帶 Triton，Qwen3.5 模型執行時會即時編譯 Triton kernel：需要 C 編譯器（gcc、libc6-dev；
-# Python 標頭檔已在 python 基底映像的 /usr/local/include/python3.12）。
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    UV_CACHE_DIR=/root/.cache/uv uv sync --frozen --no-dev --group ocr --no-install-project
 COPY --chown=phoebe:phoebe app ./app
 
 # LiteParse 的 Tesseract 語言檔：預設 chi_tra+eng（含直排 chi_tra_vert）內建於映像，不必在首次 OCR 時下載。
 # 來源固定在 tessdata_best 的指定 commit（2026-10-18 的 main）；其他語言仍會在首次使用時下載。
 ARG TESSDATA_REV=e12c65a915945e4c28e237a9b52bc4a8f39a0cec
-# torch 的 ~/.cache、Triton 的 ~/.triton 與 Tesseract 語言檔目錄要能在執行時寫入；
+# Tesseract 語言檔目錄要能在執行時寫入（其他語言首次使用時下載）；
 # 只 chown 這幾個（空的）目錄，不遞迴處理整個家目錄
-RUN mkdir -p /home/phoebe/.tesseract-rs/tessdata /home/phoebe/.cache /home/phoebe/.triton \
-    && chown phoebe:phoebe /home/phoebe/.tesseract-rs /home/phoebe/.tesseract-rs/tessdata \
-       /home/phoebe/.cache /home/phoebe/.triton
+RUN mkdir -p /home/phoebe/.tesseract-rs/tessdata \
+    && chown phoebe:phoebe /home/phoebe/.tesseract-rs /home/phoebe/.tesseract-rs/tessdata
 ADD --chown=phoebe:phoebe --chmod=644 \
     https://github.com/tesseract-ocr/tessdata_best/raw/${TESSDATA_REV}/chi_tra.traineddata \
     /home/phoebe/.tesseract-rs/tessdata/chi_tra.traineddata
@@ -83,6 +75,5 @@ ADD --chown=phoebe:phoebe --chmod=644 \
 
 USER phoebe
 ENV DB_PATH=/data/app.db \
-    KB_DIR=/data/kb \
-    TRITON_CACHE_DIR=/home/phoebe/.triton
+    KB_DIR=/data/kb
 CMD ["python", "-m", "app.kb.worker_main"]
