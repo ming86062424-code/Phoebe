@@ -1,6 +1,7 @@
 export interface User {
   id: number
   username: string
+  is_admin: boolean
 }
 
 export interface Conversation {
@@ -70,3 +71,21 @@ export type StreamEvent =
   | { type: 'content'; text: string }
   | { type: 'done'; message_id: number }
   | { type: 'error'; detail: string }
+
+export type LlmProvider = 'ollama' | 'gemini'
+
+export interface ProviderStatus {
+  available: boolean
+  reason: string
+}
+
+export interface LlmSettings {
+  llm_provider: LlmProvider
+  ollama_model: string
+  gemini_model: string
+  system_prompt: string
+  temperature: number | null
+  providers: Record<LlmProvider, ProviderStatus>
+}
+
+export type LlmSettingsPatch = Partial<Omit<LlmSettings, 'providers'>>
