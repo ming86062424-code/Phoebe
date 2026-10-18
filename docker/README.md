@@ -80,3 +80,4 @@ docker run --rm -v phoebe_chroma-data:/data -v "$PWD":/backup alpine tar czf /ba
 - 映像版本皆已固定；升級 Chroma 時請與 `uv.lock` 中的 chromadb 版本一致（目前 1.5.9）。
 - LiteParse 為 Rust 原生套件，內含 pdfium 與 Tesseract，不需另外安裝 Node 或系統 Tesseract。預設語言（`chi_tra`、`chi_tra_vert`、`eng`，來自 tessdata_best 的固定 commit）已內建於 worker 映像；`LITEPARSE_OCR_LANGUAGE` 改用其他語言時，該語言檔會在第一次 OCR 時下載（需要對外網路，且存在容器可寫層，重建映像後需重新下載）。
 - 若先以 `--profile vllm` 啟動過，`hf-cache` volume 可能由 vLLM 容器以 root 建立，導致 worker（uid 1000）無法寫入模型快取（下載模型時出現 Permission denied）。修正：`docker run --rm -v phoebe_hf-cache:/hf-cache alpine chown -R 1000:1000 /hf-cache`（volume 名稱以 `docker volume ls` 為準）。
+- worker 映像內含 `gcc` 與 `libc6-dev`：Linux 版 torch 附帶 Triton，Qwen3.5（LightOnOCR）執行時會即時編譯 Triton kernel，沒有 C 編譯器會出現「Failed to find C compiler」而 OCR 失敗。編譯快取放在 `/home/phoebe/.triton`（`TRITON_CACHE_DIR`），家目錄歸 `phoebe` 所有。web 映像不需要，因此不含編譯器。
