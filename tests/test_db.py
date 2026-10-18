@@ -224,3 +224,86 @@ def test_connect_enables_wal_and_busy_timeout(tmp_path):
     conn = connect(str(tmp_path / "t.db"))
     assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+
+
+OLD_AUTOINC_SCHEMA = """
+CREATE TABLE knowledge_bases (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE kb_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, kb_id INTEGER NOT NULL
+    REFERENCES knowledge_bases(id) ON DELETE CASCADE, filename TEXT NOT NULL,
+    parser TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'parsing', 'indexing', 'ready', 'failed')),
+    error TEXT, progress_done INTEGER NOT NULL DEFAULT 0,
+    progress_total INTEGER NOT NULL DEFAULT 0, chunk_count INTEGER NOT NULL DEFAULT 0,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+"""
+
+
+def test_rebuild_preserves_data_cascade_and_sequence(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    conn.executescript(OLD_SCHEMA + OLD_AUTOINC_SCHEMA)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, created_at) VALUES (1, 'u', 'h', ?)", (now,)
+    )
+    conn.execute("INSERT INTO knowledge_bases VALUES (1, 1, 'k', '', ?, ?)", (now, now))
+    for i in range(1, 6):
+        conn.execute(
+            "INSERT INTO kb_documents (id, kb_id, filename, parser, status, created_at, updated_at) "
+            "VALUES (?, 1, 'a.pdf', 'p', 'ready', ?, ?)",
+            (i, now, now),
+        )
+    conn.execute("DELETE FROM kb_documents WHERE id IN (4, 5)")
+    conn.commit()
+    init_db(conn)  # old CHECK lacks 'pending' -> rebuild
+    assert "'pending'" in conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='kb_documents'"
+    ).fetchone()[0]
+    assert conn.execute("SELECT COUNT(*) FROM kb_documents").fetchone()[0] == 3
+    new_id = conn.execute(
+        "INSERT INTO kb_documents (kb_id, filename, parser, status, created_at, updated_at) "
+        "VALUES (1, 'b.pdf', 'p', 'pending', ?, ?)",
+        (now, now),
+    ).lastrowid
+    assert new_id == 6
+    conn.execute("DELETE FROM knowledge_bases WHERE id = 1")
+    assert conn.execute("SELECT COUNT(*) FROM kb_documents").fetchone()[0] == 0
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_concurrent_init_db_on_fresh_database(tmp_path):
+    import threading
+
+    path = str(tmp_path / "t.db")
+    errors = []
+    barrier = threading.Barrier(6)
+
+    def run():
+        try:
+            c = connect(path)
+            barrier.wait()
+            init_db(c)
+            c.close()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    conn = connect(path)
+    assert "kb_id" in _columns(conn, "conversations")
+
+
+def test_init_db_twice_is_noop(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    before = conn.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall()
+    init_db(conn)
+    after = conn.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall()
+    assert [tuple(r) for r in before] == [tuple(r) for r in after]

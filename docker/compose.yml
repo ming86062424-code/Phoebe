@@ -1,5 +1,5 @@
 # 以專案根目錄為 build context：
-#   docker compose -f docker/compose.yml up -d --build
+#   docker compose --env-file .env -f docker/compose.yml up -d --build
 name: phoebe
 
 x-env: &env
@@ -11,11 +11,16 @@ services:
   chroma:
     image: chromadb/chroma:1.5.9
     restart: unless-stopped
+    # chroma 1.x 預設持久化路徑為 /data，不需 0.x 的 IS_PERSISTENT/PERSIST_DIRECTORY
     volumes:
       - chroma-data:/data
-    environment:
-      IS_PERSISTENT: "TRUE"
-      PERSIST_DIRECTORY: /data
+    healthcheck:
+      # ⚠️ 未在 chroma 1.5.9 映像內驗證；以 bash /dev/tcp 檢查連接埠（映像無 curl）
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   web:
     <<: *env
@@ -26,7 +31,9 @@ services:
     image: phoebe-web:local
     restart: unless-stopped
     depends_on:
-      - chroma
+      chroma:
+        condition: service_healthy
+    stop_grace_period: 30s
     ports:
       - "${PHOEBE_PORT:-8000}:8000"
     environment:
@@ -68,8 +75,11 @@ services:
     image: phoebe-worker:local
     restart: unless-stopped
     depends_on:
-      - chroma
+      web:
+        condition: service_healthy
+    stop_grace_period: 30s
     environment:
+      VLLM_BASE_URL: http://vllm:8000/v1
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
       OLLAMA_BASE_URL: http://host.docker.internal:11434

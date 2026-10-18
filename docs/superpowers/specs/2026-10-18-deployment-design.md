@@ -84,6 +84,7 @@
 ### 3.7 Gunicorn
 - 新增依賴 `gunicorn`、`uvicorn-worker`（只在 Linux 容器內使用；Windows 不執行 gunicorn）
 - 設定檔 `docker/gunicorn.conf.py`：`bind = 0.0.0.0:8000`、`worker_class = "uvicorn_worker.UvicornWorker"`、`workers` 讀 `WEB_CONCURRENCY`（預設 2）、`timeout = 120`、`graceful_timeout = 30`、`keepalive = 5`、access log 到 stdout
+- `on_starting` hook 在 master 於 fork 前執行一次 `init_db`（不使用 preload_app）。`init_db` 以 `BEGIN IMMEDIATE` 交易包住全部遷移（逾時 30 秒），可跨程序並行執行；重建 AUTOINCREMENT 表時保留 `sqlite_sequence`。
 - 啟動指令：`gunicorn -c docker/gunicorn.conf.py "app.main:create_app()"`；容器內 `KB_WORKER_MODE=external`
 
 ### 3.8 `docker/` 目錄
@@ -107,14 +108,16 @@ docker/
 | `vllm`（profile `vllm`） | `vllm/vllm-openai:<固定版本>` | `--model ${OCR_MODEL} --dtype float16 --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.35} --max-model-len 8192`；使用 GPU；`hf-cache` volume |
 
 - 所有服務都讀 `env_file: ../.env`（`required: false`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）
-- 啟動：`docker compose -f docker/compose.yml up -d --build`；使用 vLLM：`--profile vllm` 並在 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`
+- 所有指令從專案根目錄執行並帶 `--env-file .env`（Compose 的 `${...}` 插值只讀 `--env-file` 或 `docker/.env`，`env_file:` 不參與插值）
+- 啟動順序：`chroma`（healthcheck）→ `web`（healthcheck：`GET /api/me` 回 401 視為健康）→ `worker`；`web`、`worker` 設 `stop_grace_period: 30s`；worker 固定覆寫 `VLLM_BASE_URL=http://vllm:8000/v1`
+- 啟動：`docker compose --env-file .env -f docker/compose.yml up -d --build`；使用 vLLM：`--profile vllm` 並在 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`
 - 主機 Ollama：`host.docker.internal`；README 說明若連不上需讓 Ollama 監聽 `0.0.0.0`（`OLLAMA_HOST`）
 - **6GB 顯存限制**：worker 的 transformers OCR 會先請 Ollama 卸載模型（沿用現有行為）；vLLM 常駐會與 Ollama 搶顯存，README 需說明 `VLLM_GPU_UTIL` 的取捨與「vLLM 模式下聊天模型可能變慢或需要改用較小模型」
 
 ### 3.9 快速測試
 - `cp .env.example .env` → 依需要修改 → `uv sync --group ocr`（要用 OCR 時）→ `uv run uvicorn app.main:create_app --factory --reload`
 - 預設 `KB_WORKER_MODE=embedded`、`OCR_BACKEND=transformers`、Chroma 本機模式 → Windows 上不需要 Docker、也不會碰到 vLLM
-- 也可只用 Docker 跑 vLLM（`docker compose -f docker/compose.yml --profile vllm up vllm`）並在本機 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（compose 把 vllm 的 8000 對應到主機 8001）
+- 也可只用 Docker 跑 vLLM（`docker compose --env-file .env -f docker/compose.yml --profile vllm up vllm`）並在本機 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（compose 把 vllm 的 8000 對應到主機 8001）
 
 ## 4. 錯誤處理
 - `OCR_BACKEND` 值不合法 → 啟動時拋出清楚的錯誤訊息

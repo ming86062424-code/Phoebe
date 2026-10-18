@@ -139,7 +139,7 @@ uv run --group eval pytest evals -v
 
 ```
 cp .env.example .env
-docker compose -f docker/compose.yml up -d --build
+docker compose --env-file .env -f docker/compose.yml up -d --build
 ```
 
 ## 資料位置

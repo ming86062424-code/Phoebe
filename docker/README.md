@@ -15,17 +15,17 @@
 cp .env.example .env
 ```
 
-`.env` 可省略（全部使用預設值）。容器內會自動覆寫路徑、`CHROMA_HOST=chroma`、`OLLAMA_BASE_URL=http://host.docker.internal:11434` 與 `KB_WORKER_MODE=external`，不需在 `.env` 另外設定。常用項目：`PHOEBE_PORT`（對外連接埠）、`WEB_CONCURRENCY`（Gunicorn worker 數）、`CHAT_MODEL`、`OCR_BACKEND`。
+必須先建立 `.env`（可直接複製範本不修改）：所有指令都帶 `--env-file .env`，因為 Compose 的 `${...}` 變數（`PHOEBE_PORT`、`OCR_MODEL`、`VLLM_GPU_UTIL`）只會從 `--env-file` 讀取，不會自動讀根目錄 `.env`（自動讀取的是 `docker/` 目錄）。容器內會自動覆寫路徑、`CHROMA_HOST=chroma`、`OLLAMA_BASE_URL=http://host.docker.internal:11434` 與 `KB_WORKER_MODE=external`，不需在 `.env` 另外設定。常用項目：`PHOEBE_PORT`（對外連接埠）、`WEB_CONCURRENCY`（Gunicorn worker 數）、`CHAT_MODEL`、`OCR_BACKEND`。
 
 ## 啟動、停止、看 log
 
-所有指令都在專案根目錄執行：
+所有指令都在專案根目錄執行，並帶 `--env-file .env`：
 
 ```
-docker compose -f docker/compose.yml up -d --build   # 啟動（首次建置含 torch，需要數分鐘與數 GB 磁碟）
-docker compose -f docker/compose.yml ps
-docker compose -f docker/compose.yml logs -f web worker
-docker compose -f docker/compose.yml down            # 停止並移除容器，保留 volume
+docker compose --env-file .env -f docker/compose.yml up -d --build   # 啟動（首次建置含 torch，需要數分鐘與數 GB 磁碟）
+docker compose --env-file .env -f docker/compose.yml ps
+docker compose --env-file .env -f docker/compose.yml logs -f web worker
+docker compose --env-file .env -f docker/compose.yml down            # 停止並移除容器，保留 volume
 ```
 
 啟動後開啟 http://localhost:8000。`down -v` 會連資料一起刪除，請勿隨意使用。
@@ -44,7 +44,7 @@ VLLM_BASE_URL=http://vllm:8000/v1
 再以 profile 啟動：
 
 ```
-docker compose -f docker/compose.yml --profile vllm up -d
+docker compose --env-file .env -f docker/compose.yml --profile vllm up -d
 ```
 
 vLLM 對主機開放在 http://localhost:8001（容器內為 8000）。
@@ -62,7 +62,7 @@ vLLM 對主機開放在 http://localhost:8001（容器內為 8000）。
 1. 設定系統環境變數 `OLLAMA_HOST=0.0.0.0`（或 `0.0.0.0:11434`）
 2. 完全結束並重新啟動 Ollama
 3. 允許 Windows 防火牆對 Ollama 的私人網路連線
-4. 驗證：`docker compose -f docker/compose.yml exec web python -c "import urllib.request;print(urllib.request.urlopen('http://host.docker.internal:11434').read())"`
+4. 驗證：`docker compose --env-file .env -f docker/compose.yml exec web python -c "import urllib.request;print(urllib.request.urlopen('http://host.docker.internal:11434').read())"`
 
 ## 資料備份
 
