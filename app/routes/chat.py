@@ -1,11 +1,11 @@
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
 from app import conversations
 from app.auth import current_user
-from app.chat_stream import ndjson_reply
+from app.chat_stream import claim_reply, ndjson_reply
 from app.config import Settings
 from app.deps import get_chat_client, get_db, get_settings
 from app.ollama_client import OllamaClient
@@ -31,6 +31,7 @@ class MessageIn(BaseModel):
 
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
+    request: Request,
     conversation_id: int,
     body: MessageIn,
     user: dict = Depends(current_user),
@@ -40,16 +41,21 @@ async def send_message(
 ):
     if conversations.get_conversation(conn, user["id"], conversation_id) is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    release = claim_reply(request.app.state.replying, conversation_id)
+    try:
+        conversations.add_message(conn, conversation_id, "user", body.content)
+        conversations.set_title_if_empty(conn, conversation_id, body.content.strip()[:30])
+        history = conversations.get_history(conn, conversation_id)
+    except BaseException:
+        release()
+        raise
 
-    conversations.add_message(conn, conversation_id, "user", body.content)
-    conversations.set_title_if_empty(conn, conversation_id, body.content.strip()[:30])
-    history = conversations.get_history(conn, conversation_id)
-
-    return await ndjson_reply(client, history, conversation_id, settings.db_path)
+    return await ndjson_reply(client, history, conversation_id, settings.db_path, release)
 
 
 @router.post("/conversations/{conversation_id}/regenerate")
 async def regenerate(
+    request: Request,
     conversation_id: int,
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
@@ -58,8 +64,9 @@ async def regenerate(
 ):
     if conversations.get_conversation(conn, user["id"], conversation_id) is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
+    release = claim_reply(request.app.state.replying, conversation_id)
     history = conversations.get_history(conn, conversation_id)
     if not history or history[-1]["role"] != "user":
+        release()
         raise HTTPException(status_code=409, detail="沒有需要重新產生的回答")
-    return await ndjson_reply(client, history, conversation_id, settings.db_path)
+    return await ndjson_reply(client, history, conversation_id, settings.db_path, release)

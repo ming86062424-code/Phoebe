@@ -12,6 +12,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     app = FastAPI()
     app.state.settings = settings
+    # ids of conversations with a reply in progress (see chat_stream.claim_reply)
+    app.state.replying = set()
     conn = connect(settings.db_path)
     try:
         init_db(conn)
