@@ -14,6 +14,7 @@
 ## 安裝與執行
 
 ```
+cp .env.example .env   # 依需要修改；環境變數優先於 .env
 uv sync
 uv run uvicorn app.main:create_app --factory --reload
 ```
@@ -98,6 +99,10 @@ uv run --group eval pytest evals -v
 
 注意：單純執行 `uv sync` 會移除 eval、ocr 群組的套件；`uv run --group eval`／`uv run --group ocr` 會重新安裝。
 
+## 設定（.env）
+
+設定可放在專案根目錄的 `.env`（範本見 `.env.example`，可用 `ENV_FILE` 指定其他路徑）。同名的環境變數優先於 `.env`。`.env` 已被 git 忽略；測試不會讀取它。
+
 ## 環境變數
 
 | 變數 | 預設值 | 說明 |
@@ -115,7 +120,27 @@ uv run --group eval pytest evals -v
 | `MAX_UPLOAD_MB` | `50` | 單一 PDF 上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |
 | `LITEPARSE_OCR_LANGUAGE` | `chi_tra+eng` | LiteParse 內建 Tesseract 的語言 |
+| `KB_WORKER_MODE` | `embedded` | 文件解析 worker：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.worker_main`） |
+| `KB_WORKER_POLL_SECONDS` | `2` | worker 輪詢間隔 |
+| `KB_STALE_SECONDS` | `120` | 解析中逾時多久視為卡住並重新排入 |
+| `KB_HEARTBEAT_SECONDS` | `30` | 處理中的文件刷新 `updated_at` 的間隔 |
+| `REPLY_LOCK_TTL_SECONDS` | `600` | 對話回覆鎖逾時秒數 |
+| `OCR_BACKEND` | `transformers` | `transformers` 或 `vllm` |
+| `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
+| `VLLM_GPU_UTIL` | `0.35` | vLLM 顯存比例（僅 Docker） |
+| `CHROMA_HOST` / `CHROMA_PORT` | 空 / `8000` | 設定主機則連 Chroma 服務，留空使用本機檔案 |
+| `WEB_CONCURRENCY` | `2` | Gunicorn worker 數（僅 Docker） |
+| `PHOEBE_PORT` | `8000` | Docker 對外連接埠 |
 | `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供；使用相對路徑時，會以啟動 uvicorn 的工作目錄為基準 |
+
+## 部署
+
+以 Docker Compose 部署（Gunicorn web、獨立解析 worker、Chroma，選用 vLLM），詳見 [docker/README.md](docker/README.md)：
+
+```
+cp .env.example .env
+docker compose -f docker/compose.yml up -d --build
+```
 
 ## 資料位置
 

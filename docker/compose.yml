@@ -1,0 +1,126 @@
+# 以專案根目錄為 build context：
+#   docker compose -f docker/compose.yml up -d --build
+name: phoebe
+
+x-env: &env
+  env_file:
+    - path: ../.env
+      required: false
+
+services:
+  chroma:
+    image: chromadb/chroma:1.5.9
+    restart: unless-stopped
+    volumes:
+      - chroma-data:/data
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /data
+
+  web:
+    <<: *env
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: web
+    image: phoebe-web:local
+    restart: unless-stopped
+    depends_on:
+      - chroma
+    ports:
+      - "${PHOEBE_PORT:-8000}:8000"
+    environment:
+      KB_WORKER_MODE: external
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      DB_PATH: /data/app.db
+      KB_DIR: /data/kb
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - phoebe-data:/data
+    healthcheck:
+      # /api/me 未登入回 401 也代表服務正常
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.error, urllib.request
+          try:
+              urllib.request.urlopen("http://127.0.0.1:8000/api/me", timeout=3)
+          except urllib.error.HTTPError as e:
+              sys.exit(0 if e.code == 401 else 1)
+          except Exception:
+              sys.exit(1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    <<: *env
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: worker
+    image: phoebe-worker:local
+    restart: unless-stopped
+    depends_on:
+      - chroma
+    environment:
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      DB_PATH: /data/app.db
+      KB_DIR: /data/kb
+      HF_HOME: /hf-cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - phoebe-data:/data
+      - hf-cache:/hf-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # 選用：docker compose -f docker/compose.yml --profile vllm up -d
+  # 並在 .env 設 OCR_BACKEND=vllm、VLLM_BASE_URL=http://vllm:8000/v1
+  vllm:
+    <<: *env
+    profiles: [vllm]
+    image: vllm/vllm-openai:v0.11.2
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    command:
+      - --model
+      - ${OCR_MODEL:-lightonai/LightOnOCR-3-0.8B}
+      - --dtype
+      - float16
+      - --gpu-memory-utilization
+      - ${VLLM_GPU_UTIL:-0.35}
+      - --max-model-len
+      - "8192"
+    ipc: host
+    environment:
+      HF_HOME: /hf-cache
+    volumes:
+      - hf-cache:/hf-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  phoebe-data:
+  chroma-data:
+  hf-cache:
