@@ -73,9 +73,13 @@ class LightOnOcrParser:
             return_tensors="pt",
             enable_thinking=False,
         ).to(self._model.device)
-        # greedy decoding: the same PDF always gives the same text
+        # greedy decoding: the same PDF always gives the same text.
+        # The model config ships use_cache=false; without the KV cache every new
+        # token recomputes the whole ~3k-token image prompt (~18x slower).
         with torch.inference_mode():
-            out = self._model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False)
+            out = self._model.generate(
+                **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False, use_cache=True
+            )
         new_tokens = out[0, inputs["input_ids"].shape[1] :]
         return self._processor.decode(new_tokens, skip_special_tokens=True).strip()
 
