@@ -71,8 +71,8 @@ async def send_message(
     conv = conversations.get_conversation(conn, user["id"], conversation_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    release = claim_reply(
-        settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
+    release = await run_in_threadpool(
+        claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
     )
     try:
         conversations.add_message(conn, conversation_id, "user", body.content)
@@ -100,8 +100,8 @@ async def regenerate(
     conv = conversations.get_conversation(conn, user["id"], conversation_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    release = claim_reply(
-        settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
+    release = await run_in_threadpool(
+        claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
     )
     history = conversations.get_history(conn, conversation_id)
     if not history or history[-1]["role"] != "user":

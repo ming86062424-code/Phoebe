@@ -49,7 +49,7 @@
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | `OCR_BACKEND=vllm` 時使用 |
 | `CHROMA_HOST` | （空） | 空：本機檔案模式（`CHROMA_DIR`）；有值：連 Chroma 伺服器（`CHROMA_PORT`，預設 8000） |
 | `CHROMA_PORT` | `8000` | |
-| `REPLY_LOCK_TTL_SECONDS` | `600` | 回覆鎖逾時（process 異常結束時避免永久鎖住） |
+| `REPLY_LOCK_TTL_SECONDS` | `90` | 回覆鎖逾時（process 異常結束時避免永久鎖住）；串流中每 30 秒更新鎖，故需大於 30 |
 
 ### 3.2 解析佇列改為 DB 驅動
 - `kb_documents.status = 'queued'` 即為佇列；worker 以單一 SQL 原子性地「認領」一份：`UPDATE kb_documents SET status='parsing', updated_at=? WHERE id = (SELECT id FROM kb_documents WHERE status='queued' ORDER BY id LIMIT 1) AND status='queued' RETURNING id`（SQLite 3.35+ 支援 `RETURNING`）
@@ -63,7 +63,7 @@
 
 ### 3.3 回覆鎖改為 DB
 - 新資料表 `active_replies (conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, started_at TEXT NOT NULL)`
-- `claim_reply`：先刪除該對話中超過 `REPLY_LOCK_TTL_SECONDS` 的舊鎖，再 `INSERT`；`IntegrityError` → 409（沿用現有訊息）。回傳的 release 函式刪除該列（冪等）
+- `claim_reply`：先刪除該對話中超過 `REPLY_LOCK_TTL_SECONDS` 的舊鎖，再 `INSERT`；`IntegrityError` → 409（沿用現有訊息）。回傳的鎖物件可呼叫以釋放（刪除該列，冪等），並提供 `touch()`：串流期間 `body_iter` 每 30 秒刷新自己那一列的 `started_at`（心跳），所以 web 異常重啟後最多 `REPLY_LOCK_TTL_SECONDS` 秒鎖即失效。async 處理常式以 `run_in_threadpool` 呼叫 `claim_reply`
 - 移除 `app.state.replying`
 
 ### 3.4 SQLite 多 process

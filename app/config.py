@@ -40,7 +40,7 @@ class Settings:
     vllm_base_url: str = "http://localhost:8001/v1"
     chroma_host: str = ""
     chroma_port: int = 8000
-    reply_lock_ttl_seconds: int = 600
+    reply_lock_ttl_seconds: int = 90
     kb_worker_poll_seconds: float = 2.0
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0

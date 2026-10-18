@@ -53,7 +53,7 @@ def test_new_settings_defaults(monkeypatch):
     assert s.vllm_base_url == "http://localhost:8001/v1"
     assert s.chroma_host == ""
     assert s.chroma_port == 8000
-    assert s.reply_lock_ttl_seconds == 600
+    assert s.reply_lock_ttl_seconds == 90
     assert s.kb_worker_poll_seconds == 2.0
     assert s.kb_stale_seconds == 120
     assert s.kb_heartbeat_seconds == 30

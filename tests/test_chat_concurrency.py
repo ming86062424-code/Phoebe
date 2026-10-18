@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -155,3 +156,63 @@ def test_expired_reply_lock_is_replaced(two_conversations):
 def test_claims_on_different_conversations_do_not_conflict(two_conversations):
     claim_reply(two_conversations, 1, 600)
     claim_reply(two_conversations, 2, 600)
+
+
+def test_heartbeat_keeps_reply_lock_alive_past_ttl(two_conversations):
+    lock = claim_reply(two_conversations, 1, 1)
+    for _ in range(4):
+        time.sleep(0.5)
+        assert lock.touch() is True
+    with pytest.raises(HTTPException):  # 2 s old claim, but refreshed
+        claim_reply(two_conversations, 1, 1)
+    lock()  # release still matches the refreshed row
+    claim_reply(two_conversations, 1, 1)
+
+
+def test_reply_lock_without_heartbeat_expires(two_conversations):
+    claim_reply(two_conversations, 1, 1)
+    time.sleep(1.2)
+    claim_reply(two_conversations, 1, 1)
+
+
+def test_touch_does_not_resurrect_a_released_or_replaced_lock(two_conversations):
+    lock = claim_reply(two_conversations, 1, 1)
+    lock()
+    assert lock.touch() is False
+    time.sleep(1.1)
+    first = claim_reply(two_conversations, 1, 1)
+    time.sleep(1.1)
+    second = claim_reply(two_conversations, 1, 1)  # replaced the expired first
+    assert first.touch() is False
+    second()
+
+
+async def test_streaming_reply_refreshes_its_lock(app, settings, monkeypatch):
+    from app import chat_stream
+
+    monkeypatch.setattr(chat_stream, "REPLY_HEARTBEAT_SECONDS", 0.05)
+    fake = GatedChatClient()
+    app.dependency_overrides[get_chat_client] = lambda: fake
+    async with _client(app) as c:
+        cid = (await c.post("/api/conversations")).json()["id"]
+        first = asyncio.create_task(
+            c.post(f"/api/conversations/{cid}/messages", json={"content": "嗨"})
+        )
+        await _wait(fake.started)
+
+        def started_at():
+            conn = connect(settings.db_path)
+            try:
+                row = conn.execute(
+                    "SELECT started_at FROM active_replies WHERE conversation_id = ?", (cid,)
+                ).fetchone()
+                return row["started_at"] if row else None
+            finally:
+                conn.close()
+
+        before = started_at()
+        await asyncio.sleep(0.5)
+        assert started_at() > before
+        fake.gate.set()
+        await _soon(first)
+        assert started_at() is None
