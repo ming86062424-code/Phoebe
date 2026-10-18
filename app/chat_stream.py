@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from collections.abc import Callable
 
 import httpx
@@ -13,6 +14,7 @@ from app.ollama_client import ChatDelta, OllamaClient, OllamaError, OllamaUnavai
 UNAVAILABLE_DETAIL = "無法連線到 Ollama"
 INTERRUPTED_DETAIL = "回覆中斷"
 BUSY_DETAIL = "這個對話正在產生回覆，請稍候"
+SAVE_FAILED_DETAIL = "回覆無法儲存"
 
 
 def claim_reply(replying: set[int], conversation_id: int) -> Callable[[], None]:
@@ -88,6 +90,10 @@ async def _ndjson_reply(
                 message_id = conversations.add_message(
                     save_conn, conversation_id, "assistant", "".join(parts)
                 )
+            except sqlite3.Error:
+                # e.g. the conversation was deleted in another tab mid-stream
+                yield _line({"type": "error", "detail": SAVE_FAILED_DETAIL})
+                return
             finally:
                 save_conn.close()
             yield _line({"type": "done", "message_id": message_id})
