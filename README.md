@@ -103,12 +103,33 @@ uv run --group eval pytest evals -v
 
 設定可放在專案根目錄的 `.env`（本機快速測試用，範本見 `.env.example`；Docker 部署改用 `docker/.env`，範本見 `docker/.env.example`）。本機可用 `ENV_FILE` 指定其他路徑。同名的環境變數優先於 `.env`。`.env` 已被 git 忽略；測試不會讀取它。
 
+## 管理員與系統設定
+
+- 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAMES=alice,bob`，以逗號分隔，帳號大小寫需與登入帳號完全相符。修改 `.env` 後必須重新啟動服務才會生效。
+- 只有管理員會在側邊欄看到「系統設定」頁，所有使用者的聊天都套用這份設定：
+  - 聊天提供者：本機 Ollama 或 Google Gemini（未設定 `GEMINI_API_KEY` 時 Gemini 選項停用）
+  - 模型：從目前提供者即時取得模型清單後選擇
+  - 系統提示詞：最多 4000 字
+  - 溫度：可自訂，或使用模型預設值
+- Embedding（知識庫）一律使用本機 Ollama，不受聊天提供者影響。
+
+### Gemini
+
+1. 到 [Google AI Studio](https://aistudio.google.com/apikey) 以 Google 帳號登入並建立 API key。
+2. 把金鑰填入 `.env` 的 `GEMINI_API_KEY=`（Docker 則填 `docker/.env`），可選填 `GEMINI_MODEL`（預設 `gemini-2.5-flash`），然後重新啟動。
+3. 以管理員登入，到「系統設定」把聊天提供者切換為 Gemini。
+
+金鑰只存在環境設定中，不會出現在介面或資料庫。當 GPU 專用於 OCR（vLLM）時，建議聊天改用 Gemini（雲端），避免與 OCR 搶顯存。
+
 ## 環境變數
 
 | 變數 | 預設值 | 說明 |
 | --- | --- | --- |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 位址 |
-| `CHAT_MODEL` | `gemma4:e4b` | 聊天使用的模型 |
+| `CHAT_MODEL` | `gemma4:e4b` | 聊天使用的模型（Ollama 預設值；可在「系統設定」頁覆寫） |
+| `GEMINI_API_KEY` | 空 | Google Gemini API 金鑰；只能放在 `.env`／`docker/.env`，留空則「系統設定」中的 Gemini 選項停用 |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini 預設模型（可在「系統設定」頁覆寫） |
+| `ADMIN_USERNAMES` | 空 | 管理員帳號，以逗號分隔（大小寫需完全相符） |
 | `EVAL_JUDGE_MODEL` | `qwen3.5:4b` | 評測的裁判模型 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
