@@ -101,7 +101,7 @@ uv run --group eval pytest evals -v
 
 ## 設定（.env）
 
-設定可放在專案根目錄的 `.env`（範本見 `.env.example`，可用 `ENV_FILE` 指定其他路徑）。同名的環境變數優先於 `.env`。`.env` 已被 git 忽略；測試不會讀取它。
+設定可放在專案根目錄的 `.env`（本機快速測試用，範本見 `.env.example`；Docker 部署改用 `docker/.env`，範本見 `docker/.env.example`）。本機可用 `ENV_FILE` 指定其他路徑。同名的環境變數優先於 `.env`。`.env` 已被 git 忽略；測試不會讀取它。
 
 ## 環境變數
 
@@ -129,7 +129,7 @@ uv run --group eval pytest evals -v
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
 | `VLLM_GPU_UTIL` | `0.35` | vLLM 顯存比例（僅 Docker） |
 | `CHROMA_HOST` / `CHROMA_PORT` | 空 / `8000` | 設定主機則連 Chroma 服務，留空使用本機檔案 |
-| `WEB_CONCURRENCY` | `2` | Gunicorn worker 數（僅 Docker） |
+| `WEB_CONCURRENCY` | `2` | Gunicorn worker 數（僅 Docker，設在 `docker/.env`） |
 | `PHOEBE_PORT` | `8000` | Docker 對外連接埠 |
 | `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供；使用相對路徑時，會以啟動 uvicorn 的工作目錄為基準 |
 
@@ -138,8 +138,9 @@ uv run --group eval pytest evals -v
 以 Docker Compose 部署（Gunicorn web、獨立解析 worker、Chroma，選用 vLLM），詳見 [docker/README.md](docker/README.md)：
 
 ```
-cp .env.example .env
-docker compose --env-file .env -f docker/compose.yml up -d --build
+cd docker
+cp .env.example .env   # Docker 專用設定，與根目錄 .env 無關
+docker compose up -d --build
 ```
 
 ## 資料位置

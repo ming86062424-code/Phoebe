@@ -1,10 +1,11 @@
-# 以專案根目錄為 build context：
-#   docker compose --env-file .env -f docker/compose.yml up -d --build
+# 在 docker/ 目錄執行（先 cp .env.example .env）：
+#   cd docker && docker compose up -d --build
+# docker/.env 同時用於變數插值與容器環境變數；build context 為上一層（專案根目錄）。
 name: phoebe
 
 x-env: &env
   env_file:
-    - path: ../.env
+    - path: .env
       required: false
 
 services:
@@ -99,8 +100,8 @@ services:
               count: all
               capabilities: [gpu]
 
-  # 選用：docker compose -f docker/compose.yml --profile vllm up -d
-  # 並在 .env 設 OCR_BACKEND=vllm、VLLM_BASE_URL=http://vllm:8000/v1
+  # 選用：docker compose --profile vllm up -d，並在 docker/.env 設 OCR_BACKEND=vllm
+  # （worker 的 VLLM_BASE_URL 由本檔固定指向此服務）
   vllm:
     <<: *env
     profiles: [vllm]

@@ -9,23 +9,24 @@
 - 主機已啟動 Ollama，並已下載對話與 Embedding 模型
 - Compose 2.24 以上（`env_file` 的 `required: false`）
 
-## 準備 .env
+## 準備 docker/.env
+
+Docker 使用自己的設定檔 `docker/.env`（與根目錄的 `.env` 無關，後者只給本機快速測試）。所有指令都在 `docker/` 目錄執行：
 
 ```
+cd docker
 cp .env.example .env
 ```
 
-必須先建立 `.env`（可直接複製範本不修改）：所有指令都帶 `--env-file .env`，因為 Compose 的 `${...}` 變數（`PHOEBE_PORT`、`OCR_MODEL`、`VLLM_GPU_UTIL`）只會從 `--env-file` 讀取，不會自動讀根目錄 `.env`（自動讀取的是 `docker/` 目錄）。容器內會自動覆寫路徑、`CHROMA_HOST=chroma`、`OLLAMA_BASE_URL=http://host.docker.internal:11434` 與 `KB_WORKER_MODE=external`，不需在 `.env` 另外設定。常用項目：`PHOEBE_PORT`（對外連接埠）、`WEB_CONCURRENCY`（Gunicorn worker 數）、`CHAT_MODEL`、`OCR_BACKEND`。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`VLLM_GPU_UTIL`），同時也當作容器的環境變數。`DB_PATH`、`KB_DIR`、`CHROMA_HOST/PORT`、`OLLAMA_BASE_URL`、`KB_WORKER_MODE`、`VLLM_BASE_URL`、`HF_HOME` 由 `compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
-所有指令都在專案根目錄執行，並帶 `--env-file .env`：
-
 ```
-docker compose --env-file .env -f docker/compose.yml up -d --build   # 啟動（首次建置含 torch，需要數分鐘與數 GB 磁碟）
-docker compose --env-file .env -f docker/compose.yml ps
-docker compose --env-file .env -f docker/compose.yml logs -f web worker
-docker compose --env-file .env -f docker/compose.yml down            # 停止並移除容器，保留 volume
+docker compose up -d --build   # 啟動（首次建置含 torch，需要數分鐘與數 GB 磁碟）
+docker compose ps
+docker compose logs -f web worker
+docker compose down            # 停止並移除容器，保留 volume
 ```
 
 啟動後開啟 http://localhost:8000。`down -v` 會連資料一起刪除，請勿隨意使用。
@@ -34,20 +35,17 @@ docker compose --env-file .env -f docker/compose.yml down            # 停止並
 
 預設 `OCR_BACKEND=transformers`：worker 直接在容器內用 transformers 跑 LightOnOCR，OCR 前會請 Ollama 卸載模型以騰出 VRAM。
 
-改用 vLLM：在 `.env` 設定
-
-```
-OCR_BACKEND=vllm
-VLLM_BASE_URL=http://vllm:8000/v1
-```
+改用 vLLM：在 `docker/.env` 設定 `OCR_BACKEND=vllm`（worker 連線位址 `http://vllm:8000/v1` 已由 compose 固定）。
 
 再以 profile 啟動：
 
 ```
-docker compose --env-file .env -f docker/compose.yml --profile vllm up -d
+docker compose --profile vllm up -d
 ```
 
 vLLM 對主機開放在 http://localhost:8001（容器內為 8000）。
+
+本機快速測試也可只用 Docker 跑 vLLM：`cd docker && docker compose --profile vllm up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`。
 
 6GB 顯存（RTX 2060）的取捨：
 
@@ -62,7 +60,7 @@ vLLM 對主機開放在 http://localhost:8001（容器內為 8000）。
 1. 設定系統環境變數 `OLLAMA_HOST=0.0.0.0`（或 `0.0.0.0:11434`）
 2. 完全結束並重新啟動 Ollama
 3. 允許 Windows 防火牆對 Ollama 的私人網路連線
-4. 驗證：`docker compose --env-file .env -f docker/compose.yml exec web python -c "import urllib.request;print(urllib.request.urlopen('http://host.docker.internal:11434').read())"`
+4. 驗證：`docker compose exec web python -c "import urllib.request;print(urllib.request.urlopen('http://host.docker.internal:11434').read())"`
 
 ## 資料備份
 

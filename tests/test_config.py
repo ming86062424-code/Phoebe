@@ -80,4 +80,27 @@ def test_env_example_lists_every_setting():
     assert {"KB_WORKER_MODE", "OCR_BACKEND"} <= used
     assert used
     assert used <= keys
-    assert {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL"} <= keys
+    assert not {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL"} & keys
+
+
+def test_docker_env_example_lists_compose_and_settings_keys():
+    import yaml
+
+    compose_text = (PROJECT_ROOT / "docker" / "compose.yml").read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+    interpolated = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose_text))
+    fixed = set()
+    for name in ("web", "worker"):
+        fixed |= set(compose["services"][name]["environment"])
+    fixed |= {"FRONTEND_DIST", "CHROMA_DIR"}  # not configurable in containers
+
+    text = (PROJECT_ROOT / "docker" / ".env.example").read_text(encoding="utf-8")
+    keys = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, flags=re.M))
+    source = inspect.getsource(Settings.from_env)
+    used = set(re.findall(r'(?:os\.environ\.get|_choice)\(\s*"([A-Z0-9_]+)"', source))
+
+    assert interpolated and used
+    assert interpolated <= keys
+    assert (used - fixed) <= keys
+    assert not (fixed & keys)
+    assert "WEB_CONCURRENCY" in keys

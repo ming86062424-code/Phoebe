@@ -108,16 +108,16 @@ docker/
 | `vllm`（profile `vllm`） | `vllm/vllm-openai:<固定版本>` | `--model ${OCR_MODEL} --dtype float16 --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.35} --max-model-len 8192`；使用 GPU；`hf-cache` volume |
 
 - 所有服務都讀 `env_file: ../.env`（`required: false`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）
-- 所有指令從專案根目錄執行並帶 `--env-file .env`（Compose 的 `${...}` 插值只讀 `--env-file` 或 `docker/.env`，`env_file:` 不參與插值）
+- Docker 專用設定檔 `docker/.env`（範本 `docker/.env.example`，已被 git 忽略並排除於 build context）；指令在 `docker/` 目錄執行，Compose 自動讀取它做變數插值，`env_file: [{path: .env, required: false}]` 供容器環境變數。根目錄 `.env` 只給本機快速測試。compose `environment:` 固定的鍵（DB_PATH、KB_DIR、CHROMA_HOST/PORT、OLLAMA_BASE_URL、KB_WORKER_MODE、VLLM_BASE_URL、HF_HOME）不可由 `.env` 覆寫
 - 啟動順序：`chroma`（healthcheck）→ `web`（healthcheck：`GET /api/me` 回 401 視為健康）→ `worker`；`web`、`worker` 設 `stop_grace_period: 30s`；worker 固定覆寫 `VLLM_BASE_URL=http://vllm:8000/v1`
-- 啟動：`docker compose --env-file .env -f docker/compose.yml up -d --build`；使用 vLLM：`--profile vllm` 並在 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`
+- 啟動：`cd docker && docker compose up -d --build`；使用 vLLM：`--profile vllm` 並在 `docker/.env` 設 `OCR_BACKEND=vllm`（worker 的 `VLLM_BASE_URL` 由 compose 固定）
 - 主機 Ollama：`host.docker.internal`；README 說明若連不上需讓 Ollama 監聽 `0.0.0.0`（`OLLAMA_HOST`）
 - **6GB 顯存限制**：worker 的 transformers OCR 會先請 Ollama 卸載模型（沿用現有行為）；vLLM 常駐會與 Ollama 搶顯存，README 需說明 `VLLM_GPU_UTIL` 的取捨與「vLLM 模式下聊天模型可能變慢或需要改用較小模型」
 
 ### 3.9 快速測試
 - `cp .env.example .env` → 依需要修改 → `uv sync --group ocr`（要用 OCR 時）→ `uv run uvicorn app.main:create_app --factory --reload`
 - 預設 `KB_WORKER_MODE=embedded`、`OCR_BACKEND=transformers`、Chroma 本機模式 → Windows 上不需要 Docker、也不會碰到 vLLM
-- 也可只用 Docker 跑 vLLM（`docker compose --env-file .env -f docker/compose.yml --profile vllm up vllm`）並在本機 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（compose 把 vllm 的 8000 對應到主機 8001）
+- 也可只用 Docker 跑 vLLM（`cd docker && docker compose --profile vllm up -d vllm`）並在本機 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（compose 把 vllm 的 8000 對應到主機 8001）
 
 ## 4. 錯誤處理
 - `OCR_BACKEND` 值不合法 → 啟動時拋出清楚的錯誤訊息

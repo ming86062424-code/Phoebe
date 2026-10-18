@@ -21,7 +21,7 @@
 - 409 回覆鎖訊息沿用現有文字（不改）
 - Gunicorn 只在 Linux 容器內使用；Windows 快速測試一律 `uv run uvicorn app.main:create_app --factory`
 - Docker：所有資料用 named volume（不用 bind mount）；`env_file` 指向根目錄 `.env` 且 `required: false`；主機 Ollama 為 `http://host.docker.internal:11434`
-- 映像檔版本一律固定（不得用 `latest`）；Docker 指令以 `docker compose --env-file .env -f docker/compose.yml …` 執行，build context 為專案根目錄
+- 映像檔版本一律固定（不得用 `latest`）；Docker 指令在 `docker/` 目錄以 `docker compose …` 執行（設定檔 `docker/.env`），build context 為專案根目錄
 - 介面與文件文字為繁體中文
 - Windows、Git Bash；`uv` 在 `/c/Users/anny3/AppData/Roaming/Python/Python312/Scripts`；Node 在 `/c/Program Files/nodejs`；`PYTHONUTF8=1`；LF 換行
 - 每個 commit 訊息結尾：空一行後 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
@@ -303,14 +303,15 @@ Expected: 全部通過
 - [ ] **Step 5: Verify Docker**
 
 ```bash
-docker compose --env-file .env -f docker/compose.yml config -q
-docker compose --env-file .env -f docker/compose.yml --profile vllm config -q
-docker compose --env-file .env -f docker/compose.yml up -d --build
-docker compose --env-file .env -f docker/compose.yml ps
+cd docker
+docker compose config -q
+docker compose --profile vllm config -q
+docker compose up -d --build
+docker compose ps
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/        # 200
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/me  # 401
 ```
-再用 httpx 腳本：註冊、登入、建立對話、送一則訊息（主機 Ollama）收到 done；建立知識庫、上傳 `tests/pdf_factory.py` 產生的小 PDF、指定 LiteParse，輪詢到 `ready`。確認 `docker compose logs worker` 有處理紀錄、`web` 有 gunicorn worker 啟動紀錄。結束後 `docker compose --env-file .env -f docker/compose.yml down`（保留 volume）。vLLM profile 只驗證 `config`，不實際啟動（6GB 顯存與主機 Ollama 衝突）。
+再用 httpx 腳本：註冊、登入、建立對話、送一則訊息（主機 Ollama）收到 done；建立知識庫、上傳 `tests/pdf_factory.py` 產生的小 PDF、指定 LiteParse，輪詢到 `ready`。確認 `docker compose logs worker` 有處理紀錄、`web` 有 gunicorn worker 啟動紀錄。結束後 `docker compose down`（保留 volume）。vLLM profile 只驗證 `config`，不實際啟動（6GB 顯存與主機 Ollama 衝突）。
 
 - [ ] **Step 6: Commit**
 
