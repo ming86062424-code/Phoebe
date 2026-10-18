@@ -78,7 +78,7 @@ uv run --group eval pytest evals -v
 | `EVAL_JUDGE_MODEL` | `qwen3.5:4b` | 評測的裁判模型 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
-| `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false` 或 `0` 為關閉） |
+| `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |
 | `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供；使用相對路徑時，會以啟動 uvicorn 的工作目錄為基準 |
 
 ## 資料位置

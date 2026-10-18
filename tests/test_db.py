@@ -84,3 +84,15 @@ def test_settings_chat_think_env(monkeypatch):
     assert Settings.from_env().chat_think is False
     monkeypatch.delenv("CHAT_THINK")
     assert Settings.from_env().chat_think is True
+
+
+@pytest.mark.parametrize("value", ["false", "0", "no", "off", "OFF", " No "])
+def test_settings_chat_think_falsy_values(monkeypatch, value):
+    monkeypatch.setenv("CHAT_THINK", value)
+    assert Settings.from_env().chat_think is False
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes", "on"])
+def test_settings_chat_think_truthy_values(monkeypatch, value):
+    monkeypatch.setenv("CHAT_THINK", value)
+    assert Settings.from_env().chat_think is True

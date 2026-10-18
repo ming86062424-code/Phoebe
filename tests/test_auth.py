@@ -81,3 +81,25 @@ def test_expired_session_401(make_user, settings):
     conn.execute("UPDATE sessions SET expires_at = '2000-01-01T00:00:00+00:00'")
     conn.commit()
     assert c.get("/api/me").status_code == 401
+
+
+def _messages(r):
+    return [e["msg"].removeprefix("Value error, ") for e in r.json()["detail"]]
+
+
+def test_auth_errors_are_traditional_chinese(client):
+    client.post("/api/auth/register", json=CREDS)
+    assert client.post("/api/auth/register", json=CREDS).json()["detail"] == "這個帳號已經有人使用"
+    r = client.post("/api/auth/login", json={**CREDS, "password": "wrongpass1"})
+    assert r.json()["detail"] == "帳號或密碼錯誤"
+
+
+def test_register_validation_messages_are_chinese(client):
+    r = client.post("/api/auth/register", json={"username": "ab", "password": "password123"})
+    assert _messages(r) == ["帳號長度需為 3 到 32 個字元"]
+    r = client.post("/api/auth/register", json={"username": "a" * 33, "password": "password123"})
+    assert _messages(r) == ["帳號長度需為 3 到 32 個字元"]
+    r = client.post("/api/auth/register", json={"username": "alice", "password": "short"})
+    assert _messages(r) == ["密碼至少需要 8 個字元"]
+    r = client.post("/api/auth/register", json={"username": "bob", "password": "密" * 25})
+    assert _messages(r) == ["密碼最多 72 個位元組"]
