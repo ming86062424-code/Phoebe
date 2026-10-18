@@ -20,10 +20,14 @@ class Source:
     filename: str
     page: int
     score: float
-    text: str
+    text: str  # short snippet for the UI and the saved message
+    content: str  # the whole chunk, for the model
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        """The client/database form: everything but the full chunk."""
+        data = asdict(self)
+        del data["content"]
+        return data
 
 
 def _collection_name(kb_id: int) -> str:
@@ -97,6 +101,7 @@ class KnowledgeIndex:
                 page=int(r.node.metadata["page"]),
                 score=round(float(r.score or 0.0), 4),
                 text=r.node.get_content()[:SNIPPET_CHARS],
+                content=r.node.get_content(),
             )
             for r in results
         ]

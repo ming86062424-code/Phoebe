@@ -6,7 +6,7 @@ NO_CONTEXT_NOTE = "（知識庫中沒有找到相關內容）"
 def build_system_prompt(kb_name: str, sources: list[Source]) -> str:
     if sources:
         blocks = "\n\n".join(
-            f"[{i}] {s.filename} 第 {s.page} 頁\n{s.text}" for i, s in enumerate(sources, start=1)
+            f"[{i}] {s.filename} 第 {s.page} 頁\n{s.content}" for i, s in enumerate(sources, start=1)
         )
     else:
         blocks = NO_CONTEXT_NOTE

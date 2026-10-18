@@ -183,3 +183,20 @@ def test_chat_retrieval_failure_returns_503(make_user, fake_chat, kb_services, m
     monkeypatch.setattr(kb_services.index, "search", boom)
     r = alice.post(f"/api/conversations/{cid}/messages", json={"content": "x"})
     assert r.status_code == 503 and "知識庫檢索失敗" in r.json()["detail"]
+
+
+def test_system_prompt_gets_full_chunk_text_not_the_snippet(make_user, fake_chat, fake_parser):
+    filler = "intro " * 90  # one chunk, but the answer sits past the 400-character snippet
+    fake_parser.pages = [PageText(1, filler + "密碼 每 九十 天 更換")]
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    _upload(alice, kb["id"])
+    cid = alice.post("/api/conversations").json()["id"]
+    alice.patch(f"/api/conversations/{cid}", json={"kb_id": kb["id"]})
+    events = _stream_events(
+        alice.post(f"/api/conversations/{cid}/messages", json={"content": "密碼 更換"})
+    )
+    assert "九十" in fake_chat.calls[0][0]["content"]
+    # the UI and the database still get the short snippet
+    shown = events[0]["sources"][0]["text"]
+    assert len(shown) <= 400 and "九十" not in shown
