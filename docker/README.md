@@ -23,7 +23,7 @@ cp .env.example .env
 ## 啟動、停止、看 log
 
 ```
-docker compose up -d --build   # 啟動（首次啟動 vllm 要下載映像與模型，約需數 GB 磁碟與數分鐘；worker 會等 vllm 健康後才啟動）
+docker compose up -d --build   # 啟動（首次啟動 vllm 要下載映像與模型，約需數 GB 磁碟與數分鐘；worker 在 vllm 容器啟動後就會啟動；vLLM 載入完成前 LightOnOCR 顯示為無法使用，LiteParse 照常運作）
 docker compose ps
 docker compose logs -f web worker
 docker compose down            # 停止並移除容器，保留 volume

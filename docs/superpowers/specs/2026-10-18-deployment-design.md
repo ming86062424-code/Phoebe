@@ -106,7 +106,7 @@ docker/
 | 服務 | 映像／target | 說明 |
 |---|---|---|
 | `web` | Dockerfile target `web` | Gunicorn；port `${PHOEBE_PORT:-8000}:8000`；`KB_WORKER_MODE=external`；`CHROMA_HOST=chroma`；`OLLAMA_BASE_URL=http://host.docker.internal:11434`；`DB_PATH`、`KB_DIR` 指向 `/data` volume |
-| `worker` | target `worker` | `python -m app.kb.worker_main`；同樣的 `/data` volume；`OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`（固定）；不含 torch、不使用 GPU；等 `vllm` healthy 才啟動 |
+| `worker` | target `worker` | `python -m app.kb.worker_main`；同樣的 `/data` volume；`OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`（固定）；不含 torch、不使用 GPU；`vllm` 容器啟動後即啟動（`service_started`）；vLLM 載入完成前 LightOnOCR 顯示為無法使用，LiteParse 照常運作 |
 | `chroma` | `chromadb/chroma:<固定版本>` | volume `chroma-data` |
 | `vllm`（預設服務） | `vllm/vllm-openai:v0.30.0` | 官方 0.8B 參數（見 §3.6）、`--dtype float16`、`--gpu-memory-utilization ${OCR_VLLM_GPU_UTIL:-0.8}`、`--max-model-len ${OCR_VLLM_MAX_MODEL_LEN:-18000}`、`--enforce-eager`、`--max-num-seqs ${OCR_VLLM_MAX_NUM_SEQS:-8}`（RTX 2060 實測：0.85 失敗、0.8 但使用 CUDA graph 與預設 256 條序列配不到 KV cache；上述組合 KV cache 1.28 GiB／99,243 tokens）；不載入 env_file（避免未知 `VLLM_*` 警告）；需要 NVIDIA 驅動 ≥ 580（CUDA 13 映像）；port `127.0.0.1:8001:8000`（無驗證，僅本機）；使用 GPU；`hf-cache` 掛在 `/root/.cache/huggingface`；healthcheck `GET /health`，`start_period` 600 秒 |
 
