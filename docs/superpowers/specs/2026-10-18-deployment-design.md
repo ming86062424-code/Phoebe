@@ -108,14 +108,14 @@ docker/
 | `web` | Dockerfile target `web` | Gunicorn；port `${PHOEBE_PORT:-8000}:8000`；`KB_WORKER_MODE=external`；`CHROMA_HOST=chroma`；`OLLAMA_BASE_URL=http://host.docker.internal:11434`；`DB_PATH`、`KB_DIR` 指向 `/data` volume |
 | `worker` | target `worker` | `python -m app.kb.worker_main`；同樣的 `/data` volume；`OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`（固定）；不含 torch、不使用 GPU；等 `vllm` healthy 才啟動 |
 | `chroma` | `chromadb/chroma:<固定版本>` | volume `chroma-data` |
-| `vllm`（預設服務） | `vllm/vllm-openai:v0.30.0` | 官方 0.8B 參數（見 §3.6）、`--dtype float16`、`--gpu-memory-utilization ${VLLM_GPU_UTIL:-0.85}`、`--max-model-len ${VLLM_MAX_MODEL_LEN:-18000}`；port `8001:8000`；使用 GPU；`hf-cache` 掛在 `/root/.cache/huggingface`；healthcheck `GET /health`，`start_period` 600 秒 |
+| `vllm`（預設服務） | `vllm/vllm-openai:v0.30.0` | 官方 0.8B 參數（見 §3.6）、`--dtype float16`、`--gpu-memory-utilization ${OCR_VLLM_GPU_UTIL:-0.8}`、`--max-model-len ${OCR_VLLM_MAX_MODEL_LEN:-18000}`、`--enforce-eager`、`--max-num-seqs ${OCR_VLLM_MAX_NUM_SEQS:-8}`（RTX 2060 實測：0.85 失敗、0.8 但使用 CUDA graph 與預設 256 條序列配不到 KV cache；上述組合 KV cache 1.28 GiB／99,243 tokens）；不載入 env_file（避免未知 `VLLM_*` 警告）；需要 NVIDIA 驅動 ≥ 580（CUDA 13 映像）；port `8001:8000`；使用 GPU；`hf-cache` 掛在 `/root/.cache/huggingface`；healthcheck `GET /health`，`start_period` 600 秒 |
 
 - 所有服務都讀 `env_file: [{path: .env, required: false}]`（即 `docker/.env`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）
 - Docker 專用設定檔 `docker/.env`（範本 `docker/.env.example`，已被 git 忽略並排除於 build context）；指令在 `docker/` 目錄執行，Compose 自動讀取它做變數插值，`env_file: [{path: .env, required: false}]` 供容器環境變數。根目錄 `.env` 只給本機快速測試。compose `environment:` 固定的鍵（DB_PATH、KB_DIR、CHROMA_HOST/PORT、OLLAMA_BASE_URL、KB_WORKER_MODE、VLLM_BASE_URL、HF_HOME）不可由 `.env` 覆寫
 - 啟動順序：`chroma`（healthcheck）→ `web`（healthcheck：`GET /api/me` 回 401 視為健康）→ `worker`；`web`、`worker` 設 `stop_grace_period: 30s`；worker 固定覆寫 `VLLM_BASE_URL=http://vllm:8000/v1`
 - 啟動：`cd docker && docker compose up -d --build`；vLLM 為預設服務，worker 的 `OCR_BACKEND`、`VLLM_BASE_URL` 由 compose 固定
 - 主機 Ollama：`host.docker.internal`；README 說明若連不上需讓 Ollama 監聽 `0.0.0.0`（`OLLAMA_HOST`）
-- **GPU 專用於 OCR**：對話模型可放雲端，不替 Ollama 保留顯存；RTX 2060（6GB，Turing 無 bf16）以 fp16、`VLLM_GPU_UTIL` 0.85 執行
+- **GPU 專用於 OCR**：對話模型可放雲端，不替 Ollama 保留顯存；RTX 2060（6GB，Turing 無 bf16）以 fp16、`OCR_VLLM_GPU_UTIL` 0.8 執行
 
 ### 3.9 快速測試
 - `cp .env.example .env` → 依需要修改 → `uv sync --group ocr`（要用 OCR 時）→ `uv run uvicorn app.main:create_app --factory --reload`

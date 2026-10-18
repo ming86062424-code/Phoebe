@@ -81,7 +81,7 @@ def test_env_example_lists_every_setting():
     assert {"KB_WORKER_MODE", "OCR_BACKEND"} <= used
     assert used
     assert used <= keys
-    assert not {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL"} & keys
+    assert not {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL", "OCR_VLLM_GPU_UTIL"} & keys
 
 
 def test_docker_env_example_lists_compose_and_settings_keys():
@@ -143,8 +143,11 @@ def test_vllm_service_follows_official_flags():
     assert json.loads(kwargs) == {"enable_thinking": False}
     assert json.loads(command[command.index("--limit-mm-per-prompt") + 1]) == {"image": 1}
     assert command[command.index("--mm-processor-cache-gb") + 1] == "0"
-    assert "${VLLM_MAX_MODEL_LEN:-18000}" in command
-    assert "${VLLM_GPU_UTIL:-0.85}" in command
+    assert "${OCR_VLLM_MAX_MODEL_LEN:-18000}" in command
+    assert "${OCR_VLLM_GPU_UTIL:-0.8}" in command
+    assert "--enforce-eager" in command
+    assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-8}"
+    assert "env_file" not in vllm  # no app settings, so no "unknown VLLM_*" warnings
     assert flags
     assert "healthcheck" in vllm
     assert "hf-cache:/root/.cache/huggingface" in vllm["volumes"]

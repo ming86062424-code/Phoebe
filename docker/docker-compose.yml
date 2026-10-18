@@ -96,8 +96,8 @@ services:
 
   # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
   # 只想給本機快速測試用：docker compose up -d vllm（對主機開放 8001）
+  # 不載入 env_file：vllm 不需要應用程式設定，避免 vLLM 對未知的 VLLM_* 環境變數發出警告
   vllm:
-    <<: *env
     image: vllm/vllm-openai:v0.30.0
     restart: unless-stopped
     ports:
@@ -117,9 +117,13 @@ services:
       - --dtype
       - float16
       - --gpu-memory-utilization
-      - ${VLLM_GPU_UTIL:-0.85}
+      - ${OCR_VLLM_GPU_UTIL:-0.8}
       - --max-model-len
-      - ${VLLM_MAX_MODEL_LEN:-18000}
+      - ${OCR_VLLM_MAX_MODEL_LEN:-18000}
+      # 6GB 顯卡：CUDA graph 的額外記憶體會讓 KV cache 配不到空間，改用 eager 並限制同時序列數
+      - --enforce-eager
+      - --max-num-seqs
+      - ${OCR_VLLM_MAX_NUM_SEQS:-8}
     ipc: host
     volumes:
       # vLLM 映像以 root 執行，Hugging Face 預設快取在 /root/.cache/huggingface
