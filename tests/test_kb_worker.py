@@ -96,3 +96,30 @@ def test_threaded_worker_processes_queue(env):
         assert store.get_document(conn, doc["id"])["status"] == "ready"
     finally:
         services.worker.stop()
+
+
+def test_document_replaced_mid_parse_is_not_indexed_as_the_new_one(env):
+    """A deleted document whose id is reused must not be indexed or marked ready."""
+    conn, kb, parser, services, add_doc = env
+    doc = add_doc()
+
+    original_parse = parser.parse
+
+    def parse_then_replace(path, on_progress):
+        pages = original_parse(path, on_progress)
+        other = connect(services.worker.db_path)
+        other.execute("DELETE FROM kb_documents WHERE id = ?", (doc["id"],))
+        other.execute(
+            "INSERT INTO kb_documents (id, kb_id, filename, parser, status, created_at, updated_at) "
+            "VALUES (?, ?, 'b.pdf', 'fake', 'queued', 'later', 'later')",
+            (doc["id"], kb["id"]),
+        )
+        other.commit()
+        other.close()
+        return pages
+
+    parser.parse = parse_then_replace
+    services.worker.process(doc["id"])
+    got = store.get_document(conn, doc["id"])
+    assert (got["filename"], got["status"]) == ("b.pdf", "queued")
+    assert services.index.search(kb["id"], "apple", 5) == []

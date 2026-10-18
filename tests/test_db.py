@@ -143,3 +143,78 @@ def test_settings_chat_think_falsy_values(monkeypatch, value):
 def test_settings_chat_think_truthy_values(monkeypatch, value):
     monkeypatch.setenv("CHAT_THINK", value)
     assert Settings.from_env().chat_think is True
+
+
+def test_kb_ids_are_never_reused(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    _seed_message(conn)
+    now = now_iso()
+
+    def add_kb():
+        return conn.execute(
+            "INSERT INTO knowledge_bases (user_id, name, description, created_at, updated_at) "
+            "VALUES (1, 'k', '', ?, ?)",
+            (now, now),
+        ).lastrowid
+
+    def add_doc(kb_id):
+        return conn.execute(
+            "INSERT INTO kb_documents (kb_id, filename, parser, status, created_at, updated_at) "
+            "VALUES (?, 'a.pdf', 'p', 'queued', ?, ?)",
+            (kb_id, now, now),
+        ).lastrowid
+
+    kb = add_kb()
+    doc = add_doc(kb)
+    conn.execute("DELETE FROM kb_documents WHERE id = ?", (doc,))
+    assert add_doc(kb) != doc
+    conn.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb,))
+    assert add_kb() != kb
+
+
+OLD_KB_SCHEMA = """
+CREATE TABLE knowledge_bases (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+    name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE kb_documents (id INTEGER PRIMARY KEY, kb_id INTEGER NOT NULL
+    REFERENCES knowledge_bases(id) ON DELETE CASCADE, filename TEXT NOT NULL,
+    parser TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
+    progress_done INTEGER NOT NULL DEFAULT 0, progress_total INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0, size_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+"""
+
+
+def test_migration_adds_autoincrement_and_keeps_rows(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    conn.executescript(OLD_SCHEMA + OLD_KB_SCHEMA)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, created_at) VALUES (1, 'u', 'h', ?)", (now,)
+    )
+    conn.execute(
+        "INSERT INTO knowledge_bases VALUES (3, 1, 'k', '', ?, ?)", (now, now)
+    )
+    conn.execute(
+        "INSERT INTO kb_documents (id, kb_id, filename, parser, status, created_at, updated_at) "
+        "VALUES (8, 3, 'a.pdf', 'p', 'ready', ?, ?)",
+        (now, now),
+    )
+    conn.commit()
+    init_db(conn)
+    init_db(conn)
+    for table in ("knowledge_bases", "kb_documents"):
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()[0]
+        assert "AUTOINCREMENT" in sql
+    assert conn.execute("SELECT filename FROM kb_documents WHERE id = 8").fetchone()[0] == "a.pdf"
+    conn.execute("DELETE FROM kb_documents WHERE id = 8")
+    new_id = conn.execute(
+        "INSERT INTO kb_documents (kb_id, filename, parser, status, created_at, updated_at) "
+        "VALUES (3, 'b.pdf', 'p', 'queued', ?, ?)",
+        (now, now),
+    ).lastrowid
+    assert new_id > 8
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1

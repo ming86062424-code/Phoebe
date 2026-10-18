@@ -11,6 +11,10 @@ from app.kb.parsers.base import Parser, ParseError
 logger = logging.getLogger(__name__)
 
 
+class _Superseded(Exception):
+    """The document was deleted (and maybe its id reused) while being processed."""
+
+
 class IngestWorker:
     """Parses and indexes uploaded documents one at a time.
 
@@ -93,36 +97,48 @@ class IngestWorker:
             return
         parser = self.parsers.get(doc["parser"])
         if parser is None:
-            self._fail(conn, doc_id, f"未知的解析器 {doc['parser']}")
+            store.update_document(conn, doc_id, status="failed", error=f"未知的解析器 {doc['parser']}")
             return
 
+        # The row we started with; anything written later must still belong to it.
+        identity = doc["created_at"]
+
+        def check_current() -> None:
+            current = store.get_document(conn, doc_id)
+            if current is None or current["created_at"] != identity:
+                raise _Superseded()
+
         def on_progress(done: int, total: int) -> None:
+            check_current()  # also stops a long OCR run once the document is deleted
             store.update_document(conn, doc_id, progress_done=done, progress_total=total)
 
         store.update_document(conn, doc_id, status="parsing", error=None, progress_done=0)
+        indexed = False
         try:
             pages = parser.parse(self.file_path(doc["kb_id"], doc_id), on_progress)
-            if store.get_document(conn, doc_id) is None:
-                return  # deleted while parsing
+            check_current()
             store.update_document(conn, doc_id, status="indexing")
             # Clear vectors from any earlier, interrupted attempt before writing new ones.
             self.index.delete_document(doc["kb_id"], doc_id)
             chunks = self.index.add_document(doc["kb_id"], doc_id, doc["filename"], pages)
+            indexed = True
+            check_current()
+            if chunks == 0:
+                store.update_document(
+                    conn, doc_id, status="failed", error="沒有擷取到任何文字，掃描檔請改用 LightOnOCR"
+                )
+                return
+            store.update_document(conn, doc_id, status="ready", chunk_count=chunks)
+        except _Superseded:
+            if indexed:
+                self.index.delete_document(doc["kb_id"], doc_id)
         except ParseError as e:
-            self._fail(conn, doc_id, str(e))
-            return
+            self._fail(conn, doc_id, identity, str(e))
         except Exception as e:
             logger.exception("文件 %s 處理失敗", doc_id)
-            self._fail(conn, doc_id, f"處理失敗：{e}")
-            return
-        if store.get_document(conn, doc_id) is None:
-            self.index.delete_document(doc["kb_id"], doc_id)  # deleted while indexing
-            return
-        if chunks == 0:
-            self._fail(conn, doc_id, "沒有擷取到任何文字，掃描檔請改用 LightOnOCR")
-            return
-        store.update_document(conn, doc_id, status="ready", chunk_count=chunks)
+            self._fail(conn, doc_id, identity, f"處理失敗：{e}")
 
-    def _fail(self, conn, doc_id: int, message: str) -> None:
-        if store.get_document(conn, doc_id) is not None:
+    def _fail(self, conn, doc_id: int, identity: str, message: str) -> None:
+        current = store.get_document(conn, doc_id)
+        if current is not None and current["created_at"] == identity:
             store.update_document(conn, doc_id, status="failed", error=message)
