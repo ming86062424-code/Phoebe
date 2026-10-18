@@ -1,11 +1,14 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
-from app.db import connect
+from app.chat_stream import BUSY_DETAIL, claim_reply
+from app.db import connect, init_db, now_iso
 from app.deps import get_chat_client
 from app.ollama_client import ChatDelta
 
@@ -94,3 +97,61 @@ async def test_other_conversations_are_not_blocked(app):
         r = await _soon(c.post(f"/api/conversations/{b}/messages", json={"content": "嗨"}))
         assert r.status_code == 200
         await _soon(first)
+
+
+@pytest.fixture
+def two_conversations(settings):
+    conn = connect(settings.db_path)
+    init_db(conn)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, created_at) VALUES (1, 'u', 'x', ?)",
+        (now,),
+    )
+    for cid in (1, 2):
+        conn.execute(
+            "INSERT INTO conversations (id, user_id, title, created_at, updated_at)"
+            " VALUES (?, 1, '', ?, ?)",
+            (cid, now, now),
+        )
+    conn.commit()
+    conn.close()
+    return settings.db_path
+
+
+def test_second_claim_on_same_conversation_is_409(two_conversations):
+    claim_reply(two_conversations, 1, 600)
+    with pytest.raises(HTTPException) as e:
+        claim_reply(two_conversations, 1, 600)
+    assert e.value.status_code == 409
+    assert e.value.detail == BUSY_DETAIL
+
+
+def test_release_allows_claiming_again(two_conversations):
+    release = claim_reply(two_conversations, 1, 600)
+    release()
+    claim_reply(two_conversations, 1, 600)
+
+
+def test_release_is_idempotent(two_conversations):
+    release = claim_reply(two_conversations, 1, 600)
+    release()
+    other = claim_reply(two_conversations, 1, 600)
+    release()  # stale second call must not drop the newer claim
+    with pytest.raises(HTTPException):
+        claim_reply(two_conversations, 1, 600)
+    other()
+
+
+def test_expired_reply_lock_is_replaced(two_conversations):
+    old = (datetime.now(timezone.utc) - timedelta(seconds=601)).isoformat()
+    conn = connect(two_conversations)
+    conn.execute("INSERT INTO active_replies (conversation_id, started_at) VALUES (1, ?)", (old,))
+    conn.commit()
+    conn.close()
+    claim_reply(two_conversations, 1, 600)
+
+
+def test_claims_on_different_conversations_do_not_conflict(two_conversations):
+    claim_reply(two_conversations, 1, 600)
+    claim_reply(two_conversations, 2, 600)

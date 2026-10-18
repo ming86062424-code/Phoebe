@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import HTTPException
@@ -8,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from app import conversations
-from app.db import connect
+from app.db import connect, now_iso
 from app.ollama_client import ChatDelta, OllamaClient, OllamaError, OllamaUnavailable
 
 UNAVAILABLE_DETAIL = "無法連線到 Ollama"
@@ -17,15 +18,48 @@ BUSY_DETAIL = "這個對話正在產生回覆，請稍候"
 SAVE_FAILED_DETAIL = "回覆無法儲存"
 
 
-def claim_reply(replying: set[int], conversation_id: int) -> Callable[[], None]:
+def claim_reply(
+    db_path: str, conversation_id: int, ttl_seconds: int
+) -> Callable[[], None]:
     """Mark the conversation as replying; returns an idempotent release function.
 
+    The lock lives in SQLite so it holds across worker processes. A lock older
+    than ttl_seconds is treated as left over from a crashed worker and replaced.
     Raises 409 when another reply for the same conversation is still running.
     """
-    if conversation_id in replying:
-        raise HTTPException(status_code=409, detail=BUSY_DETAIL)
-    replying.add(conversation_id)
-    return lambda: replying.discard(conversation_id)
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)).isoformat()
+    started_at = now_iso()
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "DELETE FROM active_replies WHERE conversation_id = ? AND started_at < ?",
+            (conversation_id, cutoff),
+        )
+        try:
+            conn.execute(
+                "INSERT INTO active_replies (conversation_id, started_at) VALUES (?, ?)",
+                (conversation_id, started_at),
+            )
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            raise HTTPException(status_code=409, detail=BUSY_DETAIL) from e
+        conn.commit()
+    finally:
+        conn.close()
+
+    def release() -> None:
+        # Match started_at so a stale release can't drop a newer claim.
+        rconn = connect(db_path)
+        try:
+            rconn.execute(
+                "DELETE FROM active_replies WHERE conversation_id = ? AND started_at = ?",
+                (conversation_id, started_at),
+            )
+            rconn.commit()
+        finally:
+            rconn.close()
+
+    return release
 
 
 def _line(event: dict) -> str:
