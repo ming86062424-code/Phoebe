@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -47,7 +47,7 @@ class Settings:
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0
     admin_usernames: tuple[str, ...] = ()
-    gemini_api_key: str = ""
+    gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = "gemini-2.5-flash"
 
     @classmethod

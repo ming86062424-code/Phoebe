@@ -107,17 +107,17 @@ uv run --group eval pytest evals -v
 
 - 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAMES=alice,bob`，以逗號分隔，帳號大小寫需與登入帳號完全相符。修改 `.env` 後必須重新啟動服務才會生效。
 - 只有管理員會在側邊欄看到「系統設定」頁，所有使用者的聊天都套用這份設定：
-  - 聊天提供者：本機 Ollama 或 Google Gemini（未設定 `GEMINI_API_KEY` 時 Gemini 選項停用）
+  - LLM 供應商：本機 Ollama 或 Google Gemini（未設定 `GEMINI_API_KEY` 時 Gemini 選項停用）
   - 模型：從目前提供者即時取得模型清單後選擇
   - 系統提示詞：最多 4000 字
-  - 溫度：可自訂，或使用模型預設值
-- Embedding（知識庫）一律使用本機 Ollama，不受聊天提供者影響。
+  - temperature：可自訂，或使用模型預設值
+- Embedding（知識庫）一律使用本機 Ollama，不受LLM 供應商影響。
 
 ### Gemini
 
 1. 到 [Google AI Studio](https://aistudio.google.com/apikey) 以 Google 帳號登入並建立 API key。
 2. 把金鑰填入 `.env` 的 `GEMINI_API_KEY=`（Docker 則填 `docker/.env`），可選填 `GEMINI_MODEL`（預設 `gemini-2.5-flash`），然後重新啟動。
-3. 以管理員登入，到「系統設定」把聊天提供者切換為 Gemini。
+3. 以管理員登入，到「系統設定」把LLM 供應商切換為 Gemini。
 
 金鑰只存在環境設定中，不會出現在介面或資料庫。當 GPU 專用於 OCR（vLLM）時，建議聊天改用 Gemini（雲端），避免與 OCR 搶顯存。
 

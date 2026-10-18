@@ -191,3 +191,9 @@ def test_dockerignore_is_an_allowlist_covering_dockerfile_copies():
         # a source is reachable if it, or one of its parent folders, is allowed
         parts = src.split("/")
         assert any("/".join(parts[: i + 1]) in allowed for i in range(len(parts))), src
+
+
+def test_gemini_api_key_not_in_repr():
+    from app.config import Settings
+
+    assert "sk-secret" not in repr(Settings(gemini_api_key="sk-secret"))

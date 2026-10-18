@@ -61,7 +61,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 在 `docker/.env` 設定（修改後需 `docker compose up -d` 重新建立容器才會套用）：
 
-- `ADMIN_USERNAMES=alice,bob`：管理員帳號，逗號分隔，大小寫需完全相符。管理員可看到「系統設定」頁，設定聊天提供者（Ollama／Gemini）、模型（即時取得清單）、系統提示詞（最多 4000 字）與溫度（自訂或預設值）。
+- `ADMIN_USERNAMES=alice,bob`：管理員帳號，逗號分隔，大小寫需完全相符。管理員可看到「系統設定」頁，設定LLM 供應商（Ollama／Gemini）、模型（即時取得清單）、系統提示詞（最多 4000 字）與 temperature（自訂或預設值）。
 - `GEMINI_API_KEY`：到 [Google AI Studio](https://aistudio.google.com/apikey) 建立金鑰後填入。金鑰只放在 `docker/.env`，不會出現在介面或資料庫；留空則 Gemini 選項停用。
 - `GEMINI_MODEL`：預設 `gemini-2.5-flash`。
 

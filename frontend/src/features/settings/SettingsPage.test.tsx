@@ -137,6 +137,29 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('button', { name: '儲存' })).toBeDisabled()
   })
 
+  it('disables inputs while saving', async () => {
+    let finish: (v: LlmSettings) => void = () => {}
+    vi.mocked(api.saveSettings).mockImplementation(
+      () => new Promise<LlmSettings>((resolve) => (finish = resolve)),
+    )
+    setup()
+    const prompt = await screen.findByRole('textbox', { name: '系統提示詞' })
+    await userEvent.type(prompt, 'hi')
+    await userEvent.click(screen.getByRole('button', { name: '儲存' }))
+    await waitFor(() => expect(prompt).toBeDisabled())
+    expect(screen.getByRole('combobox', { name: '模型' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: /Gemini/ })).toBeDisabled()
+    expect(screen.getByRole('checkbox', { name: '使用預設' })).toBeDisabled()
+    finish(settings({ system_prompt: 'hi' }))
+    await waitFor(() => expect(prompt).toBeEnabled())
+  })
+
+  it('model list error is announced as an alert', async () => {
+    vi.mocked(api.listModels).mockRejectedValueOnce(new ApiError(503, '無法連線到 Ollama'))
+    setup()
+    expect(await screen.findByRole('alert')).toHaveTextContent('無法連線到 Ollama')
+  })
+
   it('shows server error on failure', async () => {
     vi.mocked(api.saveSettings).mockRejectedValue(
       new ApiError(409, 'Gemini 目前不可用：未設定 GEMINI_API_KEY'),

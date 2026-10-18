@@ -188,7 +188,7 @@ export default function SettingsPage() {
                 type="radio"
                 name="llm_provider"
                 checked={draft.llm_provider === p.id}
-                disabled={!status.available}
+                disabled={saving || !status.available}
                 onChange={() => update({ llm_provider: p.id })}
               />
               <span>{p.label}</span>
@@ -203,7 +203,7 @@ export default function SettingsPage() {
         <select
           id="settings-model"
           value={currentModel}
-          disabled={models.status === 'loading'}
+          disabled={saving || models.status === 'loading'}
           onChange={(e) => update({ [modelKey]: e.target.value })}
         >
           {missing && <option value={currentModel}>{currentModel}（清單中找不到）</option>}
@@ -217,10 +217,13 @@ export default function SettingsPage() {
         {models.status === 'loading' && <span className={styles.hint}>載入中…</span>}
         {models.status === 'error' && (
           <div className={styles.inline}>
-            <span className={styles.error}>{models.message}</span>
+            <span role="alert" className={styles.error}>
+              {models.message}
+            </span>
             <button
               type="button"
               className={styles.secondary}
+              disabled={saving}
               onClick={() => setModelsAttempt((n) => n + 1)}
             >
               重試
@@ -235,6 +238,7 @@ export default function SettingsPage() {
           id="settings-prompt"
           rows={8}
           value={draft.system_prompt}
+          disabled={saving}
           onChange={(e) => update({ system_prompt: e.target.value })}
         />
         <span className={promptTooLong ? styles.error : styles.hint}>
@@ -249,6 +253,7 @@ export default function SettingsPage() {
           <input
             type="checkbox"
             checked={draft.temperature === null}
+            disabled={saving}
             onChange={(e) =>
               update({ temperature: e.target.checked ? null : DEFAULT_TEMPERATURE })
             }
@@ -264,6 +269,7 @@ export default function SettingsPage() {
               max={2}
               step={0.1}
               value={draft.temperature}
+              disabled={saving}
               onChange={(e) => update({ temperature: Number(e.target.value) })}
             />
             <span>{draft.temperature.toFixed(1)}</span>
