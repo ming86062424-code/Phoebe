@@ -8,11 +8,12 @@ import time
 
 from app.config import Settings
 from app.kb.parsers.lightonocr import LightOnOcrParser
+from app.kb.parsers.ocr_engines import build_ocr_engine
 
 
 def main() -> None:
     settings = Settings.from_env()
-    parser = LightOnOcrParser(settings.ocr_model, settings.ollama_base_url)
+    parser = LightOnOcrParser(build_ocr_engine(settings))
     ok, reason = parser.availability()
     if not ok:
         sys.exit(reason)

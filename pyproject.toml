@@ -11,6 +11,7 @@ dependencies = [
     "llama-index-core>=0.14.25",
     "llama-index-embeddings-ollama>=0.10.0",
     "llama-index-vector-stores-chroma>=0.6.0",
+    "pillow>=12.3.0",
     "pypdfium2>=5.14.0",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.32",
@@ -30,7 +31,6 @@ ocr = [
     "torch>=2.9",
     "torchvision>=0.24",
     "transformers>=5.5.4",
-    "pillow>=11",
 ]
 
 [tool.pytest.ini_options]

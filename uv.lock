@@ -2492,6 +2492,7 @@ dependencies = [
     { name = "llama-index-core" },
     { name = "llama-index-embeddings-ollama" },
     { name = "llama-index-vector-stores-chroma" },
+    { name = "pillow" },
     { name = "pypdfium2" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -2508,7 +2509,6 @@ eval = [
     { name = "ollama" },
 ]
 ocr = [
-    { name = "pillow" },
     { name = "torch" },
     { name = "torchvision" },
     { name = "transformers" },
@@ -2524,6 +2524,7 @@ requires-dist = [
     { name = "llama-index-core", specifier = ">=0.14.25" },
     { name = "llama-index-embeddings-ollama", specifier = ">=0.10.0" },
     { name = "llama-index-vector-stores-chroma", specifier = ">=0.6.0" },
+    { name = "pillow", specifier = ">=12.3.0" },
     { name = "pypdfium2", specifier = ">=5.14.0" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "python-multipart", specifier = ">=0.0.32" },
@@ -2540,7 +2541,6 @@ eval = [
     { name = "ollama", specifier = ">=0.6.3" },
 ]
 ocr = [
-    { name = "pillow", specifier = ">=11" },
     { name = "torch", specifier = ">=2.9", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torchvision", specifier = ">=0.24", index = "https://download.pytorch.org/whl/cu126" },
     { name = "transformers", specifier = ">=5.5.4" },

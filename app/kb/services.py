@@ -52,10 +52,11 @@ def build_kb_services(
     if parsers is None:
         from app.kb.parsers.lightonocr import LightOnOcrParser
         from app.kb.parsers.liteparse_parser import LiteParseParser
+        from app.kb.parsers.ocr_engines import build_ocr_engine
 
         parsers = [
             LiteParseParser(settings.liteparse_ocr_language),
-            LightOnOcrParser(settings.ocr_model, settings.ollama_base_url),
+            LightOnOcrParser(build_ocr_engine(settings)),
         ]
     index = KnowledgeIndex(
         settings.chroma_dir, embed_model, settings.chroma_host, settings.chroma_port
