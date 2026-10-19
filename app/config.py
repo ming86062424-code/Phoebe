@@ -31,6 +31,16 @@ def _non_negative_int(name: str, raw: str) -> int:
     return value
 
 
+def _weight(name: str, raw: str) -> float:
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        value = -1.0
+    if not 0 <= value <= 1:
+        raise ValueError(f"{name} 必須是 0 到 1 之間的數字")
+    return value
+
+
 def _positive_int(name: str, raw: str) -> int:
     try:
         value = int(raw.strip())
@@ -68,6 +78,9 @@ class Settings:
     embedder_url: str = "http://localhost:8002"
     kb_dir: str = str(PROJECT_ROOT / "data" / "kb")
     kb_top_k: int = 5
+    # hybrid search: the vector path's share of the score; the keyword (BM25) path gets
+    # the rest. 0.5 weighs both equally
+    kb_vector_weight: float = 0.5
     kb_max_images: int = 4
     max_upload_mb: int = 50
     ocr_model: str = "lightonai/LightOnOCR-3-0.8B"
@@ -108,6 +121,9 @@ class Settings:
             embedder_url=os.environ.get("EMBEDDER_URL", d.embedder_url).strip(),
             kb_dir=os.environ.get("KB_DIR", d.kb_dir),
             kb_top_k=int(os.environ.get("KB_TOP_K", d.kb_top_k)),
+            kb_vector_weight=_weight(
+                "KB_VECTOR_WEIGHT", os.environ.get("KB_VECTOR_WEIGHT", str(d.kb_vector_weight))
+            ),
             kb_max_images=_non_negative_int(
                 "KB_MAX_IMAGES", os.environ.get("KB_MAX_IMAGES", str(d.kb_max_images))
             ),

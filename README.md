@@ -178,6 +178,7 @@ uv run --group eval pytest evals -v
 | `EMBEDDER_URL` | `http://localhost:8002` | Embedding 服務（`embedder`）位址；Docker 內固定為 `http://embedder:8000`；更換模型後需重建知識庫 |
 | `KB_DIR` | `<專案根目錄>/data/kb` | 上傳檔案與解析出的圖片存放位置 |
 | `KB_TOP_K` | `5` | 每次回答檢索的段落數 |
+| `KB_VECTOR_WEIGHT` | `0.5` | 混合查詢中向量的權重（0–1），關鍵字權重為 1 減去它。分數依 Milvus WeightedRanker 的方式正規化後加權相加。知識庫頁的檢索測試可以臨時調整權重來比較結果 |
 | `KB_MAX_IMAGES` | `4` | 回答時附給模型的參考圖片上限（依參考資料順序，頁面圖優先；最長邊超過 1536 px 會先縮小）；`0` 不附圖。模型不支援圖片時會自動改為不帶圖重試一次 |
 | `MAX_UPLOAD_MB` | `50` | 單一上傳檔案上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |

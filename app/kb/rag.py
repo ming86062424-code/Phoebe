@@ -69,7 +69,7 @@ def _png_for_model(path: Path) -> bytes:
 def load_source_images(
     sources: list[Source], doc_dir: Callable[[int], Path], limit: int
 ) -> list[SourceImage]:
-    """Images for the chat model, in source (RRF) order: each source's page image, then
+    """Images for the chat model, in source (hybrid score) order: each source's page image, then
     its cropped images, until `limit` are loaded. Missing or unreadable files are skipped,
     and an image already taken for an earlier source is not repeated (it keeps that
     earlier source's number).

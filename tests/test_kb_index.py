@@ -1,10 +1,11 @@
+import math
 import threading
 
 import pytest
 
 from app.kb import index as index_module
 from app.kb.chunk_store import Hit, KnowledgeStoreError
-from app.kb.index import KnowledgeIndex, Source, rrf_fuse
+from app.kb.index import KnowledgeIndex, Source, weighted_fuse
 from app.kb.parsers.base import ImageRef, ParsedChunk
 from tests.fakes_embedder import FakeEmbedder
 from tests.fakes_store import InMemoryChunkStore
@@ -25,36 +26,73 @@ def hit(cid, score=1.0, text="t"):
     return Hit(cid, 1, int(doc), "a.pdf", 1, text + chunk, score)
 
 
-# ---- rrf_fuse ----
+# ---- weighted_fuse (Milvus WeightedRanker with norm_score) ----
 
 
-def test_rrf_ranks_hits_in_both_lists_first():
-    dense = [hit("1:0", 0.9), hit("2:0", 0.8), hit("3:0", 0.7)]
-    keyword = [hit("3:0", 5.0), hit("1:0", 4.0)]
-    fused = rrf_fuse(dense, keyword, top_k=3)
-    assert [h.chunk_id for h, *_ in fused] == ["1:0", "3:0", "2:0"]
-    assert fused[0][1] == pytest.approx(1 / 61 + 1 / 62)
+def norm_cos(x):
+    return (1 + x) / 2
 
 
-def test_keyword_only_hit_is_returned():
-    fused = rrf_fuse([hit("1:0", 0.9)], [hit("9:0", 3.0)], top_k=5)
-    by_id = {h.chunk_id: (rrf, vec, kw) for h, rrf, vec, kw in fused}
-    assert by_id["9:0"] == (pytest.approx(1 / 61), None, 3.0)
-    assert by_id["1:0"][2] is None
+def norm_bm25(x):
+    return 2 * math.atan(x) / math.pi
 
 
-def test_scores_are_carried():
-    fused = rrf_fuse([hit("1:0", 0.9)], [hit("1:0", 7.5)], top_k=1)
-    h, rrf, vec, kw = fused[0]
-    assert (vec, kw) == (0.9, 7.5)
-    assert rrf == pytest.approx(2 / 61)
+def test_weighted_score_is_the_weighted_sum_of_normalized_scores():
+    fused = weighted_fuse([hit("1:0", 0.6)], [hit("1:0", 3.0)], top_k=1, vector_weight=0.3)
+    h, score, vec, kw = fused[0]
+    assert (h.chunk_id, vec, kw) == ("1:0", 0.6, 3.0)
+    assert score == pytest.approx(0.3 * norm_cos(0.6) + 0.7 * norm_bm25(3.0))
+
+
+def test_a_path_that_missed_the_hit_counts_as_zero():
+    fused = weighted_fuse([hit("1:0", 0.9)], [hit("9:0", 3.0)], top_k=5, vector_weight=0.5)
+    by_id = {h.chunk_id: (score, vec, kw) for h, score, vec, kw in fused}
+    assert by_id["1:0"] == (pytest.approx(0.5 * norm_cos(0.9)), 0.9, None)
+    assert by_id["9:0"] == (pytest.approx(0.5 * norm_bm25(3.0)), None, 3.0)
+
+
+def test_weights_decide_the_order():
+    dense = [hit("1:0", 0.9), hit("2:0", 0.1)]
+    keyword = [hit("2:0", 20.0), hit("1:0", 0.5)]
+    by_vector = weighted_fuse(dense, keyword, top_k=2, vector_weight=0.9)
+    by_keyword = weighted_fuse(dense, keyword, top_k=2, vector_weight=0.1)
+    assert [h.chunk_id for h, *_ in by_vector] == ["1:0", "2:0"]
+    assert [h.chunk_id for h, *_ in by_keyword] == ["2:0", "1:0"]
+
+
+def test_weight_one_and_zero_use_a_single_path():
+    dense = [hit("1:0", 0.9)]
+    keyword = [hit("2:0", 9.0)]
+    only_vector = weighted_fuse(dense, keyword, top_k=2, vector_weight=1.0)
+    only_keyword = weighted_fuse(dense, keyword, top_k=2, vector_weight=0.0)
+    assert [h.chunk_id for h, *_ in only_vector] == ["1:0", "2:0"]
+    assert only_vector[1][1] == 0.0
+    assert [h.chunk_id for h, *_ in only_keyword] == ["2:0", "1:0"]
+
+
+def test_negative_cosine_still_normalizes_into_range():
+    (only,) = weighted_fuse([hit("1:0", -1.0)], [], top_k=1, vector_weight=1.0)
+    assert only[1] == pytest.approx(0.0)
 
 
 def test_top_k_and_empty():
     dense = [hit(f"{i}:0") for i in range(1, 6)]
-    assert len(rrf_fuse(dense, [], top_k=2)) == 2
-    assert rrf_fuse([], [], top_k=3) == []
-    assert rrf_fuse(dense, [], top_k=0) == []
+    assert len(weighted_fuse(dense, [], top_k=2, vector_weight=0.5)) == 2
+    assert weighted_fuse([], [], top_k=3, vector_weight=0.5) == []
+    assert weighted_fuse(dense, [], top_k=0, vector_weight=0.5) == []
+
+
+@pytest.mark.parametrize("weight", [-0.1, 1.1])
+def test_weight_outside_zero_to_one_is_rejected(weight):
+    with pytest.raises(ValueError):
+        weighted_fuse([], [], top_k=1, vector_weight=weight)
+
+
+def test_search_uses_the_given_weight(index):
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "apple banana")])
+    (source,) = index.search(1, "apple", top_k=1, vector_weight=0.0)
+    assert source.vector_score is not None and source.keyword_score is not None
+    assert source.score == pytest.approx(round(norm_bm25(source.keyword_score), 4), abs=1e-3)
 
 
 def test_search_returns_keyword_only_match(store):

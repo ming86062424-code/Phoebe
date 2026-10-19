@@ -7,6 +7,7 @@ import type {
   LlmSettings,
   LlmSettingsPatch,
   ParserInfo,
+  SearchSettings,
   Source,
   User,
 } from './types'
@@ -123,6 +124,10 @@ export const api = {
     empty(`/api/kbs/${kbId}/documents/${docId}`, jsonInit('DELETE')),
   retryDocument: (kbId: number, docId: number) =>
     json<KbDocument>(`/api/kbs/${kbId}/documents/${docId}/retry`, jsonInit('POST')),
-  search: (kbId: number, q: string) =>
-    json<Source[]>(`/api/kbs/${kbId}/search?q=${encodeURIComponent(q)}`),
+  search: (kbId: number, q: string, vectorWeight?: number) =>
+    json<Source[]>(
+      `/api/kbs/${kbId}/search?q=${encodeURIComponent(q)}` +
+        (vectorWeight === undefined ? '' : `&vector_weight=${vectorWeight}`),
+    ),
+  searchSettings: () => json<SearchSettings>('/api/search-settings'),
 }

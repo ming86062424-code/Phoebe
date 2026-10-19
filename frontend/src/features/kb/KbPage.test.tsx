@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HashRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -188,9 +188,10 @@ describe('KbPage', () => {
       if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
       if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
       if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      if (url === '/api/search-settings') return Promise.resolve(jsonResponse({ vector_weight: 0.5, top_k: 5 }))
       if (url.startsWith('/api/kbs/1/search?q='))
         return Promise.resolve(
-          jsonResponse([{ document_id: 10, filename: 'a.pdf', page: 2, score: 0.0328, vector_score: 0.81234, keyword_score: null, text: '特休十四天' }]),
+          jsonResponse([{ document_id: 10, filename: 'a.pdf', page: 2, score: 0.8123, vector_score: 0.81234, keyword_score: null, text: '特休十四天' }]),
         )
       return Promise.reject(new Error('unexpected ' + url))
     })
@@ -199,8 +200,53 @@ describe('KbPage', () => {
     await userEvent.click(screen.getByRole('button', { name: '檢索' }))
     expect(await screen.findByText('特休十四天')).toBeInTheDocument()
     expect(screen.getByText('[1] a.pdf · 第 2 頁')).toBeInTheDocument()
-    expect(screen.getByText(/^相關度/).textContent).toBe('相關度 0.0328　向量 0.812　關鍵字 —')
+    expect(screen.getByText(/^相關度/).textContent).toBe('相關度 0.8123　向量 0.812　關鍵字 —')
     expect(screen.queryByText(/相似度/)).not.toBeInTheDocument()
-    expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=%E7%89%B9%E4%BC%91')).toBe(true)
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=%E7%89%B9%E4%BC%91&vector_weight=0.5'),
+    ).toBe(true)
+  })
+
+  it('tries other hybrid weights in the retrieval test', async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      if (url === '/api/search-settings') return Promise.resolve(jsonResponse({ vector_weight: 0.6, top_k: 5 }))
+      if (url.startsWith('/api/kbs/1/search?q=')) return Promise.resolve(jsonResponse([]))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const slider = await screen.findByRole('slider', { name: '向量權重' })
+    await waitFor(() => expect(slider).toHaveValue('0.6'))
+    expect(screen.getByText('向量 0.60 ／ 關鍵字 0.40（聊天預設）')).toBeInTheDocument()
+
+    fireEvent.change(slider, { target: { value: '0.3' } })
+    expect(screen.getByText('向量 0.30 ／ 關鍵字 0.70')).toBeInTheDocument()
+    await userEvent.type(screen.getByRole('textbox', { name: '檢索問題' }), 'q')
+    await userEvent.click(screen.getByRole('button', { name: '檢索' }))
+    await screen.findByText('沒有找到相關段落')
+    expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=q&vector_weight=0.3')).toBe(true)
+
+    await userEvent.click(screen.getByRole('button', { name: '還原預設' }))
+    expect(slider).toHaveValue('0.6')
+  })
+
+  it('searches with the server default when the weight settings cannot be loaded', async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      if (url.startsWith('/api/kbs/1/search?q=')) return Promise.resolve(jsonResponse([]))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    await userEvent.type(await screen.findByRole('textbox', { name: '檢索問題' }), 'q')
+    await userEvent.click(screen.getByRole('button', { name: '檢索' }))
+    await screen.findByText('沒有找到相關段落')
+    expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=q')).toBe(true)
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
   })
 })

@@ -34,7 +34,7 @@ export interface Source {
   document_id: number
   filename: string
   page: number // 0 for text files
-  score: number // RRF
+  score: number // weighted hybrid score, 0..1
   vector_score?: number | null
   keyword_score?: number | null
   text: string // the whole chunk
@@ -44,6 +44,12 @@ export interface Source {
   kind?: 'text' | 'page_image'
   images?: SourceImage[]
   page_image?: SourceImage | null
+}
+
+// the hybrid search defaults the chat uses
+export interface SearchSettings {
+  vector_weight: number // 0..1; the keyword path gets the rest
+  top_k: number
 }
 
 export interface KnowledgeBase {

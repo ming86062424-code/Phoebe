@@ -323,18 +323,31 @@ def document_image(
     )
 
 
+@router.get("/search-settings")
+def search_settings(
+    _user: dict = Depends(current_user), settings: Settings = Depends(get_settings)
+):
+    """The hybrid search defaults the chat uses (the search test starts from them)."""
+    return {"vector_weight": settings.kb_vector_weight, "top_k": settings.kb_top_k}
+
+
 @router.get("/kbs/{kb_id}/search")
 async def search(
     kb_id: int,
     q: str = Query(min_length=1, max_length=1000),
+    # for trying weights in the search test; the chat always uses KB_VECTOR_WEIGHT
+    vector_weight: float | None = Query(default=None, ge=0, le=1),
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
     _require_kb(conn, user, kb_id)
+    weight = settings.kb_vector_weight if vector_weight is None else vector_weight
     try:
-        sources = await run_in_threadpool(kb.index.search, kb_id, q, settings.kb_top_k)
+        sources = await run_in_threadpool(
+            kb.index.search, kb_id, q, settings.kb_top_k, weight
+        )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
     # chunks of a document deleted during a store outage may linger; SQLite is the truth

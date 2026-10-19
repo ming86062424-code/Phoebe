@@ -67,6 +67,18 @@
   min-width: 200px;
 }
 
+.weightRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.weightRow input[type='range'] {
+  width: 200px;
+  accent-color: var(--color-primary);
+}
+
 .primary,
 .secondary {
   display: inline-flex;
