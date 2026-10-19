@@ -15,7 +15,7 @@ from starlette.background import BackgroundTask
 from app import conversations
 from app.config import REPLY_HEARTBEAT_SECONDS
 from app.db import connect, now_iso
-from app.ollama_client import ChatDelta, OllamaClient, OllamaError, OllamaUnavailable
+from app.llm import ChatClient, ChatDelta, LlmError, LlmUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -130,12 +130,14 @@ def _line(event: dict) -> str:
 
 
 async def ndjson_reply(
-    client: OllamaClient,
+    client: ChatClient,
     history: list[dict],
     conversation_id: int,
     db_path: str,
     release: Callable[[], None],
     sources: list[dict] | None = None,
+    system: str | None = None,
+    temperature: float | None = None,
 ) -> StreamingResponse:
     """Stream the reply; release() runs once the reply ends, however it ends.
 
@@ -143,7 +145,7 @@ async def ndjson_reply(
     """
     try:
         return await _ndjson_reply(
-            client, history, conversation_id, db_path, release, sources
+            client, history, conversation_id, db_path, release, sources, system, temperature
         )
     except BaseException:
         release()
@@ -151,21 +153,23 @@ async def ndjson_reply(
 
 
 async def _ndjson_reply(
-    client: OllamaClient,
+    client: ChatClient,
     history: list[dict],
     conversation_id: int,
     db_path: str,
     release: Callable[[], None],
     sources: list[dict] | None,
+    system: str | None,
+    temperature: float | None,
 ) -> StreamingResponse:
-    stream = client.stream_chat(history)
+    stream = client.stream_chat(history, system=system, temperature=temperature)
     try:
         first = await anext(stream)
     except StopAsyncIteration:
         first = None
-    except OllamaUnavailable as e:
-        raise HTTPException(status_code=503, detail=UNAVAILABLE_DETAIL) from e
-    except OllamaError as e:
+    except LlmUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except LlmError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except httpx.HTTPError as e:
         raise HTTPException(status_code=503, detail=UNAVAILABLE_DETAIL) from e
@@ -186,7 +190,7 @@ async def _ndjson_reply(
                     yield handle(first)
                 async for delta in stream:
                     yield handle(delta)
-            except (OllamaError, httpx.HTTPError) as e:
+            except (LlmError, httpx.HTTPError) as e:
                 yield _line({"type": "error", "detail": str(e) or INTERRUPTED_DETAIL})
                 return
             # The generator uses its own connection so it doesn't depend on the

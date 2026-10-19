@@ -46,7 +46,9 @@ export default function NavSidebar() {
       </button>
 
       <div className={styles.links}>
-        {features.map((f) => (
+        {features
+          .filter((f) => !f.adminOnly || user.is_admin)
+          .map((f) => (
           <NavLink
             key={f.id}
             to={f.path}

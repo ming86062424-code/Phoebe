@@ -22,10 +22,10 @@ function Blocker({ reason }: { reason: string }) {
   return null
 }
 
-function setup(reason?: string) {
+function setup(reason?: string, isAdmin = true) {
   return render(
     <HashRouter>
-      <CurrentUserProvider user={{ id: 1, username: 'amy' }}>
+      <CurrentUserProvider user={{ id: 1, username: 'amy', is_admin: isAdmin }}>
         <NavGuardProvider>
           {reason && <Blocker reason={reason} />}
           <NavSidebar />
@@ -43,10 +43,17 @@ describe('NavSidebar', () => {
 
   it('renders one link per registry feature', () => {
     setup()
-    expect(features).toHaveLength(2)
+    expect(features).toHaveLength(3)
     expect(screen.getByRole('link', { name: 'AI 對話' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '知識庫' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '系統設定' })).toBeInTheDocument()
     expect(screen.getByText('amy')).toBeInTheDocument()
+  })
+
+  it('non-admin does not see 系統設定 in the nav', () => {
+    setup(undefined, false)
+    expect(screen.getByRole('link', { name: 'AI 對話' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '系統設定' })).not.toBeInTheDocument()
   })
 
   it('collapse hides labels and persists', async () => {

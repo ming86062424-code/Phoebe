@@ -44,7 +44,7 @@ def test_history_and_db_exclude_thinking(make_user, fake_chat):
     cid = _new_conv(c)
     _send(c, cid, "第一句")
     _send(c, cid, "第二句")
-    assert fake_chat.calls[1][1] == {"role": "assistant", "content": "你好"}
+    assert fake_chat.calls[1]["messages"][1] == {"role": "assistant", "content": "你好"}
     assert _messages(c, cid)[1]["content"] == "你好"
 
 
@@ -115,7 +115,7 @@ def test_second_turn_sends_full_history(make_user, fake_chat):
     cid = _new_conv(c)
     _send(c, cid, "第一句")
     _send(c, cid, "第二句")
-    assert fake_chat.calls[1] == [
+    assert fake_chat.calls[1]["messages"] == [
         {"role": "user", "content": "第一句"},
         {"role": "assistant", "content": "你好"},
         {"role": "user", "content": "第二句"},
@@ -197,7 +197,7 @@ def test_regenerate_answers_last_user_message(make_user, app):
     assert r.status_code == 200
     assert events(r)[-1]["type"] == "done"
     assert [m["role"] for m in _messages(c, cid)] == ["user", "assistant"]
-    assert fake.calls[-1] == [{"role": "user", "content": "嗨"}]
+    assert fake.calls[-1]["messages"] == [{"role": "user", "content": "嗨"}]
 
 
 def test_regenerate_409_when_already_answered(make_user, fake_chat):
@@ -244,7 +244,7 @@ class DeletingChatClient:
     def __init__(self, db_path):
         self.db_path = db_path
 
-    async def stream_chat(self, messages):
+    async def stream_chat(self, messages, *, system=None, temperature=None):
         from app.db import connect
 
         yield ChatDelta("content", "你")
@@ -262,3 +262,105 @@ def test_save_failure_after_stream_emits_error_event(make_user, app, settings):
     ev = events(_send(c, cid, "嗨"))
     assert ev[-1] == {"type": "error", "detail": "回覆無法儲存"}
     assert all(e["type"] != "done" for e in ev)
+
+
+# --- chat follows the system LLM settings ---------------------------------
+
+from dataclasses import replace
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import deps
+from app.main import create_app
+
+
+@pytest.fixture
+def admin_chat(settings, kb_services, monkeypatch):
+    """Admin client on an app using the real get_chat_client; build_chat_client is faked."""
+    built: list = []
+    fake = FakeChatClient()
+
+    def build(s, llm):
+        built.append(llm)
+        return fake
+
+    monkeypatch.setattr(deps, "build_chat_client", build)
+
+    def make(**overrides):
+        app = create_app(replace(settings, admin_usernames=("admin",), **overrides), kb_services)
+        c = TestClient(app)
+        creds = {"username": "admin", "password": "password123"}
+        assert c.post("/api/auth/register", json=creds).status_code == 201
+        assert c.post("/api/auth/login", json=creds).status_code == 200
+        return c
+
+    return make, built, fake
+
+
+def test_chat_uses_configured_provider(admin_chat):
+    make, built, _ = admin_chat
+    c = make(gemini_api_key="k")
+    assert c.put("/api/settings", json={"llm_provider": "gemini", "gemini_model": "g-1"}).status_code == 200
+    assert _send(c, _new_conv(c), "嗨").status_code == 200
+    assert built[-1].llm_provider == "gemini" and built[-1].gemini_model == "g-1"
+
+
+def test_settings_change_applies_to_next_request(admin_chat):
+    make, built, _ = admin_chat
+    c = make()
+    c.put("/api/settings", json={"ollama_model": "m1"})
+    cid = _new_conv(c)
+    _send(c, cid, "一")
+    c.put("/api/settings", json={"ollama_model": "m2"})
+    _send(c, cid, "二")
+    assert [b.ollama_model for b in built] == ["m1", "m2"]
+
+
+def test_system_prompt_and_temperature_are_passed(admin_chat):
+    make, _, fake = admin_chat
+    c = make()
+    c.put("/api/settings", json={"system_prompt": "你是貓", "temperature": 0.3})
+    _send(c, _new_conv(c), "嗨")
+    assert fake.calls[-1]["system"] == "你是貓"
+    assert fake.calls[-1]["temperature"] == 0.3
+    assert fake.calls[-1]["messages"] == [{"role": "user", "content": "嗨"}]
+
+
+def test_system_prompt_combines_with_knowledge_base(admin_chat):
+    make, _, fake = admin_chat
+    c = make()
+    c.put("/api/settings", json={"system_prompt": "你是貓"})
+    kb = c.post("/api/kbs", json={"name": "手冊"}).json()
+    cid = _new_conv(c)
+    c.patch(f"/api/conversations/{cid}", json={"kb_id": kb["id"]})
+    assert _send(c, cid, "嗨").status_code == 200
+    system = fake.calls[-1]["system"]
+    assert system.startswith("你是貓\n\n") and "參考資料：" in system
+    assert all(m["role"] != "system" for m in fake.calls[-1]["messages"])
+
+
+def test_no_system_when_both_empty(admin_chat):
+    make, _, fake = admin_chat
+    c = make()
+    _send(c, _new_conv(c), "嗨")
+    assert fake.calls[-1]["system"] is None
+    assert fake.calls[-1]["temperature"] is None
+
+
+def test_unavailable_provider_returns_503(admin_chat, settings):
+    from app.db import connect
+    from app.llm_settings import save_llm_settings
+
+    make, built, _ = admin_chat
+    c = make(gemini_api_key="")
+    # Saved while a key was configured; the key has since been removed.
+    conn = connect(settings.db_path)
+    save_llm_settings(conn, settings, {"llm_provider": "gemini"})
+    conn.close()
+    cid = _new_conv(c)
+    r = _send(c, cid, "嗨")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "Gemini 目前不可用：未設定 GEMINI_API_KEY"
+    assert built == []
+    assert _messages(c, cid) == []

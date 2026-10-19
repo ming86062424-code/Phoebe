@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 from fastapi import Depends, HTTPException, Request
 
+from app.config import Settings
 from app.db import now_iso
-from app.deps import get_db
+from app.deps import get_db, get_settings
 
 
 class UsernameTaken(Exception):
@@ -66,7 +67,11 @@ def delete_session(conn: sqlite3.Connection, token: str) -> None:
     conn.commit()
 
 
-def current_user(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def current_user(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
     token = request.cookies.get("session")
     if token:
         row = conn.execute(
@@ -75,5 +80,15 @@ def current_user(request: Request, conn: sqlite3.Connection = Depends(get_db)) -
             (token,),
         ).fetchone()
         if row and datetime.fromisoformat(row["expires_at"]) > datetime.now(timezone.utc):
-            return {"id": row["id"], "username": row["username"]}
+            return {
+                "id": row["id"],
+                "username": row["username"],
+                "is_admin": row["username"] in settings.admin_usernames,
+            }
     raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+def require_admin(user: dict = Depends(current_user)) -> dict:
+    if not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="需要管理員權限")
+    return user

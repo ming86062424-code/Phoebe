@@ -3,14 +3,14 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
-function mockMe(status: number) {
+function mockMe(status: number, isAdmin = false) {
   const json = (data: unknown, st = 200) => new Response(JSON.stringify(data), { status: st })
   vi.stubGlobal(
     'fetch',
     vi.fn().mockImplementation((url: string) => {
       if (url === '/api/me') {
         return Promise.resolve(
-          status === 200 ? json({ id: 1, username: 'amy' }) : json({ detail: '未登入' }, status),
+          status === 200 ? json({ id: 1, username: 'amy', is_admin: isAdmin }) : json({ detail: '未登入' }, status),
         )
       }
       if (url === '/api/conversations') return Promise.resolve(json([]))
@@ -38,6 +38,24 @@ describe('App', () => {
     render(<App />)
     expect(await screen.findByText('amy')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'AI 對話' })).toBeInTheDocument()
+  })
+
+  it('non-admin is redirected from settings', async () => {
+    mockMe(200)
+    window.location.hash = '#/settings'
+    render(<App />)
+    await screen.findByText('amy')
+    await vi.waitFor(() => expect(window.location.hash).toBe('#/chat'))
+    expect(screen.queryByRole('link', { name: '系統設定' })).not.toBeInTheDocument()
+  })
+
+  it('admin can open settings', async () => {
+    mockMe(200, true)
+    window.location.hash = '#/settings'
+    render(<App />)
+    await screen.findByText('amy')
+    expect(window.location.hash).toBe('#/settings')
+    expect(screen.getByRole('link', { name: '系統設定' })).toBeInTheDocument()
   })
 
   it('redirects / to /chat', async () => {

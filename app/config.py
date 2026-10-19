@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -46,6 +46,9 @@ class Settings:
     kb_worker_poll_seconds: float = 2.0
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0
+    admin_usernames: tuple[str, ...] = ()
+    gemini_api_key: str = field(default="", repr=False)
+    gemini_model: str = "gemini-2.5-flash"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -86,6 +89,13 @@ class Settings:
             kb_heartbeat_seconds=float(
                 os.environ.get("KB_HEARTBEAT_SECONDS", d.kb_heartbeat_seconds)
             ),
+            admin_usernames=tuple(
+                n.strip()
+                for n in os.environ.get("ADMIN_USERNAMES", "").split(",")
+                if n.strip()
+            ),
+            gemini_api_key=os.environ.get("GEMINI_API_KEY", d.gemini_api_key).strip(),
+            gemini_model=os.environ.get("GEMINI_MODEL", d.gemini_model),
         )
         if settings.kb_heartbeat_seconds >= settings.kb_stale_seconds:
             raise ValueError("KB_HEARTBEAT_SECONDS 必須小於 KB_STALE_SECONDS")

@@ -57,6 +57,16 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 - 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
 - 沒有 GPU 或想用 transformers 時，只能在本機快速測試用 `uv sync --group ocr` 搭配 `OCR_BACKEND=transformers`；Docker 的 worker 不含 torch。
 
+## 管理員與 Gemini 聊天
+
+在 `docker/.env` 設定（修改後需 `docker compose up -d` 重新建立容器才會套用）：
+
+- `ADMIN_USERNAMES=alice,bob`：管理員帳號，逗號分隔，大小寫需完全相符。管理員可看到「系統設定」頁，設定LLM 供應商（Ollama／Gemini）、模型（即時取得清單）、系統提示詞（最多 4000 字）與 temperature（自訂或預設值）。
+- `GEMINI_API_KEY`：到 [Google AI Studio](https://aistudio.google.com/apikey) 建立金鑰後填入。金鑰只放在 `docker/.env`，不會出現在介面或資料庫；留空則 Gemini 選項停用。
+- `GEMINI_MODEL`：預設 `gemini-2.5-flash`。
+
+GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 Gemini。Embedding 仍使用主機 Ollama。
+
 ## 主機 Ollama 連線
 
 容器以 `http://host.docker.internal:11434` 連到主機 Ollama。若連不上（聊天回錯誤、Embedding 失敗），多半是 Ollama 只監聽 `127.0.0.1`：

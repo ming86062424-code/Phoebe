@@ -3,6 +3,9 @@ import type {
   ConversationDetail,
   KbDocument,
   KnowledgeBase,
+  LlmProvider,
+  LlmSettings,
+  LlmSettingsPatch,
   ParserInfo,
   Source,
   User,
@@ -95,6 +98,13 @@ export const api = {
     request(`/api/conversations/${id}/regenerate`, { ...jsonInit('POST'), signal }),
   setConversationKb: (id: number, kbId: number | null) =>
     json<ConversationDetail>(`/api/conversations/${id}`, jsonInit('PATCH', { kb_id: kbId })),
+  getSettings: () => json<LlmSettings>('/api/settings'),
+  saveSettings: (patch: LlmSettingsPatch) =>
+    json<LlmSettings>('/api/settings', jsonInit('PUT', patch)),
+  listModels: (provider: LlmProvider) =>
+    json<{ models: string[] }>(`/api/settings/models?provider=${provider}`).then(
+      (r) => r.models,
+    ),
   listParsers: () => json<ParserInfo[]>('/api/parsers'),
   listKbs: () => json<KnowledgeBase[]>('/api/kbs'),
   createKb: (name: string, description = '') =>

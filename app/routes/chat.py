@@ -12,7 +12,8 @@ from app.deps import get_chat_client, get_db, get_kb_services, get_settings
 from app.kb import store as kb_store
 from app.kb.rag import build_system_prompt
 from app.kb.services import KbServices
-from app.ollama_client import OllamaClient
+from app.llm import ChatClient
+from app.llm_settings import load_llm_settings
 
 router = APIRouter(prefix="/api")
 
@@ -40,13 +41,13 @@ async def _with_knowledge(
     history: list[dict],
     settings: Settings,
     kb: KbServices,
-) -> tuple[list[dict], list[dict] | None]:
-    """Prepend retrieved context when the conversation uses a knowledge base."""
+) -> tuple[str | None, list[dict] | None]:
+    """Return the knowledge-base system text and sources (None, None without a knowledge base)."""
     if conv["kb_id"] is None:
-        return history, None
+        return None, None
     kb_row = kb_store.get_kb(conn, user["id"], conv["kb_id"])
     if kb_row is None:
-        return history, None
+        return None, None
     question = next(m["content"] for m in reversed(history) if m["role"] == "user")
     try:
         found = await run_in_threadpool(
@@ -54,8 +55,11 @@ async def _with_knowledge(
         )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
-    system = {"role": "system", "content": build_system_prompt(kb_row["name"], found)}
-    return [system, *history], [s.to_dict() for s in found]
+    return build_system_prompt(kb_row["name"], found), [s.to_dict() for s in found]
+
+
+def _combine_system(system_prompt: str, kb_prompt: str | None) -> str | None:
+    return "\n\n".join(p for p in (system_prompt, kb_prompt) if p) or None
 
 
 @router.post("/conversations/{conversation_id}/messages")
@@ -65,7 +69,7 @@ async def send_message(
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    client: OllamaClient = Depends(get_chat_client),
+    client: ChatClient = Depends(get_chat_client),
     kb: KbServices = Depends(get_kb_services),
 ):
     conv = conversations.get_conversation(conn, user["id"], conversation_id)
@@ -79,13 +83,21 @@ async def send_message(
         conversations.add_message(conn, conversation_id, "user", body.content)
         conversations.set_title_if_empty(conn, conversation_id, body.content.strip()[:30])
         history = conversations.get_history(conn, conversation_id)
-        messages, sources = await _with_knowledge(conn, user, conv, history, settings, kb)
+        kb_prompt, sources = await _with_knowledge(conn, user, conv, history, settings, kb)
+        llm = await run_in_threadpool(load_llm_settings, conn, settings)
     except BaseException:
         release()
         raise
 
     return await ndjson_reply(
-        client, messages, conversation_id, settings.db_path, release, sources
+        client,
+        history,
+        conversation_id,
+        settings.db_path,
+        release,
+        sources,
+        system=_combine_system(llm.system_prompt, kb_prompt),
+        temperature=llm.temperature,
     )
 
 
@@ -95,7 +107,7 @@ async def regenerate(
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    client: OllamaClient = Depends(get_chat_client),
+    client: ChatClient = Depends(get_chat_client),
     kb: KbServices = Depends(get_kb_services),
 ):
     conv = conversations.get_conversation(conn, user["id"], conversation_id)
@@ -110,10 +122,18 @@ async def regenerate(
         release()
         raise HTTPException(status_code=409, detail="沒有需要重新產生的回答")
     try:
-        messages, sources = await _with_knowledge(conn, user, conv, history, settings, kb)
+        kb_prompt, sources = await _with_knowledge(conn, user, conv, history, settings, kb)
+        llm = await run_in_threadpool(load_llm_settings, conn, settings)
     except BaseException:
         release()
         raise
     return await ndjson_reply(
-        client, messages, conversation_id, settings.db_path, release, sources
+        client,
+        history,
+        conversation_id,
+        settings.db_path,
+        release,
+        sources,
+        system=_combine_system(llm.system_prompt, kb_prompt),
+        temperature=llm.temperature,
     )

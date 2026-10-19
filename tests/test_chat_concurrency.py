@@ -25,7 +25,7 @@ class GatedChatClient:
         self.gate = asyncio.Event()
         self.started = asyncio.Event()
 
-    async def stream_chat(self, messages):
+    async def stream_chat(self, messages, *, system=None, temperature=None):
         yield ChatDelta("content", "第一段")
         self.started.set()
         await self.gate.wait()
@@ -224,13 +224,13 @@ class SlowStartChatClient:
     def __init__(self, delay):
         self.delay = delay
 
-    async def stream_chat(self, messages):
+    async def stream_chat(self, messages, *, system=None, temperature=None):
         await asyncio.sleep(self.delay)
         yield ChatDelta("content", "好")
 
 
 class UnavailableChatClient:
-    async def stream_chat(self, messages):
+    async def stream_chat(self, messages, *, system=None, temperature=None):
         from app.ollama_client import OllamaUnavailable
 
         raise OllamaUnavailable("down")
