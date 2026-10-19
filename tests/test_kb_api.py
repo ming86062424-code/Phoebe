@@ -1,6 +1,6 @@
 import json
 
-from app.kb.parsers.base import PageText
+from app.kb.parsers.base import ParsedChunk
 from tests.pdf_factory import make_pdf
 
 
@@ -69,7 +69,7 @@ def test_upload_with_real_liteparse(make_user):
 def test_upload_validation(make_user, settings):
     alice = make_user("alice")
     kb = _create_kb(alice)
-    assert _upload(alice, kb["id"], filename="a.txt").status_code == 422
+    assert _upload(alice, kb["id"], filename="a.docx").status_code == 422
     assert _upload(alice, kb["id"], content=b"not a pdf").status_code == 422
     assert _upload(alice, kb["id"], parser="nope").status_code == 422
     assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
@@ -127,7 +127,7 @@ def test_conversation_kb_selection(make_user):
 
 
 def test_chat_with_kb_streams_and_saves_sources(make_user, fake_chat, fake_parser):
-    fake_parser.pages = [PageText(1, "特休 十四 天"), PageText(3, "rocket fuel")]
+    fake_parser.pages = [ParsedChunk(1, "特休 十四 天"), ParsedChunk(3, "rocket fuel")]
     alice = make_user("alice")
     kb = _create_kb(alice, "員工手冊")
     _upload(alice, kb["id"])
@@ -186,7 +186,7 @@ def test_chat_retrieval_failure_returns_503(make_user, fake_chat, kb_services, m
 
 def test_system_prompt_gets_full_chunk_text_not_the_snippet(make_user, fake_chat, fake_parser):
     filler = "intro " * 90  # one chunk, but the answer sits past the 400-character snippet
-    fake_parser.pages = [PageText(1, filler + "密碼 每 九十 天 更換")]
+    fake_parser.pages = [ParsedChunk(1, filler + "密碼 每 九十 天 更換")]
     alice = make_user("alice")
     kb = _create_kb(alice)
     _upload(alice, kb["id"])
@@ -196,9 +196,9 @@ def test_system_prompt_gets_full_chunk_text_not_the_snippet(make_user, fake_chat
         alice.post(f"/api/conversations/{cid}/messages", json={"content": "密碼 更換"})
     )
     assert "九十" in fake_chat.calls[0]["system"]
-    # the UI and the database still get the short snippet
+    # the UI and the database get the whole chunk too; the client collapses it
     shown = events[0]["sources"][0]["text"]
-    assert len(shown) <= 400 and "九十" not in shown
+    assert shown == filler + "密碼 每 九十 天 更換"
 
 
 def _locked(monkeypatch, target):
@@ -339,7 +339,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     from app.db import connect, init_db, now_iso
     from app.kb.services import build_kb_services
     from app.main import create_app
-    from tests.fakes import KeywordEmbedding
+    from tests.fakes_embedder import FakeEmbedder
     from tests.fakes_store import InMemoryChunkStore
 
     settings = Settings(
@@ -350,7 +350,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     )
     fake_parser.available = False  # the web process itself could not use it
     services = build_kb_services(
-        settings, embed_model=KeywordEmbedding(),
+        settings, embedder=FakeEmbedder(),
         parsers=[fake_parser],
         threaded=False,
         store=InMemoryChunkStore(),
@@ -393,7 +393,10 @@ def test_delete_document_succeeds_when_store_is_down(make_user, kb_services, mon
     monkeypatch.setattr(kb_services.worker, "remove_path", lambda p: removed.append(p))
     _store_down(monkeypatch, kb_services, "delete_document")
     assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 204
-    assert removed == [kb_services.file_path(kb["id"], doc["id"])]
+    assert removed == [
+        kb_services.file_path(kb["id"], doc["id"]),
+        kb_services.doc_dir(kb["id"], doc["id"]),
+    ]
     assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 404
 
 
@@ -423,3 +426,239 @@ def test_deleted_document_is_never_retrieved_after_a_store_outage(make_user, kb_
     sources = next(e for e in events if e["type"] == "sources")
     assert sources["sources"] == [] if "sources" in sources else True
     assert gone["filename"] not in fake_chat.calls[-1]["system"]
+
+
+# ---- file types ----
+
+UNSUPPORTED = "不支援的檔案類型（支援 PDF、txt、md、png、jpg、jpeg、webp）"
+UNREADABLE = "無法讀取檔案內容"
+
+
+def _png(fmt="PNG", size=(4, 3)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, "white").save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def test_unsupported_extension_is_rejected(make_user):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    for name in ("a.docx", "a", "a.pdf.exe", "a.gif"):
+        r = _upload(alice, kb["id"], filename=name)
+        assert (r.status_code, r.json()["detail"]) == (422, UNSUPPORTED), name
+    assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
+
+
+def test_pdf_without_magic_is_unreadable(make_user):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    r = _upload(alice, kb["id"], content=b"not a pdf")
+    assert (r.status_code, r.json()["detail"]) == (422, UNREADABLE)
+
+
+def test_text_upload_encodings(make_user, kb_services):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    utf8 = _upload(alice, kb["id"], filename="a.txt", content="柴犬 是 日本 的 狗".encode("utf-8"))
+    assert utf8.status_code == 201
+    assert (utf8.json()["status"], utf8.json()["parser"]) == ("ready", "text")
+    bom = _upload(alice, kb["id"], filename="b.TXT", content="\ufeff有 BOM 的 檔案".encode("utf-8"))
+    assert bom.status_code == 201 and bom.json()["status"] == "ready"
+    big5 = _upload(alice, kb["id"], filename="c.txt", content="中文內容".encode("big5"))
+    assert (big5.status_code, big5.json()["detail"]) == (422, UNREADABLE)
+    names = [d["filename"] for d in alice.get(f"/api/kbs/{kb['id']}/documents").json()]
+    assert sorted(names) == ["a.txt", "b.TXT"]
+    hits = alice.get(f"/api/kbs/{kb['id']}/search", params={"q": "柴犬"}).json()
+    assert hits[0]["page"] == 0 and hits[0]["kind"] == "text" and hits[0]["filename"] == "a.txt"
+
+
+def test_text_files_use_the_text_parser_whatever_was_requested(make_user, kb_services, fake_parser):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    md = "# 一\n\n甲 乙\n\n# 二\n\n丙 丁".encode("utf-8")
+    fake_parser.available = False  # the requested parser is irrelevant for text files
+    doc = _upload(alice, kb["id"], parser="fake", filename="notes.md", content=md).json()
+    assert (doc["parser"], doc["status"], doc["chunk_count"]) == ("text", "ready", 2)
+    assert fake_parser.parsed == []
+    stored = kb_services.file_path(kb["id"], doc["id"], "notes.md")
+    assert stored.name == f"{doc['id']}.md" and stored.read_bytes() == md
+
+
+def test_text_parser_cannot_be_requested_for_a_pdf(make_user):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    r = _upload(alice, kb["id"], parser="text")
+    assert (r.status_code, r.json()["detail"]) == (422, "未知的解析器")
+    ids = [p["id"] for p in alice.get("/api/parsers").json()]
+    assert "text" not in ids
+
+
+def test_image_upload_is_checked_and_keeps_its_extension(make_user, kb_services, fake_parser):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    for name, fmt in (("a.png", "PNG"), ("b.JPG", "JPEG"), ("c.jpeg", "JPEG"), ("d.webp", "WEBP")):
+        r = _upload(alice, kb["id"], filename=name, content=_png(fmt))
+        assert r.status_code == 201, name
+        doc = r.json()
+        assert doc["parser"] == "fake"
+        path = kb_services.file_path(kb["id"], doc["id"], name)
+        assert path.suffix == "." + name.rsplit(".", 1)[1].lower() and path.is_file()
+        assert fake_parser.parsed[-1] == str(path)
+    bad = _upload(alice, kb["id"], filename="e.png", content=b"\x89PNG\r\n\x1a\nbroken")
+    assert (bad.status_code, bad.json()["detail"]) == (422, UNREADABLE)
+    assert _upload(alice, kb["id"], filename="f.png", content=make_pdf(["x"])).status_code == 422
+
+
+def test_image_upload_must_match_its_extension_and_decode(make_user, monkeypatch):
+    from app.kb.parsers import images
+
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    # JPEG bytes under a .png name, PNG bytes under .webp
+    for name, fmt in (("a.png", "JPEG"), ("b.webp", "PNG"), ("c.jpg", "WEBP")):
+        r = _upload(alice, kb["id"], filename=name, content=_png(fmt))
+        assert (r.status_code, r.json()["detail"]) == (422, UNREADABLE), name
+    # a PNG whose header is fine but whose pixel data is cut short
+    whole = _png("PNG", size=(64, 64))
+    r = _upload(alice, kb["id"], filename="d.png", content=whole[: len(whole) - 30])
+    assert (r.status_code, r.json()["detail"]) == (422, UNREADABLE)
+    monkeypatch.setattr(images, "MAX_PIXELS", 10)
+    r = _upload(alice, kb["id"], filename="e.png", content=_png("PNG", size=(4, 3)))
+    assert (r.status_code, r.json()["detail"]) == (422, UNREADABLE)
+    assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
+
+
+def test_mpo_photo_upload_is_accepted_as_jpeg(make_user, tmp_path):
+    from PIL import Image
+
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    path = tmp_path / "p.jpg"
+    Image.new("RGB", (8, 6), "red").save(
+        path, format="MPO", save_all=True, append_images=[Image.new("RGB", (8, 6), "blue")]
+    )
+    r = _upload(alice, kb["id"], filename="phone.jpg", content=path.read_bytes())
+    assert r.status_code == 201
+    assert _upload(alice, kb["id"], filename="phone.png", content=path.read_bytes()).status_code == 422
+
+
+def test_long_filename_keeps_its_extension(make_user, kb_services):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    name = "長" * 300 + ".txt"
+    doc = _upload(alice, kb["id"], filename=name, content=b"hello").json()
+    assert doc["filename"].endswith(".txt") and len(doc["filename"]) <= 200
+    assert doc["status"] == "ready"
+
+
+def test_parser_gets_a_per_document_folder_removed_with_the_document(make_user, kb_services, fake_parser):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+    folder = kb_services.doc_dir(kb["id"], doc["id"])
+    assert folder == kb_services.kb_dir / str(kb["id"]) / str(doc["id"])
+    assert fake_parser.out_dirs == [folder] and folder.is_dir()
+    (folder / "page_1.png").write_bytes(b"x")
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 204
+    assert not folder.exists()
+    assert not kb_services.file_path(kb["id"], doc["id"]).exists()
+
+
+# ---- image API ----
+
+
+def _doc_with_images(client, kb_services, names=("page_1.png", "img_1_2.png")):
+    kb = _create_kb(client)
+    doc = _upload(client, kb["id"]).json()
+    folder = kb_services.doc_dir(kb["id"], doc["id"])
+    for name in names:
+        (folder / name).write_bytes(_png(size=(5, 4)))
+    return kb, doc
+
+
+def _image_url(kb_id, doc_id, name):
+    return f"/api/kbs/{kb_id}/documents/{doc_id}/images/{name}"
+
+
+def test_image_api_serves_png_with_private_cache(make_user, kb_services):
+    alice = make_user("alice")
+    kb, doc = _doc_with_images(alice, kb_services)
+    for name in ("page_1.png", "img_1_2.png"):
+        r = alice.get(_image_url(kb["id"], doc["id"], name))
+        assert r.status_code == 200, name
+        assert r.headers["content-type"] == "image/png"
+        assert r.headers["cache-control"] == "private, no-cache"
+        assert r.content == (kb_services.doc_dir(kb["id"], doc["id"]) / name).read_bytes()
+
+
+def test_image_api_is_401_logged_out_and_404_for_other_users(make_user, client, kb_services):
+    alice, bob = make_user("alice"), make_user("bob")
+    kb, doc = _doc_with_images(alice, kb_services)
+    url = _image_url(kb["id"], doc["id"], "page_1.png")
+    assert bob.get(url).status_code == 404
+    assert client.get(url).status_code == 401  # logged out: like every other API
+    bob_kb = _create_kb(bob)
+    # bob's own kb id with alice's document
+    assert bob.get(_image_url(bob_kb["id"], doc["id"], "page_1.png")).status_code == 404
+
+
+def test_image_api_is_404_for_missing_or_deleted_documents(make_user, kb_services, settings):
+    from app.db import connect
+    from app.kb import store
+
+    alice = make_user("alice")
+    kb, doc = _doc_with_images(alice, kb_services)
+    other = _create_kb(alice, "另一個")
+    assert alice.get(_image_url(other["id"], doc["id"], "page_1.png")).status_code == 404
+    assert alice.get(_image_url(kb["id"], doc["id"] + 999, "page_1.png")).status_code == 404
+    assert alice.get(_image_url(kb["id"], doc["id"], "page_2.png")).status_code == 404
+    # the folder can outlive the row while a file is in use; the row decides
+    conn = connect(settings.db_path)
+    try:
+        store.delete_document(conn, kb["id"], doc["id"])
+    finally:
+        conn.close()
+    assert kb_services.doc_dir(kb["id"], doc["id"]).is_dir()
+    assert alice.get(_image_url(kb["id"], doc["id"], "page_1.png")).status_code == 404
+
+
+def test_image_api_name_whitelist(make_user, kb_services):
+    alice = make_user("alice")
+    names = ("page_1.png", "a.png", "page_1.jpg", "page_x.png", "page_1_2_3.png", "PAGE_1.png", "page_1.png.png")
+    kb, doc = _doc_with_images(alice, kb_services, names)
+    assert alice.get(_image_url(kb["id"], doc["id"], "page_1.png")).status_code == 200
+    for name in names[1:]:
+        assert alice.get(_image_url(kb["id"], doc["id"], name)).status_code == 404, name
+
+
+def test_image_api_rejects_traversal(make_user, kb_services, settings):
+    from pathlib import Path
+
+    alice = make_user("alice")
+    kb, doc = _doc_with_images(alice, kb_services)
+    # files a traversal would reach: the uploaded PDF next to the folder and the database
+    secret = kb_services.doc_dir(kb["id"], doc["id"]).parent / "page_1.png"
+    secret.write_bytes(_png())
+    assert Path(settings.db_path).is_file()
+    base = f"/api/kbs/{kb['id']}/documents/{doc['id']}/images/"
+    for tail in (
+        "../app.db",
+        "..%2Fapp.db",
+        "%2e%2e%2fapp.db",
+        "%2e%2e/%2e%2e/test.db",
+        "..%2Fpage_1.png",
+        "..%5Cpage_1.png",
+        r"..\page_1.png",
+        "%2e%2e%5c%2e%2e%5ctest.db",
+        "page_1.png%2F..%2F..%2Fpage_1.png",
+        "page_1.png%00",
+        "%2Fetc%2Fpasswd",
+        "C:%5CWindows%5Cwin.ini",
+    ):
+        r = alice.get(base + tail)
+        assert r.status_code == 404, tail
+        assert r.headers.get("content-type") != "image/png", tail

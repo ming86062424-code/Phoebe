@@ -24,14 +24,26 @@ export interface ConversationDetail extends Conversation {
   messages: Message[]
 }
 
+export interface SourceImage {
+  name: string
+  width: number
+  height: number
+}
+
 export interface Source {
   document_id: number
   filename: string
-  page: number
-  score: number
+  page: number // 0 for text files
+  score: number // RRF
   vector_score?: number | null
   keyword_score?: number | null
-  text: string
+  text: string // the whole chunk
+  // the knowledge base the source came from (chat sources only; missing on older messages)
+  kb_id?: number
+  // missing on sources saved before images were indexed
+  kind?: 'text' | 'page_image'
+  images?: SourceImage[]
+  page_image?: SourceImage | null
 }
 
 export interface KnowledgeBase {

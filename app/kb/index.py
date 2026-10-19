@@ -1,41 +1,52 @@
 import logging
 import threading
-from dataclasses import asdict, dataclass
-
-from llama_index.core import Document
-from llama_index.core.base.embeddings.base import BaseEmbedding
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import BaseNode, MetadataMode, TextNode
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Protocol
 
 from app.kb.chunk_store import ChunkRecord, ChunkStore, Hit
-from app.kb.parsers.base import PageText
+from app.kb.parsers.base import ImageRef, ParsedChunk
 
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 64
-SNIPPET_CHARS = 400
 MAX_TEXT_CHARS = 8192
 RRF_K = 60
 CANDIDATE_FACTOR = 4  # each retrieval path returns top_k * 4 candidates for fusion
+# page images per embedding request: ~8 PNGs of a 1536 px page stay far below the
+# embedder's 100 MB request cap, and only one batch of image bytes is held at a time
+IMAGE_BATCH_SIZE = 8
+
+
+class Embedder(Protocol):
+    def embed_queries(self, texts: list[str]) -> list[list[float]]: ...
+
+    def embed_documents(self, title: str, texts: list[str]) -> list[list[float]]: ...
+
+    def embed_images(self, images: list[bytes]) -> list[list[float]]: ...
+
+    def embed_image_texts(self, items: list[tuple[bytes, str]]) -> list[list[float]]: ...
+
+
+def _image_dict(ref: ImageRef) -> dict:
+    return {"name": ref.name, "width": ref.width, "height": ref.height}
 
 
 @dataclass(frozen=True)
 class Source:
     document_id: int
     filename: str
-    page: int
+    page: int  # 0 for text files
     score: float  # RRF score
-    text: str  # short snippet for the UI and the saved message
-    content: str  # the whole chunk, for the model
+    text: str  # the whole chunk: for the model, the UI and the saved message
     vector_score: float | None = None  # cosine, None when the dense path missed it
     keyword_score: float | None = None  # BM25, None when the keyword path missed it
+    kind: str = "text"  # "text" or "page_image"
+    images: list[dict] = field(default_factory=list)  # [{"name", "width", "height"}]
+    page_image: dict | None = None  # {"name", "width", "height"}
 
     def to_dict(self) -> dict:
-        """The client/database form: everything but the full chunk."""
-        data = asdict(self)
-        del data["content"]
-        return data
+        """The client/database form."""
+        return asdict(self)
 
 
 def rrf_fuse(
@@ -65,12 +76,11 @@ def rrf_fuse(
 
 
 class KnowledgeIndex:
-    """Chunks, embeds and retrieves document pages; hybrid dense + BM25 search via a ChunkStore."""
+    """Embeds and retrieves parsed chunks; hybrid dense + BM25 search via a ChunkStore."""
 
-    def __init__(self, store: ChunkStore, embed_model: BaseEmbedding):
+    def __init__(self, store: ChunkStore, embedder: Embedder):
         self._store = store
-        self._embed_model = embed_model
-        self._splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+        self._embedder = embedder
         self._ready = False
         self._ready_lock = threading.Lock()
 
@@ -85,57 +95,28 @@ class KnowledgeIndex:
                 self._ready = True
 
     def add_document(
-        self, kb_id: int, document_id: int, filename: str, pages: list[PageText]
+        self,
+        kb_id: int,
+        document_id: int,
+        filename: str,
+        chunks: list[ParsedChunk],
+        image_dir: Path | None = None,
     ) -> int:
-        """Index the pages and return the number of chunks written."""
-        docs = [
-            Document(
-                text=p.text,
-                metadata={"kb_document_id": document_id, "filename": filename, "page": p.page},
-                excluded_embed_metadata_keys=["kb_document_id", "page"],
-                excluded_llm_metadata_keys=["kb_document_id"],
-            )
-            for p in pages
-            if p.text.strip()
-        ]
-        nodes = self._splitter.get_nodes_from_documents(docs)
-        return self._write_nodes(kb_id, document_id, filename, nodes)
-
-    def add_chunks(
-        self, kb_id: int, document_id: int, filename: str, chunks: list[tuple[int, str]]
-    ) -> int:
-        """Index ready-made (page, text) chunks without splitting them again.
+        """Index the chunks as they are (one per page) and return how many were written.
 
         Replaces any chunks the document already has, so repeating it is harmless.
+        "page_image" chunks read `image_dir / chunk.page_image.name`.
         """
-        nodes = [
-            TextNode(
-                text=text,
-                metadata={"kb_document_id": document_id, "filename": filename, "page": page},
-                excluded_embed_metadata_keys=["kb_document_id", "page"],
-                excluded_llm_metadata_keys=["kb_document_id"],
-            )
-            for page, text in chunks
-            if text.strip()
-        ]
-        if not nodes:
+        kept = [c for c in chunks if c.kind == "page_image" or c.text.strip()]
+        if not kept:
             self._store.delete_document(kb_id, document_id)
             return 0
-        return self._write_nodes(kb_id, document_id, filename, nodes)
-
-    def _write_nodes(
-        self, kb_id: int, document_id: int, filename: str, nodes: list[BaseNode]
-    ) -> int:
-        if not nodes:
-            return 0
-        # Embedding calls Ollama and can take minutes for a big PDF; no lock is held.
-        embeddings = self._embed_model.get_text_embedding_batch(
-            [n.get_content(metadata_mode=MetadataMode.EMBED) for n in nodes]
-        )
+        # Embedding can take minutes for a big PDF; no lock is held.
+        embeddings = self._embed(filename, kept, image_dir)
         self._ensure_ready(len(embeddings[0]))
         records = []
-        for i, (node, embedding) in enumerate(zip(nodes, embeddings, strict=True)):
-            text = node.get_content()
+        for i, (chunk, embedding) in enumerate(zip(kept, embeddings, strict=True)):
+            text = chunk.text
             if len(text) > MAX_TEXT_CHARS:
                 logger.warning(
                     "chunk %s:%s has %d characters; truncated to %d",
@@ -150,16 +131,54 @@ class KnowledgeIndex:
                     kb_id=kb_id,
                     document_id=document_id,
                     filename=filename,
-                    page=int(node.metadata["page"]),
+                    page=int(chunk.page),
                     chunk_index=i,
                     text=text,
                     dense=[float(x) for x in embedding],
+                    kind=chunk.kind,
+                    images=list(chunk.images),
+                    page_image=chunk.page_image,
                 )
             )
         # a retry must not leave the previous attempt's chunks behind
         self._store.delete_document(kb_id, document_id)
         self._store.insert(records)
         return len(records)
+
+    def _embed(
+        self, filename: str, chunks: list[ParsedChunk], image_dir: Path | None
+    ) -> list[list[float]]:
+        """One vector per chunk, in order: text chunks as documents (the embedder adds the
+        `title: ... | text: ...` prefix), page_image chunks as image + text."""
+        vectors: list[list[float] | None] = [None] * len(chunks)
+        text_at = [i for i, c in enumerate(chunks) if c.kind != "page_image"]
+        image_at = [i for i, c in enumerate(chunks) if c.kind == "page_image"]
+        if text_at:
+            found = self._embedder.embed_documents(filename, [chunks[i].text for i in text_at])
+            for i, vector in zip(text_at, found, strict=True):
+                vectors[i] = vector
+        if image_at and image_dir is None:
+            raise ValueError("page_image chunks need image_dir")
+        for start in range(0, len(image_at), IMAGE_BATCH_SIZE):
+            batch = image_at[start : start + IMAGE_BATCH_SIZE]
+            items = []
+            for i in batch:
+                ref = chunks[i].page_image
+                if ref is None:
+                    raise ValueError(f"page {chunks[i].page} is a page_image chunk without an image")
+                items.append(((image_dir / ref.name).read_bytes(), chunks[i].text))
+            found = self._embedder.embed_image_texts(items)
+            for i, vector in zip(batch, found, strict=True):
+                vectors[i] = vector
+        return vectors  # type: ignore[return-value]
+
+    def add_chunks(
+        self, kb_id: int, document_id: int, filename: str, chunks: list[tuple[int, str]]
+    ) -> int:
+        """Index ready-made (page, text) chunks, e.g. migrated ones; they are kind "text"."""
+        return self.add_document(
+            kb_id, document_id, filename, [ParsedChunk(page, text) for page, text in chunks]
+        )
 
     def delete_document(self, kb_id: int, document_id: int) -> None:
         self._store.delete_document(kb_id, document_id)
@@ -170,7 +189,7 @@ class KnowledgeIndex:
     def search(self, kb_id: int, query: str, top_k: int) -> list[Source]:
         if top_k <= 0:
             return []
-        vector = [float(x) for x in self._embed_model.get_query_embedding(query)]
+        vector = [float(x) for x in self._embedder.embed_queries([query])[0]]
         self._ensure_ready(len(vector))
         limit = top_k * CANDIDATE_FACTOR
         dense = self._store.dense_search(kb_id, vector, limit)
@@ -181,10 +200,12 @@ class KnowledgeIndex:
                 filename=hit.filename,
                 page=hit.page,
                 score=round(rrf, 4),
-                text=hit.text[:SNIPPET_CHARS],
-                content=hit.text,
+                text=hit.text,
                 vector_score=None if vec is None else round(vec, 4),
                 keyword_score=None if kw is None else round(kw, 4),
+                kind=hit.kind,
+                images=[_image_dict(ref) for ref in hit.images],
+                page_image=None if hit.page_image is None else _image_dict(hit.page_image),
             )
             for hit, rrf, vec, kw in rrf_fuse(dense, keyword, top_k)
         ]

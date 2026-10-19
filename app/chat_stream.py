@@ -3,7 +3,7 @@ import json
 import logging
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -15,7 +15,7 @@ from starlette.background import BackgroundTask
 from app import conversations
 from app.config import REPLY_HEARTBEAT_SECONDS
 from app.db import connect, now_iso
-from app.llm import ChatClient, ChatDelta, LlmError, LlmUnavailable
+from app.llm import ChatClient, ChatDelta, ImagesNotSupported, LlmError, LlmUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,8 @@ UNAVAILABLE_DETAIL = "無法連線到 Ollama"
 INTERRUPTED_DETAIL = "回覆中斷"
 BUSY_DETAIL = "這個對話正在產生回覆，請稍候"
 SAVE_FAILED_DETAIL = "回覆無法儲存"
+# added to the system prompt when the model is asked again without the images
+IMAGES_NOT_SENT_NOTE = "（圖片未提供給模型）"
 
 
 class ReplyLock:
@@ -125,6 +127,44 @@ async def _keep_alive(lock: ReplyLock, interval: float) -> None:
             logger.exception("更新回覆鎖失敗")
 
 
+def _with_images(history: list[dict], images: list[bytes]) -> list[dict]:
+    """The history for the model, with images on the last user message (a copy)."""
+    if not images or not history or history[-1]["role"] != "user":
+        return history
+    return [*history[:-1], {**history[-1], "images": images}]
+
+
+async def _open_stream(
+    client: ChatClient,
+    history: list[dict],
+    system: str | None,
+    temperature: float | None,
+    images: list[bytes],
+) -> tuple[AsyncIterator[ChatDelta], ChatDelta | None]:
+    """Start the reply and wait for its first delta.
+
+    A model that rejects the images is asked once more without them. That can only
+    happen here, before anything has reached the user; a later failure is reported as is.
+    """
+    stream = client.stream_chat(
+        _with_images(history, images), system=system, temperature=temperature
+    )
+    try:
+        return stream, await anext(stream)
+    except StopAsyncIteration:
+        return stream, None
+    except ImagesNotSupported as e:
+        if not images:
+            raise
+        logger.info("模型不接受圖片，改為不帶圖重試：%s", e)
+    system = "\n\n".join(p for p in (system, IMAGES_NOT_SENT_NOTE) if p)
+    stream = client.stream_chat(history, system=system, temperature=temperature)
+    try:
+        return stream, await anext(stream)
+    except StopAsyncIteration:
+        return stream, None
+
+
 def _line(event: dict) -> str:
     return json.dumps(event, ensure_ascii=False) + "\n"
 
@@ -138,14 +178,24 @@ async def ndjson_reply(
     sources: list[dict] | None = None,
     system: str | None = None,
     temperature: float | None = None,
+    images: list[bytes] | None = None,
 ) -> StreamingResponse:
     """Stream the reply; release() runs once the reply ends, however it ends.
 
     When sources is given, they are emitted first and saved with the reply.
+    images go to the model with the last user message only (never into the database).
     """
     try:
         return await _ndjson_reply(
-            client, history, conversation_id, db_path, release, sources, system, temperature
+            client,
+            history,
+            conversation_id,
+            db_path,
+            release,
+            sources,
+            system,
+            temperature,
+            images or [],
         )
     except BaseException:
         release()
@@ -161,12 +211,10 @@ async def _ndjson_reply(
     sources: list[dict] | None,
     system: str | None,
     temperature: float | None,
+    images: list[bytes],
 ) -> StreamingResponse:
-    stream = client.stream_chat(history, system=system, temperature=temperature)
     try:
-        first = await anext(stream)
-    except StopAsyncIteration:
-        first = None
+        stream, first = await _open_stream(client, history, system, temperature, images)
     except LlmUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except LlmError as e:

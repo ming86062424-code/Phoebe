@@ -176,3 +176,31 @@ def delete_document(conn: sqlite3.Connection, kb_id: int, doc_id: int) -> bool:
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+def requeue_finished_documents(
+    conn: sqlite3.Connection, dry_run: bool = False
+) -> dict[int, int]:
+    """Put every 'ready' or 'failed' document back in the queue; returns kb_id -> count.
+
+    Documents a worker may be handling (pending, parsing, indexing) are left alone, and
+    queued ones are already in line. The status check is part of the UPDATE, so a document
+    that a worker claims in the meantime is not touched. error, chunk_count and progress
+    are reset the same way a fresh upload starts.
+    """
+    if dry_run:
+        rows = conn.execute(
+            "SELECT kb_id, id FROM kb_documents WHERE status IN ('ready', 'failed')"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "UPDATE kb_documents SET status = 'queued', error = NULL, chunk_count = 0, "
+            "progress_done = 0, progress_total = 0, updated_at = ? "
+            "WHERE status IN ('ready', 'failed') RETURNING kb_id, id",
+            (now_iso(),),
+        ).fetchall()
+        conn.commit()
+    counts: dict[int, int] = {}
+    for row in rows:
+        counts[row["kb_id"]] = counts.get(row["kb_id"], 0) + 1
+    return counts

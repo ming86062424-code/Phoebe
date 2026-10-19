@@ -342,3 +342,62 @@ async def test_gemini_list_models_excludes_non_chat_variants():
     ]
     out = await make(FakeModels(models=[m(n) for n in names])).list_models()
     assert out == ["gemini-2.5-flash"]
+
+
+# ---- images ----
+
+PNG_A, PNG_B = b"\x89PNG-a", b"\x89PNG-b"
+
+
+async def test_gemini_sends_images_as_png_parts_on_the_last_user_message():
+    models = FakeModels([resp(part("x"))])
+    messages = [
+        {"role": "user", "content": "一", "images": [PNG_B]},
+        {"role": "assistant", "content": "二"},
+        {"role": "user", "content": "三", "images": [PNG_A, PNG_B]},
+    ]
+    await anext(make(models).stream_chat(messages))
+    contents = models.calls[0]["contents"]
+    last = contents[-1].parts
+    assert [p.inline_data.data for p in last[:2]] == [PNG_A, PNG_B]
+    assert {p.inline_data.mime_type for p in last[:2]} == {"image/png"}
+    assert last[2].text == "三" and last[2].inline_data is None
+    assert [p.text for p in contents[0].parts] == ["一"]
+
+
+async def test_gemini_without_images_sends_only_text():
+    models = FakeModels([resp(part("x"))])
+    await collect(make(models))
+    for c in models.calls[0]["contents"]:
+        assert len(c.parts) == 1 and c.parts[0].inline_data is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Unable to process input image. Please retry or report in https://...",
+        "Image input modality is not enabled for models/gemini-x",
+        "This model does not support multimodal input",
+    ],
+)
+async def test_gemini_rejected_images_raise_images_not_supported(message):
+    from app.llm import ImagesNotSupported
+
+    models = FakeModels(error=api_error(400, message))
+    with pytest.raises(ImagesNotSupported):
+        await anext(make(models).stream_chat([{"role": "user", "content": "x", "images": [PNG_A]}]))
+
+
+async def test_gemini_image_like_error_without_images_is_ordinary():
+    from app.llm import ImagesNotSupported
+
+    with pytest.raises(LlmStreamError) as exc:
+        await collect(make(FakeModels(error=api_error(400, "Unable to process input image"))))
+    assert not isinstance(exc.value, ImagesNotSupported)
+    with pytest.raises(LlmStreamError) as exc:
+        await anext(
+            make(FakeModels(error=api_error(400, "Request contains an invalid argument."))).stream_chat(
+                [{"role": "user", "content": "x", "images": [PNG_A]}]
+            )
+        )
+    assert not isinstance(exc.value, ImagesNotSupported)

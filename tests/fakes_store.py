@@ -31,7 +31,7 @@ class InMemoryChunkStore:
     def ensure_ready(self, dim: int) -> None:
         if self.dim is not None and self.dim != dim:
             raise KnowledgeStoreError(
-                f"EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{self.dim}）不同，請重建知識庫"
+                f"embedding 模型的向量維度（{dim}）與既有知識庫（{self.dim}）不同，請重建知識庫"
             )
         self.dim = dim
 
@@ -52,7 +52,10 @@ class InMemoryChunkStore:
         self.rows = {k: r for k, r in self.rows.items() if r.kb_id != kb_id}
 
     def _hit(self, chunk_id: str, r: ChunkRecord, score: float) -> Hit:
-        return Hit(chunk_id, r.kb_id, r.document_id, r.filename, r.page, r.text, score)
+        return Hit(
+            chunk_id, r.kb_id, r.document_id, r.filename, r.page, r.text, score,
+            kind=r.kind, images=list(r.images), page_image=r.page_image,
+        )  # fmt: skip
 
     def dense_search(self, kb_id: int, vector: list[float], limit: int) -> list[Hit]:
         scored = [

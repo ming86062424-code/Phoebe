@@ -3,9 +3,16 @@ import { Pencil, RotateCcw, Search, Trash2, Upload } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import type { KbDocument, KnowledgeBase, ParserInfo, Source } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
+import { SourceCards } from './SourceCard'
 import styles from './KbDetail.module.css'
 
 const POLL_MS = 2000
+const ACCEPT = '.pdf,.txt,.md,.png,.jpg,.jpeg,.webp'
+
+// .txt and .md always go through the text parser on the server
+function isTextFile(file: File): boolean {
+  return /\.(txt|md)$/i.test(file.name)
+}
 
 const STATUS_TEXT: Record<KbDocument['status'], string> = {
   pending: '排隊中',
@@ -141,8 +148,10 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
     }
   }
 
-  const parserLabel = (id: string) => parsers.find((p) => p.id === id)?.label.split('（')[0] ?? id
+  const parserLabel = (id: string) =>
+    id === 'text' ? '文字' : (parsers.find((p) => p.id === id)?.label.split('（')[0] ?? id)
   const selectedParser = parsers.find((p) => p.id === parser)
+  const needsParser = files.length === 0 || !files.every(isTextFile)
 
   return (
     <div className={styles.detail}>
@@ -192,44 +201,49 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
       )}
 
       <form className={styles.card} onSubmit={upload}>
-        <h2 className={styles.cardTitle}>上傳 PDF</h2>
+        <h2 className={styles.cardTitle}>上傳文件</h2>
         <div className={styles.uploadRow}>
           <input
             ref={fileInput}
             type="file"
-            accept="application/pdf,.pdf"
+            accept={ACCEPT}
             multiple
-            aria-label="選擇 PDF 檔案"
+            aria-label="選擇檔案"
             onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
           />
-          <select
-            aria-label="解析器"
-            value={parser}
-            onChange={(e) => setParser(e.target.value)}
-          >
-            {parsers.map((p) => (
-              <option key={p.id} value={p.id} disabled={!p.available}>
-                {p.label}
-                {p.available ? '' : '（不可用）'}
-              </option>
-            ))}
-          </select>
+          {needsParser && (
+            <select
+              aria-label="解析器"
+              value={parser}
+              onChange={(e) => setParser(e.target.value)}
+            >
+              {parsers.map((p) => (
+                <option key={p.id} value={p.id} disabled={!p.available}>
+                  {p.label}
+                  {p.available ? '' : '（不可用）'}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="submit"
             className={styles.primary}
-            disabled={files.length === 0 || uploading || selectedParser?.available === false}
+            disabled={
+              files.length === 0 || uploading || (needsParser && selectedParser?.available === false)
+            }
           >
             <Upload size={16} />
             {uploading ? '上傳中…' : '上傳'}
           </button>
         </div>
-        {parsers
-          .filter((p) => !p.available && p.reason)
-          .map((p) => (
-            <p key={p.id} className={styles.hint}>
-              {p.label.split('（')[0]}：{p.reason}
-            </p>
-          ))}
+        {needsParser &&
+          parsers
+            .filter((p) => !p.available && p.reason)
+            .map((p) => (
+              <p key={p.id} className={styles.hint}>
+                {p.label.split('（')[0]}：{p.reason}
+              </p>
+            ))}
       </form>
 
       <div className={styles.card}>
@@ -306,20 +320,7 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
           (results.length === 0 ? (
             <p className={styles.muted}>沒有找到相關段落</p>
           ) : (
-            <ol className={styles.results}>
-              {results.map((r, i) => (
-                <li key={i} className={styles.result}>
-                  <div className={styles.resultTitle}>
-                    {r.filename} 第 {r.page} 頁
-                    <span className={styles.score}>
-                      向量 {r.vector_score == null ? '—' : r.vector_score.toFixed(3)}／關鍵字{' '}
-                      {r.keyword_score == null ? '—' : r.keyword_score.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className={styles.snippet}>{r.text}</div>
-                </li>
-              ))}
-            </ol>
+            <SourceCards sources={results} kbId={kb.id} />
           ))}
       </form>
 

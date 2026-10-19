@@ -2,14 +2,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from llama_index.core.base.embeddings.base import BaseEmbedding
-
 from app.config import Settings
 from app.db import connect
 from app.kb.chunk_store import ChunkStore
-from app.kb.index import KnowledgeIndex
+from app.kb.embedder_client import EmbedderClient
+from app.kb.filetypes import file_extension
+from app.kb.index import Embedder, KnowledgeIndex
 from app.kb.milvus_store import MilvusChunkStore
 from app.kb.parsers.base import Parser
+from app.kb.parsers.text_parser import TextParser
 from app.kb.worker import IngestWorker
 
 
@@ -21,14 +22,20 @@ PARSER_STATUS_MAX_AGE_SECONDS = 45
 @dataclass
 class KbServices:
     index: KnowledgeIndex
-    parsers: dict[str, Parser]
+    parsers: dict[str, Parser]  # the ones a user can pick for PDFs and images
     kb_dir: Path
     db_path: str = ""
     external: bool = False
+    text_parser: Parser = field(default_factory=TextParser)
     worker: IngestWorker = field(init=False)
 
-    def file_path(self, kb_id: int, doc_id: int) -> Path:
-        return self.kb_dir / str(kb_id) / f"{doc_id}.pdf"
+    def file_path(self, kb_id: int, doc_id: int, filename: str = "") -> Path:
+        """The uploaded file, `<kb_dir>/<kb>/<doc>.<ext>` (ext from the filename)."""
+        return self.kb_dir / str(kb_id) / f"{doc_id}{file_extension(filename)}"
+
+    def doc_dir(self, kb_id: int, doc_id: int) -> Path:
+        """The document's folder for the images its parser writes: `<kb_dir>/<kb>/<doc>/`."""
+        return self.kb_dir / str(kb_id) / str(doc_id)
 
     def availability(self, parser_id: str) -> tuple[bool, str]:
         """Whether a parser can be used right now.
@@ -67,27 +74,13 @@ class KbServices:
 
 def build_kb_services(
     settings: Settings,
-    embed_model: BaseEmbedding | None = None,
+    embedder: Embedder | None = None,
     parsers: list[Parser] | None = None,
     threaded: bool = True,
     store: ChunkStore | None = None,
 ) -> KbServices:
-    if embed_model is None:
-        from llama_index.embeddings.ollama import OllamaEmbedding
-
-        # EmbeddingGemma is trained with task prefixes; they widen the gap between
-        # relevant and irrelevant chunks in our retrieval checks.
-        prefixes = (
-            {
-                "query_instruction": "task: search result | query: ",
-                "text_instruction": "title: none | text: ",
-            }
-            if settings.embed_model.startswith("embeddinggemma")
-            else {}
-        )
-        embed_model = OllamaEmbedding(
-            model_name=settings.embed_model, base_url=settings.ollama_base_url, **prefixes
-        )
+    if embedder is None:
+        embedder = EmbedderClient(settings.embedder_url)
     if parsers is None:
         from app.kb.parsers.lightonocr import LightOnOcrParser
         from app.kb.parsers.liteparse_parser import LiteParseParser
@@ -102,7 +95,7 @@ def build_kb_services(
         store = MilvusChunkStore(
             settings.milvus_uri, settings.milvus_token, settings.milvus_collection
         )
-    index = KnowledgeIndex(store, embed_model)
+    index = KnowledgeIndex(store, embedder)
     services = KbServices(
         index=index,
         parsers={p.id: p for p in parsers},
@@ -113,8 +106,9 @@ def build_kb_services(
     services.worker = IngestWorker(
         settings.db_path,
         index,
-        services.parsers,
-        lambda kb_id, doc_id: str(services.file_path(kb_id, doc_id)),
+        {**services.parsers, services.text_parser.id: services.text_parser},
+        lambda kb_id, doc_id, filename: str(services.file_path(kb_id, doc_id, filename)),
+        doc_dir=services.doc_dir,
         threaded=threaded,
         poll_seconds=settings.kb_worker_poll_seconds,
         stale_seconds=settings.kb_stale_seconds,

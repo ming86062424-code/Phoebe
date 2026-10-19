@@ -381,3 +381,344 @@ def test_store_down_during_retrieval_returns_503(admin_chat, kb_services, monkey
     r = _send(c, cid, "嗨")
     assert r.status_code == 503
     assert r.json()["detail"] == "知識庫檢索失敗：無法連線到 Milvus"
+
+
+# --- knowledge-base images sent to the model ------------------------------
+
+import io
+import logging
+
+from app.kb.index import Source
+from app.llm import ImagesNotSupported
+from tests.pdf_factory import make_pdf
+
+IMAGE_NOTE = "（圖片未提供給模型）"
+
+
+def _png_bytes(size, color):
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _ref(name, size=(4, 3)):
+    return {"name": name, "width": size[0], "height": size[1]}
+
+
+def _kb_chat_with_images(c, kb_services, monkeypatch, layout):
+    """A conversation on a knowledge base whose search returns `layout`: a list of
+    (document index, page_image name or None, [image names]) in RRF order.
+
+    Returns (cid, kb_id, document ids, {(document index, name): bytes written}).
+    """
+    kb_id = c.post("/api/kbs", json={"name": "手冊"}).json()["id"]
+    docs = []
+    for i in range(1 + max(d for d, _, _ in layout)):
+        r = c.post(
+            f"/api/kbs/{kb_id}/documents",
+            files={"file": (f"d{i}.pdf", make_pdf(["x"]), "application/pdf")},
+            data={"parser": "fake"},
+        )
+        docs.append(r.json()["id"])
+    colors = iter(["red", "green", "blue", "yellow", "white", "black", "gray", "orange"])
+    files = {}
+    sources = []
+    for n, (d, page_image, images) in enumerate(layout, start=1):
+        for name in ([page_image] if page_image else []) + images:
+            if (d, name) in files:  # the same image cited by another source
+                continue
+            data = _png_bytes((4 + n, 3), next(colors))
+            files[(d, name)] = data
+            (kb_services.doc_dir(kb_id, docs[d]) / name).write_bytes(data)
+        sources.append(
+            Source(
+                document_id=docs[d],
+                filename=f"d{d}.pdf",
+                page=n,
+                score=1 / n,
+                text=f"內容 {n}",
+                kind="page_image" if page_image else "text",
+                images=[_ref(x) for x in images],
+                page_image=_ref(page_image) if page_image else None,
+            )
+        )
+    monkeypatch.setattr(kb_services.index, "search", lambda *a, **k: list(sources))
+    cid = _new_conv(c)
+    c.patch(f"/api/conversations/{cid}", json={"kb_id": kb_id})
+    return cid, kb_id, docs, files
+
+
+LAYOUT = [
+    (0, "page_1.png", ["img_1_1.png", "img_1_2.png"]),
+    (1, None, []),
+    (1, "page_3.png", ["img_3_1.png"]),
+]
+
+
+def test_kb_answer_sends_source_images_in_order_up_to_the_limit(
+    make_user, fake_chat, kb_services, settings, monkeypatch
+):
+    from app.db import connect
+
+    c = make_user("alice")
+    cid, _, _, files = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+    ev = events(_send(c, cid, "圖片 裡 有 什麼"))
+    assert ev[0]["type"] == "sources" and ev[-1]["type"] == "done"
+    sent = fake_chat.calls[0]["messages"]
+    assert sent[-1]["images"] == [
+        files[(0, "page_1.png")],
+        files[(0, "img_1_1.png")],
+        files[(0, "img_1_2.png")],
+        files[(1, "page_3.png")],
+    ]
+    system = fake_chat.calls[0]["system"]
+    assert "附圖依序對應參考資料 [編號]" in system
+    for line in ("附圖 1 → [1]", "附圖 2 → [1]", "附圖 3 → [1]", "附圖 4 → [3]"):
+        assert line in system
+    assert "附圖 5" not in system and IMAGE_NOTE not in system
+    # the sources event is unchanged: plain dicts with the new fields
+    assert ev[0]["sources"][0]["page_image"] == _ref("page_1.png")
+    # nothing about the images is kept: the next turn's history has no image bytes
+    _send(c, cid, "再問")
+    assert all("images" not in m for m in fake_chat.calls[1]["messages"][:-1])
+    conn = connect(settings.db_path)
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
+        rows = conn.execute("SELECT content, sources FROM messages").fetchall()
+    finally:
+        conn.close()
+    assert "images" not in cols
+    assert all("iVBOR" not in (r[0] + (r[1] or "")) for r in rows)  # no base64 PNG
+
+
+def test_sources_carry_their_knowledge_base_id(make_user, fake_chat, kb_services, monkeypatch):
+    """The UI builds image URLs from it, even after the conversation switches knowledge base."""
+    c = make_user("alice")
+    cid, kb_id, _, _ = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+    ev = events(_send(c, cid, "圖片"))
+    assert [s["kb_id"] for s in ev[0]["sources"]] == [kb_id] * len(LAYOUT)
+    c.patch(f"/api/conversations/{cid}", json={"kb_id": None})
+    saved = [m for m in _messages(c, cid) if m["role"] == "assistant"][0]
+    assert [s["kb_id"] for s in saved["sources"]] == [kb_id] * len(LAYOUT)
+
+
+def test_kb_max_images_limits_and_zero_disables(settings, kb_services, monkeypatch):
+    for limit in (2, 0):
+        app = create_app(replace(settings, kb_max_images=limit), kb_services)
+        fake = FakeChatClient()
+        app.dependency_overrides[get_chat_client] = lambda: fake
+        c = TestClient(app)
+        creds = {"username": f"user{limit}", "password": "password123"}
+        assert c.post("/api/auth/register", json=creds).status_code == 201
+        assert c.post("/api/auth/login", json=creds).status_code == 200
+        cid, *_ = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+        _send(c, cid, "嗨")
+        last = fake.calls[0]["messages"][-1]
+        assert len(last.get("images", [])) == limit
+        assert ("附圖依序對應參考資料" in fake.calls[0]["system"]) == bool(limit)
+        if limit == 0:
+            assert last == {"role": "user", "content": "嗨"}
+
+
+def test_missing_image_files_are_skipped_with_a_log(
+    make_user, fake_chat, kb_services, monkeypatch, caplog
+):
+    c = make_user("alice")
+    cid, kb_id, docs, files = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+    (kb_services.doc_dir(kb_id, docs[0]) / "img_1_1.png").unlink()
+    with caplog.at_level(logging.INFO):
+        ev = events(_send(c, cid, "嗨"))
+    assert ev[-1]["type"] == "done"
+    assert fake_chat.calls[0]["messages"][-1]["images"] == [
+        files[(0, "page_1.png")],
+        files[(0, "img_1_2.png")],
+        files[(1, "page_3.png")],
+        files[(1, "img_3_1.png")],
+    ]
+    system = fake_chat.calls[0]["system"]
+    assert "附圖 2 → [1]" in system and "附圖 3 → [3]" in system and "附圖 4 → [3]" in system
+    assert "img_1_1.png" in caplog.text
+
+
+def test_large_images_are_downscaled_before_sending(make_user, fake_chat, kb_services, monkeypatch):
+    from PIL import Image
+
+    c = make_user("alice")
+    cid, kb_id, docs, files = _kb_chat_with_images(
+        c, kb_services, monkeypatch, [(0, None, ["img_1_1.png", "img_1_2.png"])]
+    )
+    big = io.BytesIO()
+    Image.new("RGB", (3072, 1000), "red").save(big, format="PNG")
+    (kb_services.doc_dir(kb_id, docs[0]) / "img_1_1.png").write_bytes(big.getvalue())
+    _send(c, cid, "嗨")
+    sent = fake_chat.calls[0]["messages"][-1]["images"]
+    with Image.open(io.BytesIO(sent[0])) as im:
+        assert (im.format, im.size) == ("PNG", (1536, 500))
+    assert sent[1] == files[(0, "img_1_2.png")]  # small images are passed through untouched
+
+
+def test_kb_answer_without_images_sends_no_images_key(make_user, fake_chat, kb_services, monkeypatch):
+    c = make_user("alice")
+    cid, *_ = _kb_chat_with_images(c, kb_services, monkeypatch, [(0, None, [])])
+    _send(c, cid, "嗨")
+    assert fake_chat.calls[0]["messages"][-1] == {"role": "user", "content": "嗨"}
+    assert "附圖" not in fake_chat.calls[0]["system"]
+
+
+# --- retry without images ---------------------------------------------------
+
+
+class _RejectingGeminiModels:
+    """Gemini SDK stand-in that rejects any request carrying an image part."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def generate_content_stream(self, *, model, contents, config=None):
+        from google.genai import errors, types
+
+        self.calls.append({"contents": contents, "config": config})
+        has_image = any(p.inline_data is not None for c in contents for p in c.parts)
+
+        async def gen():
+            if has_image:
+                raise errors.ClientError(
+                    400,
+                    {
+                        "error": {
+                            "code": 400,
+                            "message": "Image input modality is not enabled for models/x",
+                            "status": "INVALID_ARGUMENT",
+                        }
+                    },
+                )
+            yield types.GenerateContentResponse(
+                candidates=[
+                    types.Candidate(
+                        content=types.Content(role="model", parts=[types.Part(text="純文字回答")])
+                    )
+                ]
+            )
+
+        return gen()
+
+
+def _rejecting_ollama(seen):
+    import httpx
+
+    from app.llm import OllamaChatClient
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        if any("images" in m for m in body["messages"]):
+            return httpx.Response(
+                500, json={"error": "this model is missing data required for image input"}
+            )
+        lines = [{"message": {"content": "純文字回答"}, "done": False}, {"done": True}]
+        return httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in lines).encode())
+
+    return OllamaChatClient("http://ollama.test", "text-only", transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize("provider", ["ollama", "gemini"])
+def test_retries_without_images_when_model_rejects_them(
+    provider, make_user, app, kb_services, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.llm.gemini import GeminiChatClient
+
+    if provider == "ollama":
+        seen: list = []
+        client = _rejecting_ollama(seen)
+
+        def requests():
+            return [
+                (any("images" in m for m in b["messages"]), b["messages"][0]["content"])
+                for b in seen
+            ]
+    else:
+        models = _RejectingGeminiModels()
+        client = GeminiChatClient("k", "x", client=SimpleNamespace(aio=SimpleNamespace(models=models)))
+
+        def requests():
+            return [
+                (
+                    any(p.inline_data is not None for c in call["contents"] for p in c.parts),
+                    call["config"].system_instruction,
+                )
+                for call in models.calls
+            ]
+
+    app.dependency_overrides[get_chat_client] = lambda: client
+    c = make_user("alice")
+    cid, *_ = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+    r = _send(c, cid, "圖裡有什麼")
+    assert r.status_code == 200
+    ev = events(r)
+    assert [e["type"] for e in ev] == ["sources", "content", "done"]
+    assert ev[1]["text"] == "純文字回答"
+    sent = requests()
+    assert [with_images for with_images, _ in sent] == [True, False]
+    assert IMAGE_NOTE not in sent[0][1]
+    assert sent[1][1].endswith(IMAGE_NOTE)
+    assert _messages(c, cid)[1]["content"] == "純文字回答"
+
+
+def test_retry_without_images_happens_only_once(make_user, app, kb_services, monkeypatch):
+    fake = FakeChatClient(error=ImagesNotSupported("model does not support images"))
+    app.dependency_overrides[get_chat_client] = lambda: fake
+    c = make_user("alice")
+    cid, *_ = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+    r = _send(c, cid, "嗨")
+    assert r.status_code == 503
+    assert len(fake.calls) == 2
+    assert len(fake.calls[0]["messages"][-1]["images"]) == 4
+    assert "images" not in fake.calls[1]["messages"][-1]
+    assert fake.calls[1]["system"].endswith(IMAGE_NOTE)
+
+
+def test_no_retry_once_content_has_been_streamed(make_user, app, kb_services, monkeypatch):
+    fake = FakeChatClient(
+        deltas=[ChatDelta("content", "部分")],
+        error=ImagesNotSupported("model does not support images"),
+        error_after=1,
+    )
+    app.dependency_overrides[get_chat_client] = lambda: fake
+    c = make_user("alice")
+    cid, *_ = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+    ev = events(_send(c, cid, "嗨"))
+    assert [e["type"] for e in ev] == ["sources", "content", "error"]
+    assert len(fake.calls) == 1
+
+
+def test_no_retry_when_no_images_were_sent(make_user, app):
+    fake = FakeChatClient(error=ImagesNotSupported("model does not support images"))
+    app.dependency_overrides[get_chat_client] = lambda: fake
+    c = make_user("alice")
+    assert _send(c, _new_conv(c), "嗨").status_code == 503
+    assert len(fake.calls) == 1
+
+
+def test_an_image_cited_by_several_sources_is_sent_once(make_user, fake_chat, kb_services, monkeypatch):
+    c = make_user("alice")
+    layout = [
+        (0, "page_1.png", ["img_1_1.png"]),
+        (0, "page_1.png", ["img_1_1.png", "img_1_2.png"]),
+        (1, "page_1.png", []),  # same name, another document: a different image
+    ]
+    cid, _, _, files = _kb_chat_with_images(c, kb_services, monkeypatch, layout)
+    _send(c, cid, "嗨")
+    assert fake_chat.calls[0]["messages"][-1]["images"] == [
+        files[(0, "page_1.png")],
+        files[(0, "img_1_1.png")],
+        files[(0, "img_1_2.png")],
+        files[(1, "page_1.png")],
+    ]
+    system = fake_chat.calls[0]["system"]
+    for line in ("附圖 1 → [1]", "附圖 2 → [1]", "附圖 3 → [2]", "附圖 4 → [3]"):
+        assert line in system
+    assert "附圖 5" not in system

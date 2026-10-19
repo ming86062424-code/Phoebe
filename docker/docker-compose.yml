@@ -85,6 +85,38 @@ services:
       retries: 10
       start_period: 10s
 
+  # Embedding 服務（sentence-transformers、CPU float32；模型 google/embeddinggemma-2，文字與圖片共用）。
+  # 只對本機 127.0.0.1:8002 開放（無驗證）；本機快速測試：docker compose up -d embedder
+  # 有自己的模型快取 volume：vLLM 以 root 寫入 hf-cache，共用會有權限衝突
+  embedder:
+    build:
+      context: ..
+      dockerfile: docker/embedder.Dockerfile
+    image: phoebe-embedder:local
+    restart: unless-stopped
+    # 不繼承整份 docker/.env（含 GEMINI_API_KEY 等）：只傳需要的變數
+    environment:
+      EMBED_MODEL_ID: ${EMBED_MODEL_ID:-google/embeddinggemma-2}
+      EMBED_IMAGE_TOKENS: ${EMBED_IMAGE_TOKENS:-280}
+      HF_HOME: /hf-cache
+      # 選用：主機環境有設定時才傳入
+      HF_TOKEN:
+    ports:
+      - "127.0.0.1:8002:8000"
+    volumes:
+      - embedder-hf-cache:/hf-cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      # 首次啟動要下載並載入模型（約 1.5 GB）
+      start_period: 600s
+
   web:
     <<: *env
     build:
@@ -96,12 +128,15 @@ services:
     depends_on:
       milvus:
         condition: service_healthy
+      embedder:
+        condition: service_healthy
     stop_grace_period: 30s
     ports:
       - "${PHOEBE_PORT:-8000}:8000"
     environment:
       KB_WORKER_MODE: external
       MILVUS_URI: http://milvus:19530
+      EMBEDDER_URL: http://embedder:8000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       DB_PATH: /data/app.db
       KB_DIR: /data/kb
@@ -141,6 +176,8 @@ services:
         condition: service_healthy
       milvus:
         condition: service_healthy
+      embedder:
+        condition: service_healthy
       # 只等容器啟動：vLLM 還在下載模型或失敗時，LiteParse 仍可使用（OCR 解析器會顯示未啟動）
       vllm:
         condition: service_started
@@ -149,6 +186,7 @@ services:
       OCR_BACKEND: vllm
       VLLM_BASE_URL: http://vllm:8000/v1
       MILVUS_URI: http://milvus:19530
+      EMBEDDER_URL: http://embedder:8000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       DB_PATH: /data/app.db
       KB_DIR: /data/kb
@@ -218,3 +256,4 @@ volumes:
   minio-data:
   chroma-data:
   hf-cache:
+  embedder-hf-cache:

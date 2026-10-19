@@ -1,9 +1,44 @@
+import base64
 import json
 from collections.abc import AsyncIterator
 
 import httpx
 
-from app.llm.base import ChatDelta, LlmStreamError, LlmUnavailable, ModelNotFound
+from app.llm.base import (
+    ChatDelta,
+    ImagesNotSupported,
+    LlmStreamError,
+    LlmUnavailable,
+    ModelNotFound,
+    last_user_index,
+    mentions_images,
+)
+
+
+def _wire_messages(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Ollama's message list: images (last user message only) as base64 strings.
+
+    Returns the messages and whether any image is sent; the input is not changed.
+    """
+    last = last_user_index(messages)
+    out = []
+    for i, m in enumerate(messages):
+        m = {k: v for k, v in m.items() if k != "images"}
+        images = messages[i].get("images") if i == last else None
+        if images:
+            m["images"] = [base64.b64encode(b).decode("ascii") for b in images]
+        out.append(m)
+    return out, any("images" in m for m in out)
+
+
+def _error_field(body: str) -> str:
+    """The `error` field of an Ollama error body ("" when there is none)."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return ""
+    error = data.get("error") if isinstance(data, dict) else None
+    return error if isinstance(error, str) else ""
 
 
 class OllamaChatClient:
@@ -26,8 +61,16 @@ class OllamaChatClient:
         system: str | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[ChatDelta]:
+        messages, with_images = _wire_messages(messages)
         if system:
             messages = [{"role": "system", "content": system}, *messages]
+
+        def failure(message: str, error: str) -> LlmStreamError:
+            """`error` is Ollama's error field alone; only it decides an image rejection."""
+            if with_images and mentions_images(error):
+                return ImagesNotSupported(message)
+            return LlmStreamError(message)
+
         payload: dict = {
             "model": self.model,
             "messages": messages,
@@ -48,8 +91,8 @@ class OllamaChatClient:
                         body = (await response.aread()).decode("utf-8", "replace")
                         if response.status_code == 404:
                             raise ModelNotFound(self.model)
-                        raise LlmStreamError(
-                            f"Ollama 回應錯誤 {response.status_code}: {body}"
+                        raise failure(
+                            f"Ollama 回應錯誤 {response.status_code}: {body}", _error_field(body)
                         )
                     async for line in response.aiter_lines():
                         if not line.strip():
@@ -59,7 +102,7 @@ class OllamaChatClient:
                         except json.JSONDecodeError as e:
                             raise LlmStreamError("Ollama 回傳無法解析的資料") from e
                         if "error" in data:
-                            raise LlmStreamError(str(data["error"]))
+                            raise failure(str(data["error"]), str(data["error"]))
                         message = data.get("message") or {}
                         if message.get("thinking"):
                             yield ChatDelta("thinking", message["thinking"])

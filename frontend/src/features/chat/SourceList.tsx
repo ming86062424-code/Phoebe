@@ -1,9 +1,16 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { Source } from '../../api/types'
+import { SourceCards } from '../kb/SourceCard'
 import styles from './SourceList.module.css'
 
-export default function SourceList({ sources }: { sources: Source[] }) {
+interface Props {
+  sources: Source[]
+  // the conversation's knowledge base, for the image URLs
+  kbId: number | null
+}
+
+export default function SourceList({ sources, kbId }: Props) {
   const [open, setOpen] = useState(false)
   if (sources.length === 0) {
     return <div className={styles.none}>知識庫中沒有找到相關內容</div>
@@ -17,20 +24,9 @@ export default function SourceList({ sources }: { sources: Source[] }) {
         onClick={() => setOpen(!open)}
       >
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        來源（{sources.length}）
+        參考資料（{sources.length}）
       </button>
-      {open && (
-        <ol className={styles.list}>
-          {sources.map((s, i) => (
-            <li key={`${s.document_id}-${s.page}-${i}`} className={styles.item}>
-              <div className={styles.title}>
-                [{i + 1}] {s.filename} 第 {s.page} 頁
-              </div>
-              <div className={styles.snippet}>{s.text}</div>
-            </li>
-          ))}
-        </ol>
-      )}
+      {open && <SourceCards sources={sources} kbId={kbId} />}
     </div>
   )
 }

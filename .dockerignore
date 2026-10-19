@@ -5,6 +5,9 @@
 !uv.lock
 !app/
 !docker/gunicorn.conf.py
+!embedder/pyproject.toml
+!embedder/uv.lock
+!embedder/app.py
 !frontend/
 frontend/node_modules
 frontend/dist

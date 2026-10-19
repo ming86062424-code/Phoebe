@@ -37,9 +37,11 @@ def test_vllm_ocr_sends_png_data_url_and_parses_reply():
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
     assert "top_p" not in body
     assert body["max_tokens"] == 4096
-    part = body["messages"][0]["content"][0]
+    # official grounding request: the page image, then the text "grounding"
+    part, prompt = body["messages"][0]["content"]
     assert part["type"] == "image_url"
     assert part["image_url"]["url"].startswith("data:image/png;base64,")
+    assert prompt == {"type": "text", "text": "grounding"}
 
 
 def test_vllm_ocr_http_error_raises_parse_error():

@@ -39,6 +39,7 @@ def test_tests_ignore_developer_env_file():
 def test_new_settings_defaults(monkeypatch):
     for key in (
         "KB_WORKER_MODE",
+        "EMBEDDER_URL",
         "OCR_BACKEND",
         "VLLM_BASE_URL",
         "MILVUS_URI",
@@ -51,6 +52,7 @@ def test_new_settings_defaults(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     s = Settings.from_env()
     assert s.kb_worker_mode == "embedded"
+    assert s.embedder_url == "http://localhost:8002"
     assert s.ocr_backend == "transformers"
     assert s.vllm_base_url == "http://localhost:8001/v1"
     assert s.milvus_uri == "http://localhost:19530"
@@ -255,3 +257,14 @@ def test_dockerfile_has_no_literal_backslash_n_outside_comments():
         if not line.lstrip().startswith("#") and chr(92) + "n" in line
     ]
     assert bad == []
+
+
+def test_kb_max_images_defaults_to_four_and_must_be_a_non_negative_int(monkeypatch):
+    monkeypatch.delenv("KB_MAX_IMAGES", raising=False)
+    assert Settings.from_env().kb_max_images == 4
+    monkeypatch.setenv("KB_MAX_IMAGES", "0")
+    assert Settings.from_env().kb_max_images == 0
+    for bad in ("-1", "two", "1.5"):
+        monkeypatch.setenv("KB_MAX_IMAGES", bad)
+        with pytest.raises(ValueError, match="KB_MAX_IMAGES"):
+            Settings.from_env()

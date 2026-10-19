@@ -1,8 +1,10 @@
 import logging
 import sqlite3
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
 from starlette.datastructures import UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
@@ -11,6 +13,10 @@ from app.auth import current_user
 from app.config import Settings
 from app.deps import get_db, get_kb_services, get_settings
 from app.kb import store
+from app.kb.filetypes import IMAGE_EXTENSIONS, PDF_EXTENSIONS, TEXT_EXTENSIONS, UPLOAD_EXTENSIONS
+from app.kb.parsers.base import IMAGE_NAME
+from app.kb.parsers.images import open_image
+from app.kb.parsers.text_parser import decode_text
 from app.kb.services import KbServices
 
 logger = logging.getLogger(__name__)
@@ -22,6 +28,35 @@ MAX_DESCRIPTION_LENGTH = 500
 UPLOAD_CHUNK = 1024 * 1024
 # room for the multipart boundaries and the parser field around the file itself
 MULTIPART_OVERHEAD = 64 * 1024
+MAX_FILENAME_LENGTH = 200
+UNSUPPORTED_TYPE = "不支援的檔案類型（支援 PDF、txt、md、png、jpg、jpeg、webp）"
+UNREADABLE = "無法讀取檔案內容"
+
+
+def _short_filename(filename: str) -> str:
+    """At most 200 characters, keeping the extension (it decides the stored file's type)."""
+    if len(filename) <= MAX_FILENAME_LENGTH:
+        return filename
+    suffix = Path(filename).suffix
+    return filename[: MAX_FILENAME_LENGTH - len(suffix)] + suffix
+
+
+def _readable(path: Path, suffix: str) -> bool:
+    """Whether the content matches its extension: PDF magic, an image of the extension's
+    format that fully decodes within the pixel cap, or UTF-8 (with or without BOM) text."""
+    try:
+        if suffix in PDF_EXTENSIONS:
+            with path.open("rb") as f:
+                return f.read(5) == b"%PDF-"
+        if suffix in IMAGE_EXTENSIONS:
+            open_image(path, suffix)
+            return True
+        if suffix in TEXT_EXTENSIONS:
+            decode_text(path.read_bytes())
+            return True
+    except Exception:  # PIL raises many kinds (including decompression bombs)
+        return False
+    return False
 
 
 def _clean_name(v: str) -> str:
@@ -144,7 +179,11 @@ async def upload_document(
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
-    """multipart form: file (PDF) and parser (default liteparse)."""
+    """multipart form: file and parser (default liteparse).
+
+    PDFs and images use the chosen parser; .txt and .md always use the text parser, so
+    the parser field is ignored for them (and "text" can't be chosen for anything else).
+    """
     _require_kb(conn, user, kb_id)
     limit = settings.max_upload_mb * 1024 * 1024
     too_big = HTTPException(status_code=413, detail=f"檔案超過 {settings.max_upload_mb}MB 上限")
@@ -158,15 +197,19 @@ async def upload_document(
     parser = form.get("parser", "liteparse")
     if not isinstance(file, UploadFile):
         raise HTTPException(status_code=422, detail="請選擇要上傳的檔案")
-    chosen = kb.parsers.get(parser) if isinstance(parser, str) else None
-    if chosen is None:
-        raise HTTPException(status_code=422, detail="未知的解析器")
-    available, reason = await run_in_threadpool(kb.availability, chosen.id)
-    if not available:
-        raise HTTPException(status_code=422, detail=reason or "此解析器目前無法使用")
-    filename = (file.filename or "").strip()
-    if not filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=422, detail="目前只支援 PDF 檔")
+    filename = _short_filename((file.filename or "").strip())
+    suffix = Path(filename).suffix.lower()
+    if suffix not in UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=422, detail=UNSUPPORTED_TYPE)
+    if suffix in TEXT_EXTENSIONS:
+        chosen = kb.text_parser
+    else:
+        chosen = kb.parsers.get(parser) if isinstance(parser, str) else None
+        if chosen is None:
+            raise HTTPException(status_code=422, detail="未知的解析器")
+        available, reason = await run_in_threadpool(kb.availability, chosen.id)
+        if not available:
+            raise HTTPException(status_code=422, detail=reason or "此解析器目前無法使用")
 
     def save() -> dict:
         # blocking file and database work, run in a worker thread
@@ -182,13 +225,12 @@ async def upload_document(
                     if size > limit:
                         raise too_big
                     out.write(chunk)
-            with tmp.open("rb") as f:
-                if f.read(5) != b"%PDF-":
-                    raise HTTPException(status_code=422, detail="檔案不是有效的 PDF")
+            if not _readable(tmp, suffix):
+                raise HTTPException(status_code=422, detail=UNREADABLE)
             # 'pending' can't be claimed: only queue it once its file is in place
-            doc = store.create_document(conn, kb_id, filename[:200], chosen.id, size, "pending")
+            doc = store.create_document(conn, kb_id, filename, chosen.id, size, "pending")
             try:
-                tmp.replace(kb.file_path(kb_id, doc["id"]))
+                tmp.replace(kb.file_path(kb_id, doc["id"], filename))
                 store.update_document(conn, doc["id"], status="queued")
             except BaseException:
                 store.delete_document(conn, kb_id, doc["id"])
@@ -213,14 +255,16 @@ def delete_document(
     kb: KbServices = Depends(get_kb_services),
 ):
     _require_kb(conn, user, kb_id)
-    if not store.delete_document(conn, kb_id, doc_id):
+    doc = store.get_document(conn, doc_id)
+    if doc is None or doc["kb_id"] != kb_id or not store.delete_document(conn, kb_id, doc_id):
         raise HTTPException(status_code=404, detail="找不到文件")
     # the worker notices the deleted row and stops; a file still in use is removed later
     try:
         kb.index.delete_document(kb_id, doc_id)
     except Exception as e:
         logger.warning("刪除文件 %s 的向量失敗：%s", doc_id, e, exc_info=True)
-    kb.worker.remove_path(kb.file_path(kb_id, doc_id))
+    kb.worker.remove_path(kb.file_path(kb_id, doc_id, doc["filename"]))
+    kb.worker.remove_path(kb.doc_dir(kb_id, doc_id))
     return Response(status_code=204)
 
 
@@ -241,6 +285,42 @@ def retry_document(
     store.update_document(conn, doc_id, status="queued", error=None, progress_done=0)
     kb.worker.enqueue(doc_id)
     return store.get_document(conn, doc_id)
+
+
+# Names are reused when a document is reprocessed, so always revalidate (ETag/Last-Modified).
+IMAGE_CACHE_CONTROL = "private, no-cache"
+
+
+@router.get("/kbs/{kb_id}/documents/{doc_id}/images/{name}")
+def document_image(
+    kb_id: int,
+    doc_id: int,
+    name: str,
+    user: dict = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+    kb: KbServices = Depends(get_kb_services),
+):
+    """A page or cropped image a parser wrote for the document (PNG).
+
+    Logged out is 401 like every API. After that, anything that is not the owner's
+    existing document and a whitelisted name that resolves inside the document's folder
+    is 404, so nothing leaks about other users' knowledge bases or other files.
+    """
+    not_found = HTTPException(status_code=404, detail="找不到圖片")
+    if not IMAGE_NAME.fullmatch(name):
+        raise not_found
+    if store.get_kb(conn, user["id"], kb_id) is None:
+        raise not_found
+    doc = store.get_document(conn, doc_id)
+    if doc is None or doc["kb_id"] != kb_id:
+        raise not_found
+    folder = kb.doc_dir(kb_id, doc_id).resolve()
+    path = (folder / name).resolve()
+    if path.parent != folder or not path.is_file():
+        raise not_found
+    return FileResponse(
+        path, media_type="image/png", headers={"Cache-Control": IMAGE_CACHE_CONTROL}
+    )
 
 
 @router.get("/kbs/{kb_id}/search")

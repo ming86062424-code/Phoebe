@@ -47,53 +47,26 @@ class FakeChatClient:
             raise self.error
 
 
-import hashlib
-import re
-
-from llama_index.core.base.embeddings.base import BaseEmbedding
-
-
-class KeywordEmbedding(BaseEmbedding):
-    """Deterministic bag-of-words embedding so retrieval order is predictable in tests."""
-
-    dim: int = 64
-
-    def _vec(self, text: str) -> list[float]:
-        v = [0.0] * self.dim
-        for word in re.findall(r"\w+", text.lower()):
-            v[int(hashlib.md5(word.encode()).hexdigest(), 16) % self.dim] += 1.0
-        if not any(v):
-            v[0] = 1.0
-        return v
-
-    def _get_query_embedding(self, query: str) -> list[float]:
-        return self._vec(query)
-
-    def _get_text_embedding(self, text: str) -> list[float]:
-        return self._vec(text)
-
-    async def _aget_query_embedding(self, query: str) -> list[float]:
-        return self._vec(query)
-
-
 class FakeParser:
     id = "fake"
     label = "假解析器"
 
     def __init__(self, pages=None, error: Exception | None = None, available: bool = True):
-        from app.kb.parsers.base import PageText
+        from app.kb.parsers.base import ParsedChunk
 
-        self.pages = pages if pages is not None else [PageText(1, "apple banana"), PageText(2, "cherry durian")]
+        self.pages = pages if pages is not None else [ParsedChunk(1, "apple banana"), ParsedChunk(2, "cherry durian")]
         self.error = error
         self.available = available
         self.parsed: list[str] = []
+        self.out_dirs: list = []
         self.released = 0
 
     def availability(self):
         return (True, "") if self.available else (False, "未安裝")
 
-    def parse(self, pdf_path, on_progress):
-        self.parsed.append(pdf_path)
+    def parse(self, path, out_dir, on_progress):
+        self.parsed.append(path)
+        self.out_dirs.append(out_dir)
         if self.error is not None:
             raise self.error
         on_progress(len(self.pages), len(self.pages))

@@ -1,12 +1,12 @@
 # Docker 部署
 
-服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`milvus-data`、`etcd-data`、`minio-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）；舊的 `chroma-data` 僅供遷移。
+服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`milvus-data`、`etcd-data`、`minio-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）、`embedder-hf-cache`（embedder 的模型快取）；舊的 `chroma-data` 僅供遷移。
 
 ## 前置需求
 
 - Windows：Docker Desktop（使用 WSL2 後端）
 - NVIDIA 驅動（支援 WSL2 的版本）；用 `docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi` 確認容器看得到 GPU
-- 主機已啟動 Ollama，並已下載對話與 Embedding 模型
+- 主機已啟動 Ollama，並已下載對話模型（Embedding 由 `embedder` 容器提供，不需 Ollama）
 - Compose 2.24 以上（`env_file` 的 `required: false`）
 
 ## 準備 docker/.env
@@ -57,6 +57,17 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 - 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
 - 沒有 GPU 或想用 transformers 時，只能在本機快速測試用 `uv sync --group ocr` 搭配 `OCR_BACKEND=transformers`；Docker 的 worker 不含 torch。
 
+## Embedding 服務（embedder）
+
+獨立的 FastAPI 服務（`embedder/`，sentence-transformers 6.1.0、transformers 5.19.0（第一個支援 embedding_gemma2 的版本）、torch 2.14.0 與 torchvision 0.29.0 CPU wheel），以 `google/embeddinggemma-2` 同時產生文字與圖片的 768 維向量（L2 normalized；CPU float32，模型卡明言不可用 float16）。只對本機 `127.0.0.1:8002` 開放（無驗證）；Docker 內以 `http://embedder:8000` 連線。
+
+- `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200，載入中回 503。
+- 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）。
+- `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
+- 首次啟動會下載約 1.5 GB 模型到 `embedder-hf-cache` volume（healthcheck `start_period` 600 秒）。此 volume 與 vLLM 的 `hf-cache` 分開，避免 root／非 root 寫入權限衝突。
+- 首次下載可能超過 healthcheck 的等待時間：`start_period` 600 秒，之後每 15 秒檢查一次、最多失敗 10 次（約再 150 秒）。`web`、`worker` 依賴 `embedder` 健康，若在 `docker compose up -d` 期間因此放棄啟動，等 `docker compose ps` 顯示 embedder 為 healthy（`docker compose logs -f embedder` 可看下載進度）後，再執行一次 `docker compose up -d` 即可，已下載的模型快取不會重來。
+- 本機快速測試：`cd docker && docker compose up -d embedder`；單元測試：`cd embedder && uv run pytest -q`（用假模型，不下載模型）。
+
 ## Milvus 與舊資料遷移
 
 `milvus` 只對本機 `127.0.0.1:19530` 開放（無驗證）；`web`、`worker` 等它健康後才啟動（首次啟動約需 90 秒）。`MILVUS_TOKEN`、`MILVUS_COLLECTION` 可在 `docker/.env` 設定，`MILVUS_URI` 固定為 `http://milvus:19530`。
@@ -81,9 +92,34 @@ docker compose --profile migrate-chroma stop chroma
 uv run --group migrate python -m app.kb.migrate_chroma --chroma-dir data/chroma
 ```
 
-若之後刪除或重建 Milvus collection（例如更換 `EMBED_MODEL` 或斷詞設定），請重新啟動 web 與 worker：它們會在程序存活期間快取「collection 已就緒」的狀態。
+若之後刪除或重建 Milvus collection（例如更換 embedding 模型或斷詞設定），請重新啟動 web 與 worker：它們會在程序存活期間快取「collection 已就緒」的狀態。
 
 可加 `--dry-run` 先檢查。worker 映像已包含 `migrate` 依賴群組（chromadb）。遷移完成後 `chroma-data` volume 可自行刪除。
+
+## 從舊版升級（多模態知識庫）
+
+多模態版本更換了 embedding 模型（Ollama `embeddinggemma` → `embedder` 服務的 `google/embeddinggemma-2`）並新增 collection 欄位，舊的 `phoebe_chunks` collection 無法沿用（web／worker 會回報「知識庫結構已更新，請重建知識庫」）。上傳的原始檔與 SQLite 資料都保留，只需重建向量並重新處理文件。在 `docker/` 目錄依序執行：
+
+```
+git pull                                   # 取得新版程式與 compose
+docker compose up -d --build embedder milvus   # 先建置並啟動 embedder（首次會下載約 1–2 GB 模型）與 milvus
+docker compose ps                          # 等 embedder 與 milvus 都是 healthy
+docker compose stop web worker            # 先停掉舊的 web／worker，避免它們用舊結構重建 collection
+# 刪除舊的 collection（名稱為 MILVUS_COLLECTION，預設 phoebe_chunks）
+docker compose run --rm --no-deps worker python -c "from app.config import Settings; from pymilvus import MilvusClient; s = Settings.from_env(); MilvusClient(uri=s.milvus_uri, token=s.milvus_token).drop_collection(s.milvus_collection)"
+docker compose up -d --build              # 重建並重新啟動 web、worker（它們會快取 collection 狀態，必須重啟）
+docker compose restart web worker         # 若容器沒有被重建，也請明確重啟
+docker compose run --rm --no-deps worker python -m app.kb.reprocess_all --dry-run   # 先看每個知識庫會排入幾份文件
+docker compose run --rm --no-deps worker python -m app.kb.reprocess_all             # 把所有文件重新排入佇列
+docker compose logs -f worker             # worker 依序重新處理
+```
+
+說明：
+
+- `run --rm --no-deps worker` 會開一個一次性容器，掛載同一個 `phoebe-data` volume，連到 Milvus 與 SQLite，不會影響執行中的 worker；若想用執行中的容器，也可改用 `docker compose exec worker python -m app.kb.reprocess_all`。
+- `reprocess_all` 把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），保留原解析器。正在處理中的文件會略過（避免與 worker 搶同一份文件），待它們完成後再執行一次即可。舊文件的圖片資料夾由 worker 在重新解析前自動清除，指令本身不刪檔，以免與剛認領文件的 worker 競爭。
+- 重新處理時 worker 會逐頁呼叫 embedder（CPU），文件多或頁數多時會花一段時間；PDF 內的圖片在重新處理後才會有縮圖與圖片向量。
+- 從 Chroma 遷移來的舊 chunk 只有文字（無圖片），若原始 PDF 還在，重新處理即可補上。
 
 ## 管理員與 Gemini 聊天
 
@@ -93,11 +129,11 @@ uv run --group migrate python -m app.kb.migrate_chroma --chroma-dir data/chroma
 - `GEMINI_API_KEY`：到 [Google AI Studio](https://aistudio.google.com/apikey) 建立金鑰後填入。金鑰只放在 `docker/.env`，不會出現在介面或資料庫；留空則 Gemini 選項停用。
 - `GEMINI_MODEL`：預設 `gemini-2.5-flash`。
 
-GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 Gemini。Embedding 仍使用主機 Ollama。
+GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 Gemini。Embedding 一律使用 `embedder` 容器（CPU）。
 
 ## 主機 Ollama 連線
 
-容器以 `http://host.docker.internal:11434` 連到主機 Ollama。若連不上（聊天回錯誤、Embedding 失敗），多半是 Ollama 只監聽 `127.0.0.1`：
+容器以 `http://host.docker.internal:11434` 連到主機 Ollama。若連不上（聊天回錯誤），多半是 Ollama 只監聽 `127.0.0.1`：
 
 1. 設定系統環境變數 `OLLAMA_HOST=0.0.0.0`（或 `0.0.0.0:11434`）
 2. 完全結束並重新啟動 Ollama

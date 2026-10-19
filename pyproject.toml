@@ -9,8 +9,6 @@ dependencies = [
     "gunicorn>=26.2.0",
     "httpx>=0.28.1",
     "liteparse>=2.16.0",
-    "llama-index-core>=0.14.25",
-    "llama-index-embeddings-ollama>=0.10.0",
     "pillow>=12.3.0",
     "pymilvus==2.6.17",
     "pypdfium2>=5.14.0",
@@ -41,7 +39,10 @@ ocr = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["milvus: needs a reachable Milvus (MILVUS_URI); skipped otherwise"]
+markers = [
+    "milvus: needs a reachable Milvus (MILVUS_URI); skipped otherwise",
+    "embedder: needs a reachable embedder service (EMBEDDER_URL); skipped otherwise",
+]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu126" }]
