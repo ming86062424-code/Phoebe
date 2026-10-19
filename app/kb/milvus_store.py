@@ -160,7 +160,7 @@ class MilvusChunkStore:
                 "text": _truncate_bytes(r.text, TEXT_MAX_BYTES),
                 "kind": r.kind,
                 "images": _images_json(r.images),
-                "page_image": "" if r.page_image is None else _ref_json(r.page_image),
+                "page_image": _page_image_json(r.page_image),
                 "dense": r.dense,
             }
             for r in records
@@ -231,6 +231,16 @@ class MilvusChunkStore:
 
 def _ref_json(ref: ImageRef) -> str:
     return json.dumps({"name": ref.name, "w": ref.width, "h": ref.height}, ensure_ascii=False)
+
+
+def _page_image_json(ref: ImageRef | None) -> str:
+    """The page image reference; ImageRef bounds the name and size, so it always fits."""
+    if ref is None:
+        return ""
+    value = _ref_json(ref)
+    if len(value.encode("utf-8")) > PAGE_IMAGE_MAX_BYTES:  # never cut JSON in half
+        raise ValueError(f"page image reference too long: {ref.name!r}")
+    return value
 
 
 def _images_json(images: list[ImageRef]) -> str:

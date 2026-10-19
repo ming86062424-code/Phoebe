@@ -13,6 +13,7 @@ from app.config import Settings
 from app.deps import get_db, get_kb_services, get_settings
 from app.kb import store
 from app.kb.filetypes import IMAGE_EXTENSIONS, PDF_EXTENSIONS, TEXT_EXTENSIONS, UPLOAD_EXTENSIONS
+from app.kb.parsers.images import open_image
 from app.kb.parsers.text_parser import decode_text
 from app.kb.services import KbServices
 
@@ -39,17 +40,14 @@ def _short_filename(filename: str) -> str:
 
 
 def _readable(path: Path, suffix: str) -> bool:
-    """Whether the content matches its extension: PDF magic, an image PIL can open,
-    or UTF-8 (with or without BOM) text."""
+    """Whether the content matches its extension: PDF magic, an image of the extension's
+    format that fully decodes within the pixel cap, or UTF-8 (with or without BOM) text."""
     try:
         if suffix in PDF_EXTENSIONS:
             with path.open("rb") as f:
                 return f.read(5) == b"%PDF-"
         if suffix in IMAGE_EXTENSIONS:
-            from PIL import Image
-
-            with Image.open(path) as image:
-                image.verify()
+            open_image(path, suffix)
             return True
         if suffix in TEXT_EXTENSIONS:
             decode_text(path.read_bytes())

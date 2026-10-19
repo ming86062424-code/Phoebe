@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 MAX_NEW_TOKENS = 4096
 # LightOnOCR README: "use temperature 0.1, not greedy decoding"
 TEMPERATURE = 0.1
+# Official grounding mode (LightOnOCR-3): one user message with the page image followed by
+# the text "grounding"; the reply has a `![label](x1,y1,x2,y2)` marker before every block.
+GROUNDING_PROMPT = "grounding"
 
 _ESCAPED_DOLLAR = chr(92) + "$"  # backslash followed by a dollar sign
 _DISPLAY_MATH = re.compile(re.escape(_ESCAPED_DOLLAR * 2) + r"(.+?)" + re.escape(_ESCAPED_DOLLAR * 2), re.DOTALL)
@@ -53,7 +56,7 @@ class OcrEngine(Protocol):
     def availability(self) -> tuple[bool, str]: ...
 
     def ocr(self, image) -> str:
-        """OCR one PIL image and return its text."""
+        """OCR one PIL image in grounding mode and return the raw block output."""
         ...
 
     def release(self) -> None: ...
@@ -115,7 +118,15 @@ class TransformersOcrEngine:
             self._model = None
             self._processor = None
             raise ParseError(f"LightOnOCR 初始化失敗：{e}") from e
-        conversation = [{"role": "user", "content": [{"type": "image", "image": image}]}]
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": GROUNDING_PROMPT},
+                ],
+            }
+        ]
         inputs = self._processor.apply_chat_template(
             conversation,
             add_generation_prompt=True,
@@ -181,7 +192,10 @@ class VllmOcrEngine:
             "messages": [
                 {
                     "role": "user",
-                    "content": [{"type": "image_url", "image_url": {"url": data_url}}],
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": GROUNDING_PROMPT},
+                    ],
                 }
             ],
             "temperature": TEMPERATURE,

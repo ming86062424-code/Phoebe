@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -7,6 +8,12 @@ from typing import Literal, Protocol
 ProgressCallback = Callable[[int, int], None]
 
 ChunkKind = Literal["text", "page_image"]
+
+# Names of the PNGs a parser writes: `page_{n}.png` (LiteParse page image) and
+# `img_{page}_{i}.png` (LightOnOCR crop). ASCII and bounded (at most 9 digits per number,
+# 28 characters), so a reference always fits Milvus' 256-byte `page_image` field.
+IMAGE_NAME = re.compile(r"^(page|img)_[0-9]{1,9}(_[0-9]{1,9})?\.png$")
+MAX_IMAGE_SIDE = 999_999
 
 
 class ParseError(Exception):
@@ -20,6 +27,13 @@ class ImageRef:
     name: str
     width: int
     height: int
+
+    def __post_init__(self):
+        if not isinstance(self.name, str) or not IMAGE_NAME.fullmatch(self.name):
+            raise ValueError(f"invalid image name: {self.name!r}")
+        for side in (self.width, self.height):
+            if not isinstance(side, int) or not 0 < side <= MAX_IMAGE_SIDE:
+                raise ValueError(f"invalid image size: {self.width}x{self.height}")
 
 
 @dataclass(frozen=True)

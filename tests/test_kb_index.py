@@ -399,3 +399,30 @@ def test_add_document_without_chunks_clears_old_ones(index, store):
     index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "apple")])
     assert index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "  ")]) == 0
     assert store.rows == {}
+
+
+def test_liteparse_embeds_pages_in_batches(store, tmp_path):
+    """A long scanned PDF: each page image goes to the embedder in batches of at most 8,
+    together with that page's LiteParse text, never in one request."""
+    from app.kb.parsers.liteparse_parser import LiteParseParser
+    from tests.pdf_factory import make_pdf
+
+    path = tmp_path / "long.pdf"
+    path.write_bytes(make_pdf([f"page number {n}" for n in range(1, 11)]))
+    out = tmp_path / "doc"
+    out.mkdir()
+    chunks = LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+    spy = ImageSpy()
+    index = KnowledgeIndex(store, spy)
+    assert index.add_document(1, 10, "long.pdf", chunks, image_dir=out) == 10
+    batches = [c[1] for c in spy.calls if c[0] == "image_texts"]
+    assert [len(b) for b in batches] == [8, 2]
+    assert not any(c[0] == "documents" for c in spy.calls)
+    sent = [item for batch in batches for item in batch]
+    assert [text for _, text in sent] == [f"page number {n}" for n in range(1, 11)]
+    assert sent[0][0] == (out / "page_1.png").read_bytes()
+    assert sent[0][0].startswith(b"\x89PNG")
+    rows = sorted(store.rows.values(), key=lambda r: r.chunk_index)
+    assert [(r.page, r.kind, r.page_image.name) for r in rows] == [
+        (n, "page_image", f"page_{n}.png") for n in range(1, 11)
+    ]

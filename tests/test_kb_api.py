@@ -513,6 +513,25 @@ def test_image_upload_is_checked_and_keeps_its_extension(make_user, kb_services,
     assert _upload(alice, kb["id"], filename="f.png", content=make_pdf(["x"])).status_code == 422
 
 
+def test_image_upload_must_match_its_extension_and_decode(make_user, monkeypatch):
+    from app.kb.parsers import images
+
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    # JPEG bytes under a .png name, PNG bytes under .webp
+    for name, fmt in (("a.png", "JPEG"), ("b.webp", "PNG"), ("c.jpg", "WEBP")):
+        r = _upload(alice, kb["id"], filename=name, content=_png(fmt))
+        assert (r.status_code, r.json()["detail"]) == (422, UNREADABLE), name
+    # a PNG whose header is fine but whose pixel data is cut short
+    whole = _png("PNG", size=(64, 64))
+    r = _upload(alice, kb["id"], filename="d.png", content=whole[: len(whole) - 30])
+    assert (r.status_code, r.json()["detail"]) == (422, UNREADABLE)
+    monkeypatch.setattr(images, "MAX_PIXELS", 10)
+    r = _upload(alice, kb["id"], filename="e.png", content=_png("PNG", size=(4, 3)))
+    assert (r.status_code, r.json()["detail"]) == (422, UNREADABLE)
+    assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
+
+
 def test_long_filename_keeps_its_extension(make_user, kb_services):
     alice = make_user("alice")
     kb = _create_kb(alice)
