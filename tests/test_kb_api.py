@@ -345,7 +345,6 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
         db_path=str(tmp_path / "e.db"),
         frontend_dist=str(tmp_path / "no-dist"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
         kb_worker_mode="external",
     )
     fake_parser.available = False  # the web process itself could not use it

@@ -94,9 +94,8 @@ def build_kb_services(
             LiteParseParser(settings.liteparse_ocr_language),
             LightOnOcrParser(build_ocr_engine(settings)),
         ]
-    index = KnowledgeIndex(
-        settings.chroma_dir, embed_model, settings.chroma_host, settings.chroma_port
-    )
+    # Task 2 removes this: Chroma stays only until index.py moves to Milvus
+    index = KnowledgeIndex(str(Path(settings.kb_dir).parent / "chroma"), embed_model)
     services = KbServices(
         index=index,
         parsers={p.id: p for p in parsers},

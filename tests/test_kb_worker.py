@@ -17,7 +17,6 @@ def env(tmp_path):
     settings = Settings(
         db_path=str(tmp_path / "t.db"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
     )
     conn = connect(settings.db_path)
     init_db(conn)
@@ -328,7 +327,6 @@ def _external_services(tmp_path, parser):
     settings = Settings(
         db_path=str(tmp_path / "x.db"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
         kb_worker_mode="external",
     )
     conn = connect(settings.db_path)

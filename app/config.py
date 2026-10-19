@@ -32,7 +32,6 @@ class Settings:
     frontend_dist: str = str(PROJECT_ROOT / "frontend" / "dist")
     embed_model: str = "embeddinggemma-2"
     kb_dir: str = str(PROJECT_ROOT / "data" / "kb")
-    chroma_dir: str = str(PROJECT_ROOT / "data" / "chroma")
     kb_top_k: int = 5
     max_upload_mb: int = 50
     ocr_model: str = "lightonai/LightOnOCR-3-0.8B"
@@ -40,8 +39,9 @@ class Settings:
     kb_worker_mode: str = "embedded"
     ocr_backend: str = "transformers"
     vllm_base_url: str = "http://localhost:8001/v1"
-    chroma_host: str = ""
-    chroma_port: int = 8000
+    milvus_uri: str = "http://localhost:19530"
+    milvus_token: str = field(default="", repr=False)
+    milvus_collection: str = "phoebe_chunks"
     reply_lock_ttl_seconds: int = 90
     kb_worker_poll_seconds: float = 2.0
     kb_stale_seconds: int = 120
@@ -65,7 +65,6 @@ class Settings:
             frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
             embed_model=os.environ.get("EMBED_MODEL", d.embed_model),
             kb_dir=os.environ.get("KB_DIR", d.kb_dir),
-            chroma_dir=os.environ.get("CHROMA_DIR", d.chroma_dir),
             kb_top_k=int(os.environ.get("KB_TOP_K", d.kb_top_k)),
             max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", d.max_upload_mb)),
             ocr_model=os.environ.get("OCR_MODEL", d.ocr_model),
@@ -77,8 +76,9 @@ class Settings:
             ),
             ocr_backend=_choice("OCR_BACKEND", d.ocr_backend, ("transformers", "vllm")),
             vllm_base_url=os.environ.get("VLLM_BASE_URL", d.vllm_base_url),
-            chroma_host=os.environ.get("CHROMA_HOST", d.chroma_host),
-            chroma_port=int(os.environ.get("CHROMA_PORT", d.chroma_port)),
+            milvus_uri=os.environ.get("MILVUS_URI", d.milvus_uri),
+            milvus_token=os.environ.get("MILVUS_TOKEN", d.milvus_token).strip(),
+            milvus_collection=os.environ.get("MILVUS_COLLECTION", d.milvus_collection),
             reply_lock_ttl_seconds=int(
                 os.environ.get("REPLY_LOCK_TTL_SECONDS", d.reply_lock_ttl_seconds)
             ),

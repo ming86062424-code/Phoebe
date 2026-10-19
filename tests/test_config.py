@@ -41,8 +41,9 @@ def test_new_settings_defaults(monkeypatch):
         "KB_WORKER_MODE",
         "OCR_BACKEND",
         "VLLM_BASE_URL",
-        "CHROMA_HOST",
-        "CHROMA_PORT",
+        "MILVUS_URI",
+        "MILVUS_TOKEN",
+        "MILVUS_COLLECTION",
         "REPLY_LOCK_TTL_SECONDS",
         "KB_WORKER_POLL_SECONDS",
         "KB_STALE_SECONDS",
@@ -52,8 +53,9 @@ def test_new_settings_defaults(monkeypatch):
     assert s.kb_worker_mode == "embedded"
     assert s.ocr_backend == "transformers"
     assert s.vllm_base_url == "http://localhost:8001/v1"
-    assert s.chroma_host == ""
-    assert s.chroma_port == 8000
+    assert s.milvus_uri == "http://localhost:19530"
+    assert s.milvus_token == ""
+    assert s.milvus_collection == "phoebe_chunks"
     assert s.reply_lock_ttl_seconds == 90
     assert s.kb_worker_poll_seconds == 2.0
     assert s.kb_stale_seconds == 120
@@ -93,7 +95,7 @@ def test_docker_env_example_lists_compose_and_settings_keys():
     fixed = set()
     for name in ("web", "worker"):
         fixed |= set(compose["services"][name]["environment"])
-    fixed |= {"FRONTEND_DIST", "CHROMA_DIR"}  # not configurable in containers
+    fixed |= {"FRONTEND_DIST", "MILVUS_URI"}  # not configurable in containers
 
     text = (PROJECT_ROOT / "docker" / ".env.example").read_text(encoding="utf-8")
     keys = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, flags=re.M))

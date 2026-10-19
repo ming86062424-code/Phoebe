@@ -16,7 +16,6 @@ def settings(tmp_path):
         db_path=str(tmp_path / "test.db"),
         frontend_dist=str(tmp_path / "no-dist"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
     )
 
 
