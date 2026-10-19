@@ -47,6 +47,10 @@ def split_text(text: str, limit: int = MAX_CHARS) -> list[str]:
     return _merge(_paragraphs(text.replace("\r\n", "\n")), limit)
 
 
+def _has_body(lines: list[str]) -> bool:
+    return any(line.strip() and not _HEADING.match(line) for line in lines)
+
+
 def _sections(text: str) -> list[str]:
     """Split before every heading line (`#`), ignoring lines inside code fences."""
     sections: list[list[str]] = [[]]
@@ -64,7 +68,8 @@ def _sections(text: str) -> list[str]:
                 fence = ""
         elif marker:
             fence = marker.group(1)
-        elif _HEADING.match(line) and sections[-1]:
+        elif _HEADING.match(line) and _has_body(sections[-1]):
+            # a heading with no text of its own stays with the next section
             sections.append([])
         sections[-1].append(line)
     return ["\n".join(lines).strip() for lines in sections if "\n".join(lines).strip()]

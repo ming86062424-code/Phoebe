@@ -96,3 +96,11 @@ def test_md_longer_fence_needs_a_long_enough_closer():
 def test_md_only_real_atx_headings_split():
     md = "# A\n#hashtag\n#!/bin/sh\n####### seven\n###### six\nz\n#\nend"
     assert split_markdown(md) == ["# A\n#hashtag\n#!/bin/sh\n####### seven", "###### six\nz", "#\nend"]
+
+
+def test_md_heading_without_text_stays_with_the_next_section():
+    md = "# 常見問題\n\n## 運費\n\n滿 1500 元免運。\n\n## 保存期限\n\n常溫 21 天。\n"
+    assert split_markdown(md) == [
+        "# 常見問題\n\n## 運費\n\n滿 1500 元免運。",
+        "## 保存期限\n\n常溫 21 天。",
+    ]
