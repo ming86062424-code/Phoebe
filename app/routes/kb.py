@@ -257,4 +257,6 @@ async def search(
         sources = await run_in_threadpool(kb.index.search, kb_id, q, settings.kb_top_k)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
-    return [s.to_dict() for s in sources]
+    # chunks of a document deleted during a store outage may linger; SQLite is the truth
+    live = {d["id"] for d in store.list_documents(conn, kb_id)}
+    return [s.to_dict() for s in sources if s.document_id in live]

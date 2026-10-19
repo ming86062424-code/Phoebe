@@ -67,10 +67,21 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 ```
 cd docker
+docker compose up -d milvus
 docker compose --profile migrate-chroma up -d chroma
-docker compose run --rm worker python -m app.kb.migrate_chroma --chroma-host chroma
+docker compose run --rm --no-deps worker python -m app.kb.migrate_chroma --chroma-host chroma
 docker compose --profile migrate-chroma stop chroma
 ```
+
+（`--no-deps` 且先單獨啟動 `milvus`，避免連帶啟動 vllm、web。）
+
+本機（非 Docker）遷移：
+
+```
+uv run --group migrate python -m app.kb.migrate_chroma --chroma-dir data/chroma
+```
+
+若之後刪除或重建 Milvus collection（例如更換 `EMBED_MODEL` 或斷詞設定），請重新啟動 web 與 worker：它們會在程序存活期間快取「collection 已就緒」的狀態。
 
 可加 `--dry-run` 先檢查。worker 映像已包含 `migrate` 依賴群組（chromadb）。遷移完成後 `chroma-data` volume 可自行刪除。
 

@@ -126,7 +126,7 @@ describe('KbPage', () => {
       if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
       if (url.startsWith('/api/kbs/1/search?q='))
         return Promise.resolve(
-          jsonResponse([{ document_id: 10, filename: 'a.pdf', page: 2, score: 0.81234, text: '特休十四天' }]),
+          jsonResponse([{ document_id: 10, filename: 'a.pdf', page: 2, score: 0.0328, vector_score: 0.81234, keyword_score: null, text: '特休十四天' }]),
         )
       return Promise.reject(new Error('unexpected ' + url))
     })
@@ -134,7 +134,8 @@ describe('KbPage', () => {
     await userEvent.type(await screen.findByRole('textbox', { name: '檢索問題' }), '特休')
     await userEvent.click(screen.getByRole('button', { name: '檢索' }))
     expect(await screen.findByText('特休十四天')).toBeInTheDocument()
-    expect(screen.getByText('相似度 0.812')).toBeInTheDocument()
+    expect(screen.getByText('向量 0.812／關鍵字 —')).toBeInTheDocument()
+    expect(screen.queryByText(/相似度/)).not.toBeInTheDocument()
     expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=%E7%89%B9%E4%BC%91')).toBe(true)
   })
 })

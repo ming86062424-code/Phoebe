@@ -23,6 +23,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx2>=2.13.1",
+    "llama-index-vector-stores-chroma==0.6.0",
     "pytest>=9.1.1",
 ]
 eval = [
@@ -31,7 +32,6 @@ eval = [
 ]
 migrate = [
     "chromadb==1.5.9",
-    "llama-index-vector-stores-chroma==0.6.0",
 ]
 ocr = [
     "torch>=2.9",

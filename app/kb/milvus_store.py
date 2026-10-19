@@ -1,8 +1,9 @@
+import json
 import logging
 
 import grpc
 from pymilvus import DataType, Function, FunctionType, MilvusClient
-from pymilvus.client.types import Status
+from pymilvus.client.types import LoadState, Status
 from pymilvus.exceptions import ConnectError, MilvusException, MilvusUnavailableException
 
 from app.kb.chunk_store import ChunkRecord, Hit, KnowledgeStoreError
@@ -14,6 +15,24 @@ TIMEOUT = 10  # seconds; also bounds pymilvus's retry loop (75 retries otherwise
 TEXT_MAX_BYTES = 65535  # VARCHAR length counts UTF-8 bytes; 8192 chars x 4 bytes fits
 FILENAME_MAX_BYTES = 2048
 CONNECT_ERROR = "無法連線到 Milvus"
+CREATE_TIMEOUT = 60  # creating a collection with indexes can take longer than a normal call
+ANALYZER_CHANGED = "知識庫的斷詞設定已更新，請重建知識庫（刪除 collection 後重新遷移或重新上傳）"
+# Question words and particles would otherwise dominate BM25 for natural-language queries.
+EN_STOP = [
+    "_english_", "i", "me", "my", "we", "our", "you", "your", "he", "she", "him", "her", "its",
+    "what", "which", "who", "whom", "how", "when", "where", "why", "do", "does", "did", "doing",
+    "am", "been", "being", "have", "has", "had", "can", "could", "would", "should", "shall",
+    "may", "might", "must", "much", "many", "some", "any", "all", "about", "from", "up", "so",
+    "than", "too", "very", "just", "s", "t", "d", "ll", "re", "ve", "m",
+]  # fmt: skip
+ZH_STOP = [
+    "的", "了", "是", "在", "和", "與", "及", "或", "也", "就", "都", "而", "被", "把", "我", "你",
+    "他", "她", "它", "我們", "請", "嗎", "呢", "吧", "啊", "這", "那", "之", "於", "以",
+]  # fmt: skip
+TEXT_ANALYZER = {
+    "tokenizer": "jieba",
+    "filter": ["cnalphanumonly", "lowercase", {"type": "stop", "stop_words": EN_STOP + ZH_STOP}],
+}
 OUTPUT_FIELDS = ["kb_id", "document_id", "filename", "page", "text"]
 
 
@@ -57,14 +76,23 @@ class MilvusChunkStore:
                     # web and worker may start together: the other one created it first
                     if not client.has_collection(self._collection, timeout=TIMEOUT):
                         raise
-            existing = _dense_dim(client.describe_collection(self._collection, timeout=TIMEOUT))
+            description = client.describe_collection(self._collection, timeout=TIMEOUT)
+            existing = _dense_dim(description)
             if existing != dim:
                 raise KnowledgeStoreError(
                     f"EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{existing}）不同，請重建知識庫"
                 )
+            if _text_analyzer(description) != TEXT_ANALYZER:
+                raise KnowledgeStoreError(ANALYZER_CHANGED)
+            self._ensure_loaded(client)
             self._exists_cached = True
         except Exception as exc:
             raise _translate(exc) from exc
+
+    def _ensure_loaded(self, client) -> None:
+        state = client.get_load_state(self._collection, timeout=TIMEOUT).get("state")
+        if state != LoadState.Loaded:
+            client.load_collection(self._collection, timeout=CREATE_TIMEOUT)
 
     def _create(self, client, dim: int) -> None:
         schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
@@ -79,7 +107,7 @@ class MilvusChunkStore:
             DataType.VARCHAR,
             max_length=TEXT_MAX_BYTES,
             enable_analyzer=True,
-            analyzer_params={"type": "chinese"},
+            analyzer_params=TEXT_ANALYZER,
         )
         schema.add_field("dense", DataType.FLOAT_VECTOR, dim=dim)
         schema.add_field("sparse", DataType.SPARSE_FLOAT_VECTOR)
@@ -101,7 +129,7 @@ class MilvusChunkStore:
             schema=schema,
             index_params=index_params,
             consistency_level="Strong",
-            timeout=TIMEOUT,
+            timeout=CREATE_TIMEOUT,
         )
 
     def insert(self, records: list[ChunkRecord]) -> None:
@@ -179,6 +207,14 @@ class MilvusChunkStore:
         ]
 
 
+def _text_analyzer(description: dict) -> dict | None:
+    for f in description["fields"]:
+        if f["name"] == "text":
+            raw = f.get("params", {}).get("analyzer_params")
+            return json.loads(raw) if isinstance(raw, str) else raw
+    return None
+
+
 def _dense_dim(description: dict) -> int:
     for f in description["fields"]:
         if f["name"] == "dense":
@@ -198,6 +234,8 @@ def _translate(exc: Exception) -> KnowledgeStoreError:
             return KnowledgeStoreError(CONNECT_ERROR)
         if "Fail connecting" in exc.message:
             return KnowledgeStoreError(CONNECT_ERROR)
+    if isinstance(exc, MilvusException) and exc.code == grpc.StatusCode.DEADLINE_EXCEEDED:
+        return KnowledgeStoreError("Milvus 回應逾時")
     logger.error("Milvus request failed: %r", exc)
     return KnowledgeStoreError("Milvus 錯誤")
 

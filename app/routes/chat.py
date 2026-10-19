@@ -55,6 +55,8 @@ async def _with_knowledge(
         )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
+    live = {d["id"] for d in kb_store.list_documents(conn, conv["kb_id"])}
+    found = [s for s in found if s.document_id in live]
     return build_system_prompt(kb_row["name"], found), [s.to_dict() for s in found]
 
 

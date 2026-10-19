@@ -85,10 +85,16 @@ uv run --group ocr python -m scripts.ocr_smoke 路徑/檔案.pdf
 
 ## 測試
 
-單元測試：
+單元測試（不需要 Milvus）：
 
 ```
 uv run pytest
+```
+
+本機執行應用程式或整合測試需要 Milvus（以 Docker 執行）：`cd docker && docker compose up -d milvus`。整合測試標記為 `milvus`，連不上就自動略過：
+
+```
+MILVUS_URI=http://127.0.0.1:19530 uv run pytest -m milvus
 ```
 
 評測（僅手動執行；需要真實的 Ollama，會跑數分鐘；分數僅供觀察，不是通過／失敗的門檻）：

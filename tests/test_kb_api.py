@@ -406,3 +406,20 @@ def test_delete_kb_succeeds_when_store_is_down(make_user, kb_services, monkeypat
     assert alice.delete(f"/api/kbs/{kb['id']}").status_code == 204
     assert removed == [kb_services.kb_dir / str(kb["id"])]
     assert kb["id"] not in [k["id"] for k in alice.get("/api/kbs").json()]
+
+
+def test_deleted_document_is_never_retrieved_after_a_store_outage(make_user, kb_services, fake_chat, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    gone = _upload(alice, kb["id"]).json()
+    _store_down(monkeypatch, kb_services, "delete_document")
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{gone['id']}").status_code == 204
+    # the chunks are still in the store, but the document no longer exists
+    assert kb_services.index._store.rows
+    assert alice.get(f"/api/kbs/{kb['id']}/search", params={"q": "apple"}).json() == []
+    cid = alice.post("/api/conversations").json()["id"]
+    alice.patch(f"/api/conversations/{cid}", json={"kb_id": kb["id"]})
+    events = _stream_events(alice.post(f"/api/conversations/{cid}/messages", json={"content": "apple"}))
+    sources = next(e for e in events if e["type"] == "sources")
+    assert sources["sources"] == [] if "sources" in sources else True
+    assert gone["filename"] not in fake_chat.calls[-1]["system"]

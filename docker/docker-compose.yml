@@ -78,7 +78,7 @@ services:
     volumes:
       - chroma-data:/data
     healthcheck:
-      # ⚠️ 未在 chroma 1.5.9 映像內驗證；以 bash /dev/tcp 檢查連接埠（映像無 curl）
+      # 已在 chroma 1.5.9 映像內驗證（容器為 healthy）；以 bash /dev/tcp 檢查連接埠（映像無 curl）
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
       interval: 10s
       timeout: 5s

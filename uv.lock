@@ -2777,6 +2777,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx2" },
+    { name = "llama-index-vector-stores-chroma" },
     { name = "pytest" },
 ]
 eval = [
@@ -2785,7 +2786,6 @@ eval = [
 ]
 migrate = [
     { name = "chromadb" },
-    { name = "llama-index-vector-stores-chroma" },
 ]
 ocr = [
     { name = "torch" },
@@ -2815,16 +2815,14 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx2", specifier = ">=2.13.1" },
+    { name = "llama-index-vector-stores-chroma", specifier = "==0.6.0" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
 eval = [
     { name = "deepeval", specifier = ">=4.3.0,<5" },
     { name = "ollama", specifier = ">=0.6.3" },
 ]
-migrate = [
-    { name = "chromadb", specifier = "==1.5.9" },
-    { name = "llama-index-vector-stores-chroma", specifier = "==0.6.0" },
-]
+migrate = [{ name = "chromadb", specifier = "==1.5.9" }]
 ocr = [
     { name = "torch", specifier = ">=2.9", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torchvision", specifier = ">=0.24", index = "https://download.pytorch.org/whl/cu126" },

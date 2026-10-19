@@ -29,6 +29,8 @@ export interface Source {
   filename: string
   page: number
   score: number
+  vector_score?: number | null
+  keyword_score?: number | null
   text: string
 }
 

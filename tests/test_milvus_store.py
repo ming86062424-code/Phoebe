@@ -6,17 +6,22 @@ from urllib.parse import urlparse
 import pytest
 from pymilvus import DataType, FunctionType, MilvusClient
 import grpc
-from pymilvus.client.types import Status
+from pymilvus.client.types import LoadState, Status
 from pymilvus.exceptions import MilvusException
 
 from app.kb.chunk_store import ChunkRecord, KnowledgeStoreError
-from app.kb.milvus_store import MilvusChunkStore
+from app.kb.milvus_store import TEXT_ANALYZER, MilvusChunkStore
 
 
 class FakeClient:
     """Records calls; create_schema/prepare_index_params are the real pymilvus builders."""
 
-    def __init__(self, exists=False, dim=4, search_result=None, error=None, create_race=False):
+    def __init__(
+        self, exists=False, dim=4, search_result=None, error=None, create_race=False,
+        analyzer=None, loaded=True,
+    ):  # fmt: skip
+        self.analyzer = TEXT_ANALYZER if analyzer is None else analyzer
+        self.loaded = loaded
         self.create_race = create_race
         self.exists = exists
         self.dim = dim
@@ -36,13 +41,27 @@ class FakeClient:
         return self.exists
 
     def describe_collection(self, name, **kwargs):
-        return {"fields": [{"name": "id"}, {"name": "dense", "params": {"dim": self.dim}}]}
+        return {
+            "fields": [
+                {"name": "id"},
+                {"name": "text", "params": {"analyzer_params": json.dumps(self.analyzer)}},
+                {"name": "dense", "params": {"dim": self.dim}},
+            ]
+        }
+
+    def get_load_state(self, name, **kwargs):
+        return {"state": LoadState.Loaded if self.loaded else LoadState.NotLoad}
+
+    def load_collection(self, name, **kwargs):
+        self.calls.append(("load_collection", name, kwargs))
+        self.loaded = True
 
     def create_collection(self, name, **kwargs):
         if self.create_race:  # another process created it first
             self.exists = True
             raise MilvusException(message="collection already exists")
         self.calls.append(("create_collection", name, kwargs))
+        self.create_kwargs = kwargs
         self.exists = True
 
     def insert(self, name, rows, **kwargs):
@@ -86,7 +105,8 @@ def test_ensure_ready_creates_schema_with_bm25_and_chinese_analyzer():
     text = fields["text"]
     assert text.params["max_length"] == 65535
     assert text.params["enable_analyzer"] is True
-    assert json.loads(text.params["analyzer_params"]) == {"type": "chinese"}
+    assert json.loads(text.params["analyzer_params"]) == TEXT_ANALYZER
+    assert client.create_kwargs["timeout"] == 60
     assert fields["dense"].dtype == DataType.FLOAT_VECTOR and fields["dense"].params["dim"] == 4
     assert fields["sparse"].dtype == DataType.SPARSE_FLOAT_VECTOR
     (function,) = schema.functions
@@ -104,6 +124,33 @@ def test_ensure_ready_existing_collection_same_dim_is_noop():
     client = FakeClient(exists=True, dim=4)
     _store(client).ensure_ready(4)
     assert client.calls == []
+
+
+def test_analyzer_mismatch_raises_clear_error():
+    client = FakeClient(exists=True, dim=4, analyzer={"type": "chinese"})
+    with pytest.raises(KnowledgeStoreError, match="斷詞設定已更新，請重建知識庫"):
+        _store(client).ensure_ready(4)
+
+
+def test_existing_collection_that_is_not_loaded_gets_loaded():
+    client = FakeClient(exists=True, dim=4, loaded=False)
+    _store(client).ensure_ready(4)
+    assert [c[0] for c in client.calls] == ["load_collection"]
+
+
+def test_analyzer_drops_question_words_and_particles():
+    stop = TEXT_ANALYZER["filter"][2]["stop_words"]
+    assert "_english_" in stop and {"how", "do", "i"} <= set(stop)
+    assert "的" in stop and TEXT_ANALYZER["tokenizer"] == "jieba"
+
+
+def test_deadline_exceeded_maps_to_timeout_message():
+    client = FakeClient(
+        exists=True,
+        error=MilvusException(code=grpc.StatusCode.DEADLINE_EXCEEDED, message="Deadline Exceeded"),
+    )
+    with pytest.raises(KnowledgeStoreError, match="^Milvus 回應逾時$"):
+        _store(client).dense_search(1, [0.1], 5)
 
 
 def test_dimension_mismatch_raises_clear_error():
@@ -316,5 +363,33 @@ def test_real_milvus_roundtrip():
         assert len(store.dense_search(2, [1.0, 0.0, 0.0, 0.0], 5)) == 1
         store.delete_kb(2)
         assert store.dense_search(2, [1.0, 0.0, 0.0, 0.0], 5) == []
+    finally:
+        client.drop_collection(name)
+
+
+@pytest.mark.milvus
+def test_real_milvus_natural_language_query_ignores_question_words():
+    uri = os.environ.get("MILVUS_URI", "http://localhost:19530")
+    if not _milvus_reachable(uri):
+        pytest.skip(f"Milvus not reachable at {uri}")
+    name = f"phoebe_test_an_{os.getpid()}"
+    client = MilvusClient(uri=uri, token=os.environ.get("MILVUS_TOKEN", ""))
+    store = MilvusChunkStore(uri, os.environ.get("MILVUS_TOKEN", ""), name, client=client)
+    try:
+        store.ensure_ready(4)
+        store.insert(
+            [
+                ChunkRecord(1, 1, "a.pdf", 1, 0, "Milvus is a vector database to do search", [1.0, 0, 0, 0]),
+                ChunkRecord(1, 1, "a.pdf", 1, 1, "付款金額 money to pay", [0, 1.0, 0, 0]),
+            ]
+        )
+        hits = store.keyword_search(1, "How much money do I need to pay?", 5)
+        assert hits and hits[0].chunk_id == "1:1"
+        analyzed = client.run_analyzer("How much money do I need to pay?", analyzer_params=TEXT_ANALYZER)
+        tokens = {(t if isinstance(t, str) else t["token"]).lower() for t in analyzed.tokens}
+        assert not tokens & {"how", "do", "i", "to", "much"}
+        assert {"money", "pay"} <= tokens
+        # a second process starting against the same collection accepts it
+        MilvusChunkStore(uri, os.environ.get("MILVUS_TOKEN", ""), name, client=client).ensure_ready(4)
     finally:
         client.drop_collection(name)

@@ -44,13 +44,13 @@ tests/fakes_store.py  # InMemoryChunkStore（單元測試用，關鍵字以簡�
   - `kb_id` INT64，**partition key**
   - `document_id` INT64、`page` INT64、`chunk_index` INT64
   - `filename` VARCHAR(2048)（長度以 UTF-8 位元組計，寫入時以位元組安全方式截斷）
-  - `text` VARCHAR(65535)（長度以 UTF-8 位元組計；8192 字元 × 4 位元組可容納，超過仍以位元組安全方式截斷），`enable_analyzer=True`，`analyzer_params={"type": "chinese"}`
+  - `text` VARCHAR(65535)（長度以 UTF-8 位元組計；8192 字元 × 4 位元組可容納，超過仍以位元組安全方式截斷），`enable_analyzer=True`，`analyzer_params` 為 `TEXT_ANALYZER`：jieba 斷詞，filter 依序為 `cnalphanumonly`（去掉標點）、`lowercase`、`stop`（英文疑問詞／助動詞與中文虛詞停用詞表，見 `app/kb/milvus_store.py`），避免自然語言問句的疑問詞主導 BM25
   - `dense` FLOAT_VECTOR(dim)
   - `sparse` SPARSE_FLOAT_VECTOR，由 BM25 Function（輸入 `text`）自動產生
 - 索引：`dense` → AUTOINDEX、metric COSINE；`sparse` → SPARSE_INVERTED_INDEX、metric BM25
 - 搜尋一律 `filter="kb_id == {kb_id}"`、`consistency_level="Strong"`（小規模、剛索引完就要查得到）
-- `ensure_ready(dim)`：collection 不存在就建立；存在但 `dense` 維度不同 → 拋錯「EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{existing}）不同，請重建知識庫」
-- 維度：啟動時以 embedding 模型對一段固定文字取向量得到
+- `ensure_ready(dim)`：collection 不存在就建立；存在但 `dense` 維度不同 → 拋錯「EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{existing}）不同，請重建知識庫」；`text` 欄位的 analyzer 設定與 `TEXT_ANALYZER` 不同 → 拋錯「知識庫的斷詞設定已更新，請重建知識庫（刪除 collection 後重新遷移或重新上傳）」；存在但未載入時呼叫 `load_collection`
+- 維度：第一次使用（索引或檢索）時，以實際 embedding 向量的長度檢查，不在啟動時；失敗不快取，下次呼叫會重試
 
 ### 2.4 混合查詢與 RRF
 - `search`：query 向量化 → `dense_search(limit=top_k*4)` 與 `keyword_search(limit=top_k*4)` → RRF：`score = Σ 1/(60 + rank)`（rank 從 1 起）→ 取前 `top_k`
@@ -85,7 +85,8 @@ tests/fakes_store.py  # InMemoryChunkStore（單元測試用，關鍵字以簡�
 
 ## 3. 錯誤處理
 - Milvus 連不上：知識庫檢索失敗沿用現有 503「知識庫檢索失敗：…」；索引時文件標 failed，錯誤「無法連線到 Milvus」
-- 維度不符：啟動時記錄錯誤；檢索與索引回清楚訊息（§2.3）
+- 維度不符：第一次使用時偵測；檢索與索引回清楚訊息（§2.3）
+- 刪除文件／知識庫時 Milvus 不可用：仍回 204（記錄警告）；檢索結果再以 SQLite 現存文件過濾，已刪除文件不會被引用
 - 查詢含特殊字元（引號、反斜線）：keyword_search 以參數傳遞，不拼接 filter 字串；`kb_id` 為整數
 
 ## 4. 測試

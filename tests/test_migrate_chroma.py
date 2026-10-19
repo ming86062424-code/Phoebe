@@ -174,3 +174,18 @@ def test_main_without_chromadb_installed(monkeypatch, capsys):
     monkeypatch.setattr(builtins, "__import__", fake)
     assert main(["--chroma-dir", "x"]) == 1
     assert "--group migrate" in capsys.readouterr().err
+
+
+def test_migration_reads_every_page_of_a_large_collection(conn, chroma, index, chunk_store, monkeypatch):
+    from app.kb import migrate_chroma
+
+    monkeypatch.setattr(migrate_chroma, "PAGE_SIZE", 2)
+    kb = make_kb(conn)
+    doc = make_doc(conn, kb, "big.pdf")
+    old = [(1, f"段落 {i}") for i in range(5)]
+    write_old(chroma, kb, doc, "big.pdf", old)
+
+    result = migrate(chroma, conn, index, dry_run=False)
+
+    assert result == {kb: (5, 0)}
+    assert [r.text for r in stored(chunk_store, doc)] == [t for _, t in old]
