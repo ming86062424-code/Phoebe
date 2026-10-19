@@ -288,10 +288,12 @@ def admin_chat(settings, kb_services, monkeypatch):
     monkeypatch.setattr(deps, "build_chat_client", build)
 
     def make(**overrides):
-        app = create_app(replace(settings, admin_usernames=("admin",), **overrides), kb_services)
+        app = create_app(
+            replace(settings, admin_username="admin", admin_password="password123", **overrides),
+            kb_services,
+        )
         c = TestClient(app)
         creds = {"username": "admin", "password": "password123"}
-        assert c.post("/api/auth/register", json=creds).status_code == 201
         assert c.post("/api/auth/login", json=creds).status_code == 200
         return c
 

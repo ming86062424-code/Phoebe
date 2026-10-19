@@ -41,6 +41,30 @@ def create_user(conn: sqlite3.Connection, username: str, password: str) -> int:
     return cur.lastrowid
 
 
+def ensure_admin(conn: sqlite3.Connection, username: str, password: str) -> None:
+    """Create the .env admin account, or reset its password to the .env value.
+
+    Changing the password signs out the account's existing sessions. Safe to run from
+    several processes at once (each Gunicorn worker runs it at startup).
+    """
+    try:
+        create_user(conn, username, password)
+        return
+    except UsernameTaken:
+        pass
+    row = conn.execute(
+        "SELECT id, password_hash FROM users WHERE username = ?", (username,)
+    ).fetchone()
+    if verify_password(password, row["password_hash"]):
+        return
+    with conn:
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(password), row["id"]),
+        )
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
+
+
 def authenticate(conn: sqlite3.Connection, username: str, password: str) -> int | None:
     row = conn.execute(
         "SELECT id, password_hash FROM users WHERE username = ?", (username,)
@@ -83,7 +107,8 @@ def current_user(
             return {
                 "id": row["id"],
                 "username": row["username"],
-                "is_admin": row["username"] in settings.admin_usernames,
+                "is_admin": bool(settings.admin_username)
+                and row["username"] == settings.admin_username,
             }
     raise HTTPException(status_code=401, detail="Not authenticated")
 

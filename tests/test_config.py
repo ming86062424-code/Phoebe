@@ -77,15 +77,21 @@ def test_invalid_worker_mode_and_ocr_backend_raise(monkeypatch):
     assert (s.kb_worker_mode, s.ocr_backend) == ("external", "vllm")
 
 
+# Old settings that Settings.from_env still reads, only to fail with a hint
+RETIRED_KEYS = {"ADMIN_USERNAMES"}
+
+
 def test_env_example_lists_every_setting():
     text = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
     keys = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, flags=re.M))
     source = inspect.getsource(Settings.from_env)
     used = set(re.findall(r'(?:os\.environ\.get|_choice)\(\s*"([A-Z0-9_]+)"', source))
+    used -= RETIRED_KEYS  # read only to reject them with a clear message
     assert {"KB_WORKER_MODE", "OCR_BACKEND"} <= used
     assert used
     assert used <= keys
     assert not {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL", "OCR_VLLM_GPU_UTIL"} & keys
+    assert not RETIRED_KEYS & keys
 
 
 def test_docker_env_example_lists_compose_and_settings_keys():
@@ -103,6 +109,7 @@ def test_docker_env_example_lists_compose_and_settings_keys():
     keys = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, flags=re.M))
     source = inspect.getsource(Settings.from_env)
     used = set(re.findall(r'(?:os\.environ\.get|_choice)\(\s*"([A-Z0-9_]+)"', source))
+    used -= RETIRED_KEYS  # read only to reject them with a clear message
 
     assert interpolated and used
     assert interpolated <= keys
