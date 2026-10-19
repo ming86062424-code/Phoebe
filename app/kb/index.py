@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from llama_index.core import Document
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import MetadataMode
+from llama_index.core.schema import BaseNode, MetadataMode, TextNode
 
 from app.kb.chunk_store import ChunkRecord, ChunkStore, Hit
 from app.kb.parsers.base import PageText
@@ -99,6 +99,33 @@ class KnowledgeIndex:
             if p.text.strip()
         ]
         nodes = self._splitter.get_nodes_from_documents(docs)
+        return self._write_nodes(kb_id, document_id, filename, nodes)
+
+    def add_chunks(
+        self, kb_id: int, document_id: int, filename: str, chunks: list[tuple[int, str]]
+    ) -> int:
+        """Index ready-made (page, text) chunks without splitting them again.
+
+        Replaces any chunks the document already has, so repeating it is harmless.
+        """
+        nodes = [
+            TextNode(
+                text=text,
+                metadata={"kb_document_id": document_id, "filename": filename, "page": page},
+                excluded_embed_metadata_keys=["kb_document_id", "page"],
+                excluded_llm_metadata_keys=["kb_document_id"],
+            )
+            for page, text in chunks
+            if text.strip()
+        ]
+        if not nodes:
+            self._store.delete_document(kb_id, document_id)
+            return 0
+        return self._write_nodes(kb_id, document_id, filename, nodes)
+
+    def _write_nodes(
+        self, kb_id: int, document_id: int, filename: str, nodes: list[BaseNode]
+    ) -> int:
         if not nodes:
             return 0
         # Embedding calls Ollama and can take minutes for a big PDF; no lock is held.
