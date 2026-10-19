@@ -186,3 +186,6 @@ __pycache__/
 
 # Node
 node_modules/
+
+# Docker 服務資料（bind mount）
+docker/volumes/

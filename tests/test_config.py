@@ -155,7 +155,7 @@ def test_vllm_service_follows_official_flags():
     assert any("/health" in str(part) for part in health["test"])
     assert health["start_period"]
     assert vllm["ports"] == ["127.0.0.1:8001:8000"]
-    assert "hf-cache:/root/.cache/huggingface" in vllm["volumes"]
+    assert "./volumes/vllm-hf-cache:/root/.cache/huggingface" in vllm["volumes"]
 
 
 def test_worker_uses_vllm_and_has_no_gpu():
@@ -212,6 +212,32 @@ def test_no_chroma_left_in_compose():
     compose = _compose()
     assert "chroma" not in compose["services"]
     assert "chroma-data" not in compose["volumes"]
+
+
+def test_service_data_lives_under_docker_volumes_except_sqlite():
+    compose = _compose()
+    services = compose["services"]
+    expected = {
+        "etcd": "./volumes/etcd:/etcd",
+        "minio": "./volumes/minio:/minio_data",
+        "milvus": "./volumes/milvus:/var/lib/milvus",
+        "embedder": "./volumes/embedder-hf-cache:/hf-cache",
+        "vllm": "./volumes/vllm-hf-cache:/root/.cache/huggingface",
+    }
+    for name, mount in expected.items():
+        assert services[name]["volumes"] == [mount]
+    # SQLite (WAL, shared by two containers) stays on a Docker-managed volume
+    assert list(compose["volumes"]) == ["phoebe-db"]
+    for name in ("web", "worker"):
+        svc = services[name]
+        assert svc["volumes"] == ["phoebe-db:/db", "./volumes/kb:/data/kb"]
+        assert svc["environment"]["DB_PATH"] == "/db/app.db"
+        assert svc["environment"]["KB_DIR"] == "/data/kb"
+
+
+def test_docker_volumes_dir_is_git_ignored():
+    lines = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "docker/volumes/" in lines
 
 
 def test_dockerignore_is_an_allowlist_covering_dockerfile_copies():

@@ -18,7 +18,7 @@ services:
       - ETCD_QUOTA_BACKEND_BYTES=4294967296
       - ETCD_SNAPSHOT_COUNT=50000
     volumes:
-      - etcd-data:/etcd
+      - ./volumes/etcd:/etcd
     command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
@@ -33,7 +33,7 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
     volumes:
-      - minio-data:/minio_data
+      - ./volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -54,7 +54,7 @@ services:
       MINIO_ADDRESS: minio:9000
       MQ_TYPE: woodpecker
     volumes:
-      - milvus-data:/var/lib/milvus
+      - ./volumes/milvus:/var/lib/milvus
     ports:
       - "127.0.0.1:19530:19530"
     depends_on:
@@ -88,7 +88,7 @@ services:
     ports:
       - "127.0.0.1:8002:8000"
     volumes:
-      - embedder-hf-cache:/hf-cache
+      - ./volumes/embedder-hf-cache:/hf-cache
     healthcheck:
       test:
         - CMD
@@ -122,12 +122,15 @@ services:
       MILVUS_URI: http://milvus:19530
       EMBEDDER_URL: http://embedder:8000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
-      DB_PATH: /data/app.db
+      DB_PATH: /db/app.db
       KB_DIR: /data/kb
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - phoebe-data:/data
+      # SQLite（WAL，web 與 worker 同時讀寫）放在 Docker 管理的 volume：
+      # Windows 主機目錄經過檔案共享層，檔案鎖與共用記憶體不可靠
+      - phoebe-db:/db
+      - ./volumes/kb:/data/kb
     healthcheck:
       # /api/me 未登入回 401 也代表服務正常
       test:
@@ -172,12 +175,13 @@ services:
       MILVUS_URI: http://milvus:19530
       EMBEDDER_URL: http://embedder:8000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
-      DB_PATH: /data/app.db
+      DB_PATH: /db/app.db
       KB_DIR: /data/kb
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - phoebe-data:/data
+      - phoebe-db:/db
+      - ./volumes/kb:/data/kb
 
   # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
   # 只想給本機快速測試用：docker compose up -d vllm（只對本機 127.0.0.1:8001 開放）
@@ -213,7 +217,7 @@ services:
     ipc: host
     volumes:
       # vLLM 映像以 root 執行，Hugging Face 預設快取在 /root/.cache/huggingface
-      - hf-cache:/root/.cache/huggingface
+      - ./volumes/vllm-hf-cache:/root/.cache/huggingface
     healthcheck:
       test:
         - CMD
@@ -233,10 +237,6 @@ services:
               count: all
               capabilities: [gpu]
 
+# 除了 SQLite 之外，資料都放在 docker/volumes/ 下（主機目錄，已被 git 忽略）
 volumes:
-  phoebe-data:
-  milvus-data:
-  etcd-data:
-  minio-data:
-  hf-cache:
-  embedder-hf-cache:
+  phoebe-db:
