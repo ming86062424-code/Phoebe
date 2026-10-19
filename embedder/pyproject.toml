@@ -1,0 +1,37 @@
+[project]
+name = "phoebe-embedder"
+version = "0.1.0"
+description = "Embedding service (sentence-transformers) for text and images"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "pillow",
+    "sentence-transformers==6.1.0",
+    "torch==2.14.0",
+    "torchvision==0.29.0",
+    "transformers==5.19.0",
+    "uvicorn",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false
+exclude-newer = "2026-10-07T00:00:00Z"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

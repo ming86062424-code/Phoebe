@@ -1,6 +1,6 @@
 # Docker 部署
 
-服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`milvus-data`、`etcd-data`、`minio-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）；舊的 `chroma-data` 僅供遷移。
+服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`milvus-data`、`etcd-data`、`minio-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）、`embedder-hf-cache`（embedder 的模型快取）；舊的 `chroma-data` 僅供遷移。
 
 ## 前置需求
 
@@ -56,6 +56,15 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 - 頁面以 400 DPI 算繪並縮圖至最長邊 2048。請求只含頁面影像，`temperature=0.1`、`chat_template_kwargs={"enable_thinking": false}`、`max_tokens=4096`（官方建議不要用貪婪解碼，所以同一份 PDF 重跑結果可能有些微差異）。OCR 結果中被跳脫的數學分隔符號（反斜線加錢字號）會還原成一般的 `$`，單獨出現的金額（如 `NT` 加跳脫錢字號）不變。
 - 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
 - 沒有 GPU 或想用 transformers 時，只能在本機快速測試用 `uv sync --group ocr` 搭配 `OCR_BACKEND=transformers`；Docker 的 worker 不含 torch。
+
+## Embedding 服務（embedder）
+
+獨立的 FastAPI 服務（`embedder/`，sentence-transformers 6.1.0、transformers 5.19.0（第一個支援 embedding_gemma2 的版本）、torch 2.14.0 與 torchvision 0.29.0 CPU wheel），以 `google/embeddinggemma-2` 同時產生文字與圖片的 768 維向量（L2 normalized；CPU float32，模型卡明言不可用 float16）。只對本機 `127.0.0.1:8002` 開放（無驗證）；Docker 內以 `http://embedder:8000` 連線。
+
+- `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200，載入中回 503。
+- 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）。
+- 首次啟動會下載約 1.5 GB 模型到 `embedder-hf-cache` volume（healthcheck `start_period` 600 秒）。此 volume 與 vLLM 的 `hf-cache` 分開，避免 root／非 root 寫入權限衝突。
+- 本機快速測試：`cd docker && docker compose up -d embedder`；單元測試：`cd embedder && uv run pytest -q`（用假模型，不下載模型）。
 
 ## Milvus 與舊資料遷移
 

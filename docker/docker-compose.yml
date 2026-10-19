@@ -85,6 +85,32 @@ services:
       retries: 10
       start_period: 10s
 
+  # Embedding 服務（sentence-transformers、CPU float32；模型 google/embeddinggemma-2，文字與圖片共用）。
+  # 只對本機 127.0.0.1:8002 開放（無驗證）；本機快速測試：docker compose up -d embedder
+  # 有自己的模型快取 volume：vLLM 以 root 寫入 hf-cache，共用會有權限衝突
+  embedder:
+    <<: *env
+    build:
+      context: ..
+      dockerfile: docker/embedder.Dockerfile
+    image: phoebe-embedder:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8002:8000"
+    volumes:
+      - embedder-hf-cache:/hf-cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      # 首次啟動要下載並載入模型（約 1.5 GB）
+      start_period: 600s
+
   web:
     <<: *env
     build:
@@ -218,3 +244,4 @@ volumes:
   minio-data:
   chroma-data:
   hf-cache:
+  embedder-hf-cache:
