@@ -47,7 +47,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 啟動參數（0.8B 官方設定）：`--trust-remote-code`、`--limit-mm-per-prompt '{"image": 1}'`、`--default-chat-template-kwargs '{"enable_thinking": false}'`、`--mm-processor-cache-gb 0`、`--no-enable-prefix-caching`、`--max-model-len 18000`（`OCR_VLLM_MAX_MODEL_LEN`）。RTX 2060 是 Turing 架構，不支援 bfloat16，因此固定 `--dtype float16`。
 
-**調校（RTX 2060 6GB 實測）**
+**調校（RTX 2060 6GB 實測）**：完整的排錯過程、錯誤訊息與和 Ollama 共用 GPU 的說明見 [docs/vllm-rtx2060.md](../docs/vllm-rtx2060.md)。
 
 | 設定 | 預設 | 說明 |
 |---|---|---|
