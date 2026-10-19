@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -10,7 +11,7 @@ from app.chat_stream import claim_reply, ndjson_reply
 from app.config import Settings
 from app.deps import get_chat_client, get_db, get_kb_services, get_settings
 from app.kb import store as kb_store
-from app.kb.rag import build_system_prompt
+from app.kb.rag import build_system_prompt, load_source_images
 from app.kb.services import KbServices
 from app.llm import ChatClient
 from app.llm_settings import load_llm_settings
@@ -34,6 +35,13 @@ class MessageIn(BaseModel):
         return v
 
 
+@dataclass(frozen=True)
+class Knowledge:
+    prompt: str | None = None  # system text with the references (and image mapping)
+    sources: list[dict] | None = None  # the sources event; None without a knowledge base
+    images: list[bytes] = field(default_factory=list)  # PNGs for the last user message
+
+
 async def _with_knowledge(
     conn: sqlite3.Connection,
     user: dict,
@@ -41,23 +49,32 @@ async def _with_knowledge(
     history: list[dict],
     settings: Settings,
     kb: KbServices,
-) -> tuple[str | None, list[dict] | None]:
-    """Return the knowledge-base system text and sources (None, None without a knowledge base)."""
+) -> Knowledge:
+    """Retrieve for the last user message; an empty Knowledge without a knowledge base."""
     if conv["kb_id"] is None:
-        return None, None
-    kb_row = kb_store.get_kb(conn, user["id"], conv["kb_id"])
+        return Knowledge()
+    kb_id = conv["kb_id"]
+    kb_row = kb_store.get_kb(conn, user["id"], kb_id)
     if kb_row is None:
-        return None, None
+        return Knowledge()
     question = next(m["content"] for m in reversed(history) if m["role"] == "user")
     try:
-        found = await run_in_threadpool(
-            kb.index.search, conv["kb_id"], question, settings.kb_top_k
-        )
+        found = await run_in_threadpool(kb.index.search, kb_id, question, settings.kb_top_k)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
-    live = {d["id"] for d in kb_store.list_documents(conn, conv["kb_id"])}
+    live = {d["id"] for d in kb_store.list_documents(conn, kb_id)}
     found = [s for s in found if s.document_id in live]
-    return build_system_prompt(kb_row["name"], found), [s.to_dict() for s in found]
+    images = await run_in_threadpool(
+        load_source_images,
+        found,
+        lambda doc_id: kb.doc_dir(kb_id, doc_id),
+        settings.kb_max_images,
+    )
+    return Knowledge(
+        build_system_prompt(kb_row["name"], found, images),
+        [s.to_dict() for s in found],
+        [image.data for image in images],
+    )
 
 
 def _combine_system(system_prompt: str, kb_prompt: str | None) -> str | None:
@@ -85,7 +102,7 @@ async def send_message(
         conversations.add_message(conn, conversation_id, "user", body.content)
         conversations.set_title_if_empty(conn, conversation_id, body.content.strip()[:30])
         history = conversations.get_history(conn, conversation_id)
-        kb_prompt, sources = await _with_knowledge(conn, user, conv, history, settings, kb)
+        knowledge = await _with_knowledge(conn, user, conv, history, settings, kb)
         llm = await run_in_threadpool(load_llm_settings, conn, settings)
     except BaseException:
         release()
@@ -97,9 +114,10 @@ async def send_message(
         conversation_id,
         settings.db_path,
         release,
-        sources,
-        system=_combine_system(llm.system_prompt, kb_prompt),
+        knowledge.sources,
+        system=_combine_system(llm.system_prompt, knowledge.prompt),
         temperature=llm.temperature,
+        images=knowledge.images,
     )
 
 
@@ -124,7 +142,7 @@ async def regenerate(
         release()
         raise HTTPException(status_code=409, detail="沒有需要重新產生的回答")
     try:
-        kb_prompt, sources = await _with_knowledge(conn, user, conv, history, settings, kb)
+        knowledge = await _with_knowledge(conn, user, conv, history, settings, kb)
         llm = await run_in_threadpool(load_llm_settings, conn, settings)
     except BaseException:
         release()
@@ -135,7 +153,8 @@ async def regenerate(
         conversation_id,
         settings.db_path,
         release,
-        sources,
-        system=_combine_system(llm.system_prompt, kb_prompt),
+        knowledge.sources,
+        system=_combine_system(llm.system_prompt, knowledge.prompt),
         temperature=llm.temperature,
+        images=knowledge.images,
     )

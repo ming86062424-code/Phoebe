@@ -9,12 +9,15 @@ from google.genai import errors, types
 
 from app.llm.base import (
     ChatDelta,
+    ImagesNotSupported,
     LlmAuthError,
     LlmError,
     LlmRateLimited,
     LlmStreamError,
     LlmUnavailable,
     ModelNotFound,
+    last_user_index,
+    mentions_images,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,14 +105,21 @@ class GeminiChatClient:
         system: str | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[ChatDelta]:
-        contents = [
-            types.Content(
-                role="model" if m["role"] == "assistant" else "user",
-                parts=[types.Part(text=m["content"])],
-            )
-            for m in messages
-            if m["content"].strip()
-        ]
+        last = last_user_index(messages)
+        contents = []
+        with_images = False
+        for i, m in enumerate(messages):
+            images = (m.get("images") or []) if i == last else []
+            parts = [types.Part.from_bytes(data=b, mime_type="image/png") for b in images]
+            if m["content"].strip():
+                parts.append(types.Part(text=m["content"]))
+            if parts:
+                with_images = with_images or bool(images)
+                contents.append(
+                    types.Content(
+                        role="model" if m["role"] == "assistant" else "user", parts=parts
+                    )
+                )
         config = types.GenerateContentConfig(
             system_instruction=system or None,
             temperature=temperature,
@@ -163,6 +173,13 @@ class GeminiChatClient:
                 raise LlmStreamError("Gemini 回傳無法解析的資料") from None
             raise LlmUnavailable(UNAVAILABLE) from None
         except (errors.APIError, *_TRANSPORT_ERRORS) as e:
+            if (
+                with_images
+                and isinstance(e, errors.APIError)
+                and e.code == 400
+                and mentions_images(e.message)
+            ):
+                raise ImagesNotSupported(e.message or "Gemini 無法處理圖片") from None
             raise self._map(e) from None
         except Exception as e:
             logger.warning("Gemini unexpected error: %s", type(e).__name__)

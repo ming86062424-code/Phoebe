@@ -566,3 +566,99 @@ def test_parser_gets_a_per_document_folder_removed_with_the_document(make_user, 
     assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 204
     assert not folder.exists()
     assert not kb_services.file_path(kb["id"], doc["id"]).exists()
+
+
+# ---- image API ----
+
+
+def _doc_with_images(client, kb_services, names=("page_1.png", "img_1_2.png")):
+    kb = _create_kb(client)
+    doc = _upload(client, kb["id"]).json()
+    folder = kb_services.doc_dir(kb["id"], doc["id"])
+    for name in names:
+        (folder / name).write_bytes(_png(size=(5, 4)))
+    return kb, doc
+
+
+def _image_url(kb_id, doc_id, name):
+    return f"/api/kbs/{kb_id}/documents/{doc_id}/images/{name}"
+
+
+def test_image_api_serves_png_with_private_cache(make_user, kb_services):
+    alice = make_user("alice")
+    kb, doc = _doc_with_images(alice, kb_services)
+    for name in ("page_1.png", "img_1_2.png"):
+        r = alice.get(_image_url(kb["id"], doc["id"], name))
+        assert r.status_code == 200, name
+        assert r.headers["content-type"] == "image/png"
+        assert r.headers["cache-control"] == "private, max-age=3600"
+        assert r.content == (kb_services.doc_dir(kb["id"], doc["id"]) / name).read_bytes()
+
+
+def test_image_api_is_404_for_other_users_and_anonymous(make_user, client, kb_services):
+    alice, bob = make_user("alice"), make_user("bob")
+    kb, doc = _doc_with_images(alice, kb_services)
+    url = _image_url(kb["id"], doc["id"], "page_1.png")
+    assert bob.get(url).status_code == 404
+    assert client.get(url).status_code == 404  # not logged in: same as not found
+    bob_kb = _create_kb(bob)
+    # bob's own kb id with alice's document
+    assert bob.get(_image_url(bob_kb["id"], doc["id"], "page_1.png")).status_code == 404
+
+
+def test_image_api_is_404_for_missing_or_deleted_documents(make_user, kb_services, settings):
+    from app.db import connect
+    from app.kb import store
+
+    alice = make_user("alice")
+    kb, doc = _doc_with_images(alice, kb_services)
+    other = _create_kb(alice, "另一個")
+    assert alice.get(_image_url(other["id"], doc["id"], "page_1.png")).status_code == 404
+    assert alice.get(_image_url(kb["id"], doc["id"] + 999, "page_1.png")).status_code == 404
+    assert alice.get(_image_url(kb["id"], doc["id"], "page_2.png")).status_code == 404
+    # the folder can outlive the row while a file is in use; the row decides
+    conn = connect(settings.db_path)
+    try:
+        store.delete_document(conn, kb["id"], doc["id"])
+    finally:
+        conn.close()
+    assert kb_services.doc_dir(kb["id"], doc["id"]).is_dir()
+    assert alice.get(_image_url(kb["id"], doc["id"], "page_1.png")).status_code == 404
+
+
+def test_image_api_name_whitelist(make_user, kb_services):
+    alice = make_user("alice")
+    names = ("page_1.png", "a.png", "page_1.jpg", "page_x.png", "page_1_2_3.png", "PAGE_1.png", "page_1.png.png")
+    kb, doc = _doc_with_images(alice, kb_services, names)
+    assert alice.get(_image_url(kb["id"], doc["id"], "page_1.png")).status_code == 200
+    for name in names[1:]:
+        assert alice.get(_image_url(kb["id"], doc["id"], name)).status_code == 404, name
+
+
+def test_image_api_rejects_traversal(make_user, kb_services, settings):
+    from pathlib import Path
+
+    alice = make_user("alice")
+    kb, doc = _doc_with_images(alice, kb_services)
+    # files a traversal would reach: the uploaded PDF next to the folder and the database
+    secret = kb_services.doc_dir(kb["id"], doc["id"]).parent / "page_1.png"
+    secret.write_bytes(_png())
+    assert Path(settings.db_path).is_file()
+    base = f"/api/kbs/{kb['id']}/documents/{doc['id']}/images/"
+    for tail in (
+        "../app.db",
+        "..%2Fapp.db",
+        "%2e%2e%2fapp.db",
+        "%2e%2e/%2e%2e/test.db",
+        "..%2Fpage_1.png",
+        "..%5Cpage_1.png",
+        r"..\page_1.png",
+        "%2e%2e%5c%2e%2e%5ctest.db",
+        "page_1.png%2F..%2F..%2Fpage_1.png",
+        "page_1.png%00",
+        "%2Fetc%2Fpasswd",
+        "C:%5CWindows%5Cwin.ini",
+    ):
+        r = alice.get(base + tail)
+        assert r.status_code == 404, tail
+        assert r.headers.get("content-type") != "image/png", tail

@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
 from starlette.datastructures import UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
@@ -13,6 +14,7 @@ from app.config import Settings
 from app.deps import get_db, get_kb_services, get_settings
 from app.kb import store
 from app.kb.filetypes import IMAGE_EXTENSIONS, PDF_EXTENSIONS, TEXT_EXTENSIONS, UPLOAD_EXTENSIONS
+from app.kb.parsers.base import IMAGE_NAME
 from app.kb.parsers.images import open_image
 from app.kb.parsers.text_parser import decode_text
 from app.kb.services import KbServices
@@ -283,6 +285,52 @@ def retry_document(
     store.update_document(conn, doc_id, status="queued", error=None, progress_done=0)
     kb.worker.enqueue(doc_id)
     return store.get_document(conn, doc_id)
+
+
+IMAGE_CACHE_CONTROL = "private, max-age=3600"
+
+
+def _image_viewer(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """The logged-in user; an anonymous request gets the same 404 as a missing image."""
+    try:
+        return current_user(request, conn, settings)
+    except HTTPException as e:
+        raise HTTPException(status_code=404, detail="找不到圖片") from e
+
+
+@router.get("/kbs/{kb_id}/documents/{doc_id}/images/{name}")
+def document_image(
+    kb_id: int,
+    doc_id: int,
+    name: str,
+    user: dict = Depends(_image_viewer),
+    conn: sqlite3.Connection = Depends(get_db),
+    kb: KbServices = Depends(get_kb_services),
+):
+    """A page or cropped image a parser wrote for the document (PNG).
+
+    Anything that is not the owner's existing document and a whitelisted name that
+    resolves inside the document's folder is 404, so nothing leaks about other files.
+    """
+    not_found = HTTPException(status_code=404, detail="找不到圖片")
+    if not IMAGE_NAME.fullmatch(name):
+        raise not_found
+    if store.get_kb(conn, user["id"], kb_id) is None:
+        raise not_found
+    doc = store.get_document(conn, doc_id)
+    if doc is None or doc["kb_id"] != kb_id:
+        raise not_found
+    folder = kb.doc_dir(kb_id, doc_id).resolve()
+    path = (folder / name).resolve()
+    if path.parent != folder or not path.is_file():
+        raise not_found
+    return FileResponse(
+        path, media_type="image/png", headers={"Cache-Control": IMAGE_CACHE_CONTROL}
+    )
 
 
 @router.get("/kbs/{kb_id}/search")

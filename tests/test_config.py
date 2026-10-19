@@ -257,3 +257,14 @@ def test_dockerfile_has_no_literal_backslash_n_outside_comments():
         if not line.lstrip().startswith("#") and chr(92) + "n" in line
     ]
     assert bad == []
+
+
+def test_kb_max_images_defaults_to_four_and_must_be_a_non_negative_int(monkeypatch):
+    monkeypatch.delenv("KB_MAX_IMAGES", raising=False)
+    assert Settings.from_env().kb_max_images == 4
+    monkeypatch.setenv("KB_MAX_IMAGES", "0")
+    assert Settings.from_env().kb_max_images == 0
+    for bad in ("-1", "two", "1.5"):
+        monkeypatch.setenv("KB_MAX_IMAGES", bad)
+        with pytest.raises(ValueError, match="KB_MAX_IMAGES"):
+            Settings.from_env()

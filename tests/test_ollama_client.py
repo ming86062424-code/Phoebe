@@ -197,3 +197,103 @@ async def test_ollama_availability():
         raise httpx.ConnectError("refused")
 
     assert await make_client(refuse).availability() == (False, "無法連線到 Ollama")
+
+
+# ---- images ----
+
+PNG_A, PNG_B = b"\x89PNG-a", b"\x89PNG-b"
+
+
+def _capture(seen, response=None):
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return response or httpx.Response(200, content=ndjson({"done": True}))
+
+    return handler
+
+
+async def test_images_are_sent_base64_on_the_last_user_message_only():
+    import base64
+
+    seen = []
+    messages = [
+        {"role": "user", "content": "一", "images": [PNG_B]},
+        {"role": "assistant", "content": "二"},
+        {"role": "user", "content": "三", "images": [PNG_A, PNG_B]},
+    ]
+    await collect(make_client(_capture(seen)), messages)
+    sent = seen[0]["messages"]
+    assert sent[-1] == {
+        "role": "user",
+        "content": "三",
+        "images": [base64.b64encode(PNG_A).decode(), base64.b64encode(PNG_B).decode()],
+    }
+    assert sent[0] == {"role": "user", "content": "一"}
+    assert sent[1] == {"role": "assistant", "content": "二"}
+    # the caller's messages are not changed
+    assert messages[-1]["images"] == [PNG_A, PNG_B]
+
+
+async def test_messages_without_images_have_no_images_key():
+    seen = []
+    await collect(make_client(_capture(seen)), [{"role": "user", "content": "hi", "images": []}])
+    assert seen[0]["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(500, json={"error": "this model is missing data required for image input"}),
+        httpx.Response(400, json={"error": "llama3 does not support images"}),
+        httpx.Response(400, json={"error": "model does not support vision"}),
+        httpx.Response(200, content=ndjson({"error": "multimodal input is not supported"})),
+    ],
+)
+async def test_rejected_images_raise_images_not_supported(response):
+    from app.llm import ImagesNotSupported
+
+    messages = [{"role": "user", "content": "hi", "images": [PNG_A]}]
+    with pytest.raises(ImagesNotSupported):
+        await collect(make_client(lambda request: response), messages)
+
+
+async def test_image_like_errors_without_images_stay_ordinary_errors():
+    from app.llm import ImagesNotSupported
+
+    response = httpx.Response(400, json={"error": "model does not support images"})
+    with pytest.raises(OllamaStreamError) as exc:
+        await collect(make_client(lambda request: response))
+    assert not isinstance(exc.value, ImagesNotSupported)
+    # an unrelated failure while sending images is not mistaken for a rejection
+    other = httpx.Response(500, json={"error": "out of memory"})
+    with pytest.raises(OllamaStreamError) as exc:
+        await collect(make_client(lambda request: other), [{"role": "user", "content": "x", "images": [PNG_A]}])
+    assert not isinstance(exc.value, ImagesNotSupported)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("this model is missing data required for image input", True),
+        ("model does not support vision", True),
+        ("gemma3:1b does not support images", True),
+        ("Image input modality is not enabled", True),
+        ("llama3 does not support thinking", False),
+        ("llama3 does not support tools", False),
+        ("out of memory", False),
+        ("", False),
+    ],
+)
+def test_mentions_images(message, expected):
+    from app.llm.base import mentions_images
+
+    assert mentions_images(message) is expected
+
+
+async def test_thinking_not_supported_is_not_an_image_rejection():
+    from app.llm import ImagesNotSupported
+
+    response = httpx.Response(400, json={"error": "llama3 does not support thinking"})
+    with pytest.raises(OllamaStreamError) as exc:
+        await collect(make_client(lambda request: response), [{"role": "user", "content": "x", "images": [PNG_A]}])
+    assert not isinstance(exc.value, ImagesNotSupported)

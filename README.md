@@ -143,6 +143,7 @@ uv run --group eval pytest evals -v
 | `EMBEDDER_URL` | `http://localhost:8002` | Embedding 服務（`embedder`）位址；Docker 內固定為 `http://embedder:8000`；更換模型後需重建知識庫 |
 | `KB_DIR` | `<專案根目錄>/data/kb` | 上傳的 PDF 存放位置 |
 | `KB_TOP_K` | `5` | 每次回答檢索的段落數 |
+| `KB_MAX_IMAGES` | `4` | 回答時附給模型的參考圖片上限（依參考資料順序，頁面圖優先；最長邊超過 1536 px 會先縮小）；`0` 不附圖。模型不支援圖片時會自動改為不帶圖重試一次 |
 | `MAX_UPLOAD_MB` | `50` | 單一 PDF 上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |
 | `LITEPARSE_OCR_LANGUAGE` | `chi_tra+eng` | LiteParse 內建 Tesseract 的語言 |
