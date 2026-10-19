@@ -20,6 +20,7 @@ CLEANUP_INTERVAL_SECONDS = 60
 UPLOAD_TMP_MAX_AGE_SECONDS = 3600
 # how often the worker republishes which parsers it can run (the web process reads it)
 STATUS_PUBLISH_SECONDS = 15
+STALE_FOLDER_ERROR = "無法清除上次處理留下的圖片（檔案可能正被使用），請稍後重試"
 
 
 def _remove(path: Path) -> bool:
@@ -360,8 +361,9 @@ class IngestWorker:
         try:
             out_dir = self.doc_dir(doc["kb_id"], doc_id)
             # images from an earlier attempt must not linger next to the new ones
-            if out_dir.exists():
-                _remove(out_dir)
+            if out_dir.exists() and not _remove(out_dir):
+                self._fail(conn, doc_id, identity, STALE_FOLDER_ERROR)
+                return
             out_dir.mkdir(parents=True, exist_ok=True)
             path = self.file_path(doc["kb_id"], doc_id, doc["filename"])
             parsed = parser.parse(path, out_dir, on_progress)
@@ -388,11 +390,21 @@ class IngestWorker:
         except _Superseded:
             if indexed:
                 self.index.delete_document(doc["kb_id"], doc_id)
+            self._remove_leftovers(conn, doc["kb_id"], doc_id)
         except ParseError as e:
             self._fail(conn, doc_id, identity, str(e))
         except Exception as e:
             logger.exception("文件 %s 處理失敗", doc_id)
             self._fail(conn, doc_id, identity, f"處理失敗：{e}")
+
+    def _remove_leftovers(self, conn, kb_id: int, doc_id: int) -> None:
+        """After a document was deleted mid-run: drop the folder this run (re)created, and
+        the knowledge base's folder too when the knowledge base is gone."""
+        if store.get_document(conn, doc_id) is not None:
+            return  # the id belongs to a new document now; its folder is not ours to delete
+        self.remove_path(self.doc_dir(kb_id, doc_id))
+        if conn.execute("SELECT 1 FROM knowledge_bases WHERE id = ?", (kb_id,)).fetchone() is None:
+            self.remove_path(self.doc_dir(kb_id, doc_id).parent)
 
     def _fail(self, conn, doc_id: int, identity: str, message: str) -> None:
         current = store.get_document(conn, doc_id)

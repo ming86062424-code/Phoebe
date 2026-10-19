@@ -508,3 +508,61 @@ def test_empty_text_file_fails_with_a_text_message(env):
     services.worker.enqueue(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert (got["status"], got["error"]) == ("failed", "檔案中沒有任何文字")
+
+
+def test_superseded_parse_removes_the_document_folder(env):
+    conn, kb, parser, services, add_doc = env
+    doc = add_doc()
+    folder = services.doc_dir(kb["id"], doc["id"])
+
+    def parse(path, out_dir, on_progress):
+        (out_dir / "page_1.png").write_bytes(b"png")
+        other = connect(services.worker.db_path)
+        other.execute("DELETE FROM kb_documents WHERE id = ?", (doc["id"],))
+        other.commit()
+        other.close()
+        on_progress(1, 1)
+        return [ParsedChunk(1, "x")]
+
+    parser.parse = parse
+    assert store.claim_next_document(conn) == doc["id"]
+    services.worker.process(doc["id"])
+    assert not folder.exists()
+    assert (services.kb_dir / str(kb["id"])).exists()  # the knowledge base still exists
+
+
+def test_superseded_parse_removes_the_folder_of_a_deleted_kb(env):
+    conn, kb, parser, services, add_doc = env
+    doc = add_doc()
+    kb_folder = services.kb_dir / str(kb["id"])
+
+    def parse(path, out_dir, on_progress):
+        (out_dir / "page_1.png").write_bytes(b"png")
+        other = connect(services.worker.db_path)
+        other.execute("DELETE FROM kb_documents WHERE kb_id = ?", (kb["id"],))
+        other.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb["id"],))
+        other.commit()
+        other.close()
+        on_progress(1, 1)
+        return [ParsedChunk(1, "x")]
+
+    parser.parse = parse
+    assert store.claim_next_document(conn) == doc["id"]
+    services.worker.process(doc["id"])
+    assert not kb_folder.exists()
+
+
+def test_stale_folder_that_cannot_be_removed_fails_the_attempt(env, monkeypatch):
+    from app.kb import worker as worker_module
+
+    conn, kb, parser, services, add_doc = env
+    doc = add_doc()
+    folder = services.doc_dir(kb["id"], doc["id"])
+    folder.mkdir(parents=True)
+    (folder / "page_1.png").write_bytes(b"old")
+    real = worker_module._remove
+    monkeypatch.setattr(worker_module, "_remove", lambda p: False if p == folder else real(p))
+    services.worker.enqueue(doc["id"])
+    got = store.get_document(conn, doc["id"])
+    assert got["status"] == "failed" and "上次處理" in got["error"]
+    assert parser.parsed == []

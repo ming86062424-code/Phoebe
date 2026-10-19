@@ -9,7 +9,8 @@ MAX_CHARS = 1500
 UNREADABLE = "無法讀取檔案內容"
 
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
-_FENCE = re.compile(r"^\s*(```|~~~)")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_HEADING = re.compile(r"^#{1,6}(\s|$)")
 
 
 def decode_text(data: bytes) -> str:
@@ -49,11 +50,21 @@ def split_text(text: str, limit: int = MAX_CHARS) -> list[str]:
 def _sections(text: str) -> list[str]:
     """Split before every heading line (`#`), ignoring lines inside code fences."""
     sections: list[list[str]] = [[]]
-    fenced = False
+    fence = ""  # the opening marker while inside a code fence
     for line in text.split("\n"):
-        if _FENCE.match(line):
-            fenced = not fenced
-        elif not fenced and line.startswith("#") and sections[-1]:
+        marker = _FENCE.match(line)
+        if fence:
+            # closes only on the same character, at least as long, with nothing after it
+            if (
+                marker
+                and marker.group(1)[0] == fence[0]
+                and len(marker.group(1)) >= len(fence)
+                and not marker.group(2).strip()
+            ):
+                fence = ""
+        elif marker:
+            fence = marker.group(1)
+        elif _HEADING.match(line) and sections[-1]:
             sections.append([])
         sections[-1].append(line)
     return ["\n".join(lines).strip() for lines in sections if "\n".join(lines).strip()]
@@ -66,7 +77,7 @@ def split_markdown(text: str, limit: int = MAX_CHARS) -> list[str]:
             chunks.append(section)
             continue
         first, _, rest = section.partition("\n")
-        if first.startswith("#") and len(first) <= limit // 3:
+        if _HEADING.match(first) and len(first) <= limit // 3:
             # every piece of a long section repeats its heading
             budget = limit - len(first) - 2
             chunks.extend(f"{first}\n\n{piece}" for piece in _merge(_paragraphs(rest), budget))

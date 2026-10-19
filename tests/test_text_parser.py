@@ -81,3 +81,18 @@ def test_parser_metadata():
     assert parser.id == "text"
     assert parser.availability() == (True, "")
     parser.release()
+
+
+def test_md_fence_closes_only_on_a_matching_marker():
+    md = "# A\nx\n~~~\n```py\n# not\n~~~\n# B\ny"
+    assert split_markdown(md) == ["# A\nx\n~~~\n```py\n# not\n~~~", "# B\ny"]
+
+
+def test_md_longer_fence_needs_a_long_enough_closer():
+    md = "# A\n````\n```\n# not\n````\n# B"
+    assert split_markdown(md) == ["# A\n````\n```\n# not\n````", "# B"]
+
+
+def test_md_only_real_atx_headings_split():
+    md = "# A\n#hashtag\n#!/bin/sh\n####### seven\n###### six\nz\n#\nend"
+    assert split_markdown(md) == ["# A\n#hashtag\n#!/bin/sh\n####### seven", "###### six\nz", "#\nend"]
