@@ -9,7 +9,8 @@ from app.db import connect, init_db, now_iso
 from app.kb import store
 from app.kb.parsers.base import PageText, ParseError
 from app.kb.services import build_kb_services
-from tests.fakes import FakeParser, KeywordEmbedding
+from tests.fakes import FakeParser
+from tests.fakes_embedder import FakeEmbedder
 from tests.fakes_store import InMemoryChunkStore
 
 
@@ -28,7 +29,7 @@ def env(tmp_path):
     kb = store.create_kb(conn, 1, "k", "")
     parser = FakeParser()
     services = build_kb_services(
-        settings, embed_model=KeywordEmbedding(),
+        settings, embedder=FakeEmbedder(),
         parsers=[parser],
         threaded=False,
         store=InMemoryChunkStore(),
@@ -351,7 +352,7 @@ def _external_services(tmp_path, parser):
     conn = connect(settings.db_path)
     init_db(conn)
     services = build_kb_services(
-        settings, embed_model=KeywordEmbedding(),
+        settings, embedder=FakeEmbedder(),
         parsers=[parser],
         threaded=False,
         store=InMemoryChunkStore(),

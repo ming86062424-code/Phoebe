@@ -91,7 +91,7 @@ docker compose --profile migrate-chroma stop chroma
 uv run --group migrate python -m app.kb.migrate_chroma --chroma-dir data/chroma
 ```
 
-若之後刪除或重建 Milvus collection（例如更換 `EMBED_MODEL` 或斷詞設定），請重新啟動 web 與 worker：它們會在程序存活期間快取「collection 已就緒」的狀態。
+若之後刪除或重建 Milvus collection（例如更換 embedding 模型或斷詞設定），請重新啟動 web 與 worker：它們會在程序存活期間快取「collection 已就緒」的狀態。
 
 可加 `--dry-run` 先檢查。worker 映像已包含 `migrate` 依賴群組（chromadb）。遷移完成後 `chroma-data` volume 可自行刪除。
 

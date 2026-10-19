@@ -1703,20 +1703,6 @@ wheels = [
 ]
 
 [[package]]
-name = "llama-index-embeddings-ollama"
-version = "0.10.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "llama-index-core" },
-    { name = "ollama" },
-    { name = "pytest-asyncio" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/37/be/aa06215b51538a9e95da63bb3855591a547eae16c15f45f3905f98e03dbe/llama_index_embeddings_ollama-0.10.0.tar.gz", hash = "sha256:fc26cfe8d9d015f76b61558d4c9a1c854535ea0140dd87f169de760b40af3cea", size = 6565, upload-time = "2026-08-31T15:53:04.207Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/ea/96700781ef48998629f3161bf15cbbe8f8a671c52101c9109b0ddc83a764/llama_index_embeddings_ollama-0.10.0-py3-none-any.whl", hash = "sha256:164f35dc6b1966380533316567c58df7afaeaf598aa2c9a510c061c896d8ebbc", size = 6254, upload-time = "2026-08-31T15:53:03.439Z" },
-]
-
-[[package]]
 name = "llama-index-instrumentation"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2764,7 +2750,6 @@ dependencies = [
     { name = "httpx" },
     { name = "liteparse" },
     { name = "llama-index-core" },
-    { name = "llama-index-embeddings-ollama" },
     { name = "pillow" },
     { name = "pymilvus" },
     { name = "pypdfium2" },
@@ -2802,7 +2787,6 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "liteparse", specifier = ">=2.16.0" },
     { name = "llama-index-core", specifier = ">=0.14.25" },
-    { name = "llama-index-embeddings-ollama", specifier = ">=0.10.0" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pymilvus", specifier = "==2.6.17" },
     { name = "pypdfium2", specifier = ">=5.14.0" },

@@ -80,7 +80,7 @@ class MilvusChunkStore:
             existing = _dense_dim(description)
             if existing != dim:
                 raise KnowledgeStoreError(
-                    f"EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{existing}）不同，請重建知識庫"
+                    f"embedding 模型的向量維度（{dim}）與既有知識庫（{existing}）不同，請重建知識庫"
                 )
             if _text_analyzer(description) != TEXT_ANALYZER:
                 raise KnowledgeStoreError(ANALYZER_CHANGED)

@@ -12,6 +12,7 @@ from app.kb import store as kb_store
 from app.kb.index import KnowledgeIndex
 from app.kb.migrate_chroma import migrate
 from tests.fakes import KeywordEmbedding
+from tests.fakes_embedder import FakeEmbedder
 from tests.fakes_store import InMemoryChunkStore
 
 
@@ -37,7 +38,7 @@ def chunk_store():
 
 @pytest.fixture
 def index(chunk_store):
-    return KnowledgeIndex(chunk_store, KeywordEmbedding())
+    return KnowledgeIndex(chunk_store, FakeEmbedder())
 
 
 def make_kb(conn):

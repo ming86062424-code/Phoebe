@@ -6,7 +6,7 @@ from app.kb import index as index_module
 from app.kb.chunk_store import Hit, KnowledgeStoreError
 from app.kb.index import KnowledgeIndex, Source, rrf_fuse
 from app.kb.parsers.base import PageText
-from tests.fakes import KeywordEmbedding
+from tests.fakes_embedder import FakeEmbedder
 from tests.fakes_store import InMemoryChunkStore
 
 
@@ -17,7 +17,7 @@ def store():
 
 @pytest.fixture
 def index(store):
-    return KnowledgeIndex(store, KeywordEmbedding())
+    return KnowledgeIndex(store, FakeEmbedder())
 
 
 def hit(cid, score=1.0, text="t"):
@@ -60,13 +60,13 @@ def test_top_k_and_empty():
 def test_search_returns_keyword_only_match(store):
     """A code the embedding can't link to the query is still found through the keyword path."""
 
-    class FarQueryEmbedding(KeywordEmbedding):
-        def _get_query_embedding(self, query):
+    class FarQueryEmbedding(FakeEmbedder):
+        def query_vector(self, text):
             v = [0.0] * self.dim
             v[0] = 1.0
             return v
 
-        def _get_text_embedding(self, text):
+        def document_vector(self, title, text):
             v = [0.0] * self.dim
             v[1] = 1.0  # orthogonal to every query: cosine 0
             return v
@@ -90,10 +90,10 @@ def test_search_with_non_positive_top_k_returns_nothing(index):
 
 
 def test_dimension_mismatch_propagates(store):
-    class Small(KeywordEmbedding):
+    class Small(FakeEmbedder):
         dim: int = 8
 
-    KnowledgeIndex(store, KeywordEmbedding()).search(1, "x", top_k=1)
+    KnowledgeIndex(store, FakeEmbedder()).search(1, "x", top_k=1)
     with pytest.raises(KnowledgeStoreError, match=r"向量維度（8）與既有知識庫（64）不同，請重建知識庫"):
         KnowledgeIndex(store, Small()).search(1, "x", top_k=1)
 
@@ -147,13 +147,13 @@ def test_blank_pages_are_skipped(index):
 def test_long_text_is_truncated_to_8192(store, monkeypatch):
     assert index_module.MAX_TEXT_CHARS == 8192
     monkeypatch.setattr(index_module, "MAX_TEXT_CHARS", 20)
-    index = KnowledgeIndex(store, KeywordEmbedding())
+    index = KnowledgeIndex(store, FakeEmbedder())
     index.add_document(1, 10, "a.pdf", [PageText(1, "word " * 50)])
     assert store.rows and all(len(r.text) <= 20 for r in store.rows.values())
 
 
 def test_snippet_is_short_but_content_is_whole_chunk(store):
-    index = KnowledgeIndex(store, KeywordEmbedding())
+    index = KnowledgeIndex(store, FakeEmbedder())
     text = "alpha " * 100  # about 600 characters, a single chunk
     index.add_document(1, 10, "a.pdf", [PageText(1, text)])
     (source,) = index.search(1, "alpha", top_k=1)
@@ -175,7 +175,7 @@ def test_source_to_dict_includes_component_scores():
 
 
 def test_dimension_is_checked_once_lazily(store):
-    index = KnowledgeIndex(store, KeywordEmbedding())
+    index = KnowledgeIndex(store, FakeEmbedder())
     assert store.dim is None  # nothing at construction
     index.search(1, "x", top_k=1)
     assert store.dim == 64
@@ -191,7 +191,7 @@ def test_store_error_surfaces_and_is_retried():
                 raise KnowledgeStoreError("無法連線到 Milvus")
             super().ensure_ready(dim)
 
-    index = KnowledgeIndex(Flaky(), KeywordEmbedding())
+    index = KnowledgeIndex(Flaky(), FakeEmbedder())
     with pytest.raises(KnowledgeStoreError, match="無法連線到 Milvus"):
         index.search(1, "x", top_k=1)
     assert index.search(1, "x", top_k=1) == []
@@ -201,15 +201,12 @@ def test_store_error_surfaces_and_is_retried():
 def test_search_is_not_blocked_while_another_document_is_embedding(store):
     started, release = threading.Event(), threading.Event()
 
-    class SlowTextEmbedding(KeywordEmbedding):
-        def _get_text_embedding(self, text):
+    class SlowTextEmbedding(FakeEmbedder):
+        def document_vector(self, title, text):
             if "slow" in text:
                 started.set()
                 release.wait(10)
-            return super()._get_text_embedding(text)
-
-        def _get_text_embeddings(self, texts):
-            return [self._get_text_embedding(t) for t in texts]
+            return super().document_vector(title, text)
 
     index = KnowledgeIndex(store, SlowTextEmbedding())
     index.add_document(1, 10, "a.pdf", [PageText(1, "apple banana")])
@@ -259,7 +256,7 @@ def test_real_milvus_finds_invoice_number_through_keyword_path():
     uri, token = _milvus_uri(), os.environ.get("MILVUS_TOKEN", "")
     name = f"phoebe_idx_test_{os.getpid()}"
     client = MilvusClient(uri=uri, token=token)
-    index = KnowledgeIndex(MilvusChunkStore(uri, token, name, client=client), KeywordEmbedding())
+    index = KnowledgeIndex(MilvusChunkStore(uri, token, name, client=client), FakeEmbedder())
     try:
         pages = [
             PageText(1, "Invoice No. 2026-1018 issued to ACME, total due 30 days."),
@@ -271,3 +268,39 @@ def test_real_milvus_finds_invoice_number_through_keyword_path():
         assert results[0].keyword_score is not None
     finally:
         client.drop_collection(name)
+
+
+# ---- the embedder is called with the right shapes ----
+
+
+def test_documents_use_filename_as_title_and_plain_text(store):
+    calls = []
+
+    class Spy(FakeEmbedder):
+        def embed_documents(self, title, texts):
+            calls.append((title, texts))
+            return super().embed_documents(title, texts)
+
+        def embed_queries(self, texts):
+            calls.append(("q", texts))
+            return super().embed_queries(texts)
+
+    index = KnowledgeIndex(store, Spy())
+    index.add_document(1, 10, "規章.pdf", [PageText(1, "apple banana")])
+    index.search(1, "apple", top_k=1)
+    assert calls == [("規章.pdf", ["apple banana"]), ("q", ["apple"])]
+
+
+def test_embedder_failure_propagates(store):
+    class Down(FakeEmbedder):
+        def embed_queries(self, texts):
+            raise KnowledgeStoreError("無法連線到 embedding 服務")
+
+        def embed_documents(self, title, texts):
+            raise KnowledgeStoreError("無法連線到 embedding 服務")
+
+    index = KnowledgeIndex(store, Down())
+    with pytest.raises(KnowledgeStoreError, match="無法連線到 embedding 服務"):
+        index.search(1, "x", top_k=1)
+    with pytest.raises(KnowledgeStoreError, match="無法連線到 embedding 服務"):
+        index.add_document(1, 10, "a.pdf", [PageText(1, "x")])

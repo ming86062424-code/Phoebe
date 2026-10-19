@@ -157,7 +157,7 @@ def test_dimension_mismatch_raises_clear_error():
     client = FakeClient(exists=True, dim=768)
     with pytest.raises(KnowledgeStoreError) as err:
         _store(client).ensure_ready(1024)
-    assert str(err.value) == "EMBED_MODEL 的向量維度（1024）與既有知識庫（768）不同，請重建知識庫"
+    assert str(err.value) == "embedding 模型的向量維度（1024）與既有知識庫（768）不同，請重建知識庫"
     assert client.calls == []
 
 

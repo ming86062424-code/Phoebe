@@ -31,7 +31,7 @@ class InMemoryChunkStore:
     def ensure_ready(self, dim: int) -> None:
         if self.dim is not None and self.dim != dim:
             raise KnowledgeStoreError(
-                f"EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{self.dim}）不同，請重建知識庫"
+                f"embedding 模型的向量維度（{dim}）與既有知識庫（{self.dim}）不同，請重建知識庫"
             )
         self.dim = dim
 

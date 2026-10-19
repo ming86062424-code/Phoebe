@@ -5,7 +5,7 @@ Run from the project root, with the migrate dependency group installed:
     uv run --group migrate python -m app.kb.migrate_chroma --chroma-dir data/chroma [--dry-run]
 
 Chunks are copied as they are (no re-splitting) and re-embedded with the current
-EMBED_MODEL. Chunks whose knowledge base or document no longer exists in SQLite are
+embedding service (EMBEDDER_URL). Chunks whose knowledge base or document no longer exists in SQLite are
 skipped. Running it again replaces each document's chunks, so it never duplicates data.
 """
 

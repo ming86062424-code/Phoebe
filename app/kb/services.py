@@ -2,12 +2,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from llama_index.core.base.embeddings.base import BaseEmbedding
-
 from app.config import Settings
 from app.db import connect
 from app.kb.chunk_store import ChunkStore
-from app.kb.index import KnowledgeIndex
+from app.kb.embedder_client import EmbedderClient
+from app.kb.index import Embedder, KnowledgeIndex
 from app.kb.milvus_store import MilvusChunkStore
 from app.kb.parsers.base import Parser
 from app.kb.worker import IngestWorker
@@ -67,27 +66,13 @@ class KbServices:
 
 def build_kb_services(
     settings: Settings,
-    embed_model: BaseEmbedding | None = None,
+    embedder: Embedder | None = None,
     parsers: list[Parser] | None = None,
     threaded: bool = True,
     store: ChunkStore | None = None,
 ) -> KbServices:
-    if embed_model is None:
-        from llama_index.embeddings.ollama import OllamaEmbedding
-
-        # EmbeddingGemma is trained with task prefixes; they widen the gap between
-        # relevant and irrelevant chunks in our retrieval checks.
-        prefixes = (
-            {
-                "query_instruction": "task: search result | query: ",
-                "text_instruction": "title: none | text: ",
-            }
-            if settings.embed_model.startswith("embeddinggemma")
-            else {}
-        )
-        embed_model = OllamaEmbedding(
-            model_name=settings.embed_model, base_url=settings.ollama_base_url, **prefixes
-        )
+    if embedder is None:
+        embedder = EmbedderClient(settings.embedder_url)
     if parsers is None:
         from app.kb.parsers.lightonocr import LightOnOcrParser
         from app.kb.parsers.liteparse_parser import LiteParseParser
@@ -102,7 +87,7 @@ def build_kb_services(
         store = MilvusChunkStore(
             settings.milvus_uri, settings.milvus_token, settings.milvus_collection
         )
-    index = KnowledgeIndex(store, embed_model)
+    index = KnowledgeIndex(store, embedder)
     services = KbServices(
         index=index,
         parsers={p.id: p for p in parsers},

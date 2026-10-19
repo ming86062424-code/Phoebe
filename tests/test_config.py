@@ -39,6 +39,7 @@ def test_tests_ignore_developer_env_file():
 def test_new_settings_defaults(monkeypatch):
     for key in (
         "KB_WORKER_MODE",
+        "EMBEDDER_URL",
         "OCR_BACKEND",
         "VLLM_BASE_URL",
         "MILVUS_URI",
@@ -51,6 +52,7 @@ def test_new_settings_defaults(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     s = Settings.from_env()
     assert s.kb_worker_mode == "embedded"
+    assert s.embedder_url == "http://localhost:8002"
     assert s.ocr_backend == "transformers"
     assert s.vllm_base_url == "http://localhost:8001/v1"
     assert s.milvus_uri == "http://localhost:19530"

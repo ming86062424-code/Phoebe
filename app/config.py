@@ -30,7 +30,7 @@ class Settings:
     session_days: int = 7
     chat_think: bool = True
     frontend_dist: str = str(PROJECT_ROOT / "frontend" / "dist")
-    embed_model: str = "embeddinggemma-2"
+    embedder_url: str = "http://localhost:8002"
     kb_dir: str = str(PROJECT_ROOT / "data" / "kb")
     kb_top_k: int = 5
     max_upload_mb: int = 50
@@ -63,7 +63,7 @@ class Settings:
             chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
             not in FALSY_VALUES,
             frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
-            embed_model=os.environ.get("EMBED_MODEL", d.embed_model),
+            embedder_url=os.environ.get("EMBEDDER_URL", d.embedder_url).strip(),
             kb_dir=os.environ.get("KB_DIR", d.kb_dir),
             kb_top_k=int(os.environ.get("KB_TOP_K", d.kb_top_k)),
             max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", d.max_upload_mb)),

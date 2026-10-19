@@ -339,7 +339,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     from app.db import connect, init_db, now_iso
     from app.kb.services import build_kb_services
     from app.main import create_app
-    from tests.fakes import KeywordEmbedding
+    from tests.fakes_embedder import FakeEmbedder
     from tests.fakes_store import InMemoryChunkStore
 
     settings = Settings(
@@ -350,7 +350,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     )
     fake_parser.available = False  # the web process itself could not use it
     services = build_kb_services(
-        settings, embed_model=KeywordEmbedding(),
+        settings, embedder=FakeEmbedder(),
         parsers=[fake_parser],
         threaded=False,
         store=InMemoryChunkStore(),

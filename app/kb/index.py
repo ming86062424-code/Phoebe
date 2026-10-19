@@ -1,11 +1,11 @@
 import logging
 import threading
 from dataclasses import asdict, dataclass
+from typing import Protocol
 
 from llama_index.core import Document
-from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import BaseNode, MetadataMode, TextNode
+from llama_index.core.schema import BaseNode, TextNode
 
 from app.kb.chunk_store import ChunkRecord, ChunkStore, Hit
 from app.kb.parsers.base import PageText
@@ -18,6 +18,16 @@ SNIPPET_CHARS = 400
 MAX_TEXT_CHARS = 8192
 RRF_K = 60
 CANDIDATE_FACTOR = 4  # each retrieval path returns top_k * 4 candidates for fusion
+
+
+class Embedder(Protocol):
+    def embed_queries(self, texts: list[str]) -> list[list[float]]: ...
+
+    def embed_documents(self, title: str, texts: list[str]) -> list[list[float]]: ...
+
+    def embed_images(self, images: list[bytes]) -> list[list[float]]: ...
+
+    def embed_image_texts(self, items: list[tuple[bytes, str]]) -> list[list[float]]: ...
 
 
 @dataclass(frozen=True)
@@ -67,9 +77,9 @@ def rrf_fuse(
 class KnowledgeIndex:
     """Chunks, embeds and retrieves document pages; hybrid dense + BM25 search via a ChunkStore."""
 
-    def __init__(self, store: ChunkStore, embed_model: BaseEmbedding):
+    def __init__(self, store: ChunkStore, embedder: Embedder):
         self._store = store
-        self._embed_model = embed_model
+        self._embedder = embedder
         self._splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         self._ready = False
         self._ready_lock = threading.Lock()
@@ -128,10 +138,9 @@ class KnowledgeIndex:
     ) -> int:
         if not nodes:
             return 0
-        # Embedding calls Ollama and can take minutes for a big PDF; no lock is held.
-        embeddings = self._embed_model.get_text_embedding_batch(
-            [n.get_content(metadata_mode=MetadataMode.EMBED) for n in nodes]
-        )
+        # Embedding can take minutes for a big PDF; no lock is held. The embedder service
+        # adds the `title: ... | text: ...` prefix itself, so title and text go separately.
+        embeddings = self._embedder.embed_documents(filename, [n.get_content() for n in nodes])
         self._ensure_ready(len(embeddings[0]))
         records = []
         for i, (node, embedding) in enumerate(zip(nodes, embeddings, strict=True)):
@@ -170,7 +179,7 @@ class KnowledgeIndex:
     def search(self, kb_id: int, query: str, top_k: int) -> list[Source]:
         if top_k <= 0:
             return []
-        vector = [float(x) for x in self._embed_model.get_query_embedding(query)]
+        vector = [float(x) for x in self._embedder.embed_queries([query])[0]]
         self._ensure_ready(len(vector))
         limit = top_k * CANDIDATE_FACTOR
         dense = self._store.dense_search(kb_id, vector, limit)
