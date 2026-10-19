@@ -1,6 +1,6 @@
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
@@ -60,7 +60,6 @@ async def _with_knowledge(
 
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
-    request: Request,
     conversation_id: int,
     body: MessageIn,
     user: dict = Depends(current_user),
@@ -72,7 +71,10 @@ async def send_message(
     conv = conversations.get_conversation(conn, user["id"], conversation_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    release = claim_reply(request.app.state.replying, conversation_id)
+    release = await run_in_threadpool(
+        claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
+    )
+    release.start_keep_alive()
     try:
         conversations.add_message(conn, conversation_id, "user", body.content)
         conversations.set_title_if_empty(conn, conversation_id, body.content.strip()[:30])
@@ -89,7 +91,6 @@ async def send_message(
 
 @router.post("/conversations/{conversation_id}/regenerate")
 async def regenerate(
-    request: Request,
     conversation_id: int,
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
@@ -100,7 +101,10 @@ async def regenerate(
     conv = conversations.get_conversation(conn, user["id"], conversation_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    release = claim_reply(request.app.state.replying, conversation_id)
+    release = await run_in_threadpool(
+        claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
+    )
+    release.start_keep_alive()
     history = conversations.get_history(conn, conversation_id)
     if not history or history[-1]["role"] != "user":
         release()

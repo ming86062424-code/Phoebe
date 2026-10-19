@@ -1,3 +1,8 @@
+import os
+from pathlib import Path
+
+os.environ["ENV_FILE"] = str(Path(__file__).parent / "no-such.env")
+
 import pytest
 from fastapi.testclient import TestClient
 

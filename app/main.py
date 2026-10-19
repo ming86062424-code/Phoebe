@@ -23,15 +23,16 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        kb_services.worker.start()
+        embedded = settings.kb_worker_mode == "embedded"
+        if embedded:
+            kb_services.worker.start()
         yield
-        kb_services.worker.stop()
+        if embedded:
+            kb_services.worker.stop()
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
     app.state.kb = kb_services
-    # ids of conversations with a reply in progress (see chat_stream.claim_reply)
-    app.state.replying = set()
     app.include_router(auth.router)
     app.include_router(conversations.router)
     app.include_router(chat.router)

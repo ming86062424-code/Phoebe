@@ -26,11 +26,10 @@ def test_liteparse_raises_parse_error_on_garbage(tmp_path):
 
 
 def test_lightonocr_generate_kwargs():
-    """Sampling makes OCR text differ between runs; greedy decoding is reproducible.
-    The model config ships use_cache=false, which recomputes the whole prompt per token."""
+    """Official model-card sampling (temperature 0.1). The model config ships use_cache=false, which recomputes the whole prompt per token."""
     torch = __import__("pytest").importorskip("torch")
 
-    from app.kb.parsers.lightonocr import LightOnOcrParser
+    from app.kb.parsers.ocr_engines import TransformersOcrEngine
 
     class FakeInputs(dict):
         def to(self, device):
@@ -53,9 +52,38 @@ def test_lightonocr_generate_kwargs():
             self.kwargs = kwargs
             return torch.zeros((1, 5), dtype=torch.long)
 
-    parser = LightOnOcrParser("model", "http://ollama")
+    parser = TransformersOcrEngine("model", "http://ollama")
     parser._model, parser._processor = FakeModel(), FakeProcessor()
-    assert parser._ocr_image(object()) == "文字"
-    assert parser._model.kwargs["do_sample"] is False
-    assert "temperature" not in parser._model.kwargs
+    assert parser.ocr(object()) == "文字"
+    assert parser._model.kwargs["do_sample"] is True
+    assert parser._model.kwargs["temperature"] == 0.1
     assert parser._model.kwargs["use_cache"] is True
+
+
+def test_lightonocr_parser_uses_engine_per_page(tmp_path):
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    class FakeEngine:
+        def __init__(self):
+            self.calls = 0
+
+        def availability(self):
+            return True, ""
+
+        def ocr(self, image):
+            self.calls += 1
+            return f"頁{self.calls}"
+
+        def release(self):
+            pass
+
+    path = tmp_path / "a.pdf"
+    path.write_bytes(make_pdf(["one", "two", "three"]))
+    engine = FakeEngine()
+    parser = LightOnOcrParser(engine)
+    progress = []
+    pages = parser.parse(str(path), lambda d, t: progress.append((d, t)))
+    assert engine.calls == 3
+    assert [(p.page, p.text) for p in pages] == [(1, "頁1"), (2, "頁2"), (3, "頁3")]
+    assert progress == [(0, 3), (1, 3), (2, 3), (3, 3)]
+    assert parser.availability() == (True, "")

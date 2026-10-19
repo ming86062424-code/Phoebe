@@ -1,0 +1,155 @@
+# 在 docker/ 目錄執行（先 cp .env.example .env）：
+#   cd docker && docker compose up -d --build
+# docker/.env 同時用於變數插值與容器環境變數；build context 為上一層（專案根目錄）。
+name: phoebe
+
+x-env: &env
+  env_file:
+    - path: .env
+      required: false
+
+services:
+  chroma:
+    image: chromadb/chroma:1.5.9
+    restart: unless-stopped
+    # chroma 1.x 預設持久化路徑為 /data，不需 0.x 的 IS_PERSISTENT/PERSIST_DIRECTORY
+    volumes:
+      - chroma-data:/data
+    healthcheck:
+      # ⚠️ 未在 chroma 1.5.9 映像內驗證；以 bash /dev/tcp 檢查連接埠（映像無 curl）
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  web:
+    <<: *env
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: web
+    image: phoebe-web:local
+    restart: unless-stopped
+    depends_on:
+      chroma:
+        condition: service_healthy
+    stop_grace_period: 30s
+    ports:
+      - "${PHOEBE_PORT:-8000}:8000"
+    environment:
+      KB_WORKER_MODE: external
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      DB_PATH: /data/app.db
+      KB_DIR: /data/kb
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - phoebe-data:/data
+    healthcheck:
+      # /api/me 未登入回 401 也代表服務正常
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.error, urllib.request
+          try:
+              urllib.request.urlopen("http://127.0.0.1:8000/api/me", timeout=3)
+          except urllib.error.HTTPError as e:
+              sys.exit(0 if e.code == 401 else 1)
+          except Exception:
+              sys.exit(1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    <<: *env
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: worker
+    image: phoebe-worker:local
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+      # 只等容器啟動：vLLM 還在下載模型或失敗時，LiteParse 仍可使用（OCR 解析器會顯示未啟動）
+      vllm:
+        condition: service_started
+    stop_grace_period: 30s
+    environment:
+      OCR_BACKEND: vllm
+      VLLM_BASE_URL: http://vllm:8000/v1
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      DB_PATH: /data/app.db
+      KB_DIR: /data/kb
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - phoebe-data:/data
+
+  # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
+  # 只想給本機快速測試用：docker compose up -d vllm（只對本機 127.0.0.1:8001 開放）
+  # 不載入 env_file：vllm 不需要應用程式設定，避免 vLLM 對未知的 VLLM_* 環境變數發出警告
+  vllm:
+    image: vllm/vllm-openai:v0.30.0
+    restart: unless-stopped
+    ports:
+      # 無驗證的 GPU 端點，只對本機開放
+      - "127.0.0.1:8001:8000"
+    command:
+      - --model
+      - ${OCR_MODEL:-lightonai/LightOnOCR-3-0.8B}
+      - --trust-remote-code
+      - --limit-mm-per-prompt
+      - '{"image": 1}'
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+      - --mm-processor-cache-gb
+      - "0"
+      - --no-enable-prefix-caching
+      # RTX 2060（Turing）不支援 bfloat16
+      - --dtype
+      - float16
+      - --gpu-memory-utilization
+      - ${OCR_VLLM_GPU_UTIL:-0.8}
+      - --max-model-len
+      - ${OCR_VLLM_MAX_MODEL_LEN:-18000}
+      # 6GB 顯卡：CUDA graph 的額外記憶體會讓 KV cache 配不到空間，改用 eager 並限制同時序列數
+      - --enforce-eager
+      - --max-num-seqs
+      - ${OCR_VLLM_MAX_NUM_SEQS:-8}
+    ipc: host
+    volumes:
+      # vLLM 映像以 root 執行，Hugging Face 預設快取在 /root/.cache/huggingface
+      - hf-cache:/root/.cache/huggingface
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      # 首次啟動要下載並載入模型
+      start_period: 600s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  phoebe-data:
+  chroma-data:
+  hf-cache:

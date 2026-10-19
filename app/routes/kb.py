@@ -74,8 +74,10 @@ def _require_kb(conn: sqlite3.Connection, user: dict, kb_id: int) -> dict:
 
 
 @router.get("/parsers")
-def list_parsers(_: dict = Depends(current_user), kb: KbServices = Depends(get_kb_services)):
-    return kb.parser_info()
+async def list_parsers(
+    _: dict = Depends(current_user), kb: KbServices = Depends(get_kb_services)
+):
+    return await run_in_threadpool(kb.parser_info)
 
 
 @router.get("/kbs")
@@ -152,7 +154,7 @@ async def upload_document(
     chosen = kb.parsers.get(parser) if isinstance(parser, str) else None
     if chosen is None:
         raise HTTPException(status_code=422, detail="未知的解析器")
-    available, reason = chosen.availability()
+    available, reason = await run_in_threadpool(kb.availability, chosen.id)
     if not available:
         raise HTTPException(status_code=422, detail=reason or "此解析器目前無法使用")
     filename = (file.filename or "").strip()
@@ -176,8 +178,14 @@ async def upload_document(
             with tmp.open("rb") as f:
                 if f.read(5) != b"%PDF-":
                     raise HTTPException(status_code=422, detail="檔案不是有效的 PDF")
-            doc = store.create_document(conn, kb_id, filename[:200], chosen.id, size)
-            tmp.replace(kb.file_path(kb_id, doc["id"]))
+            # 'pending' can't be claimed: only queue it once its file is in place
+            doc = store.create_document(conn, kb_id, filename[:200], chosen.id, size, "pending")
+            try:
+                tmp.replace(kb.file_path(kb_id, doc["id"]))
+                store.update_document(conn, doc["id"], status="queued")
+            except BaseException:
+                store.delete_document(conn, kb_id, doc["id"])
+                raise
         finally:
             tmp.unlink(missing_ok=True)
         kb.worker.enqueue(doc["id"])

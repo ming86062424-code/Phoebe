@@ -7,7 +7,7 @@ DOC_COLUMNS = (
     "chunk_count, size_bytes, created_at, updated_at"
 )
 UPDATABLE_DOC_FIELDS = {"status", "error", "progress_done", "progress_total", "chunk_count"}
-UNFINISHED_STATUSES = ("queued", "parsing", "indexing")
+UNFINISHED_STATUSES = ("pending", "queued", "parsing", "indexing")
 
 
 def create_kb(conn: sqlite3.Connection, user_id: int, name: str, description: str) -> dict:
@@ -73,13 +73,18 @@ def delete_kb(conn: sqlite3.Connection, user_id: int, kb_id: int) -> bool:
 
 
 def create_document(
-    conn: sqlite3.Connection, kb_id: int, filename: str, parser: str, size_bytes: int
+    conn: sqlite3.Connection,
+    kb_id: int,
+    filename: str,
+    parser: str,
+    size_bytes: int,
+    status: str = "queued",
 ) -> dict:
     now = now_iso()
     cur = conn.execute(
         "INSERT INTO kb_documents (kb_id, filename, parser, status, size_bytes, created_at, updated_at) "
-        "VALUES (?, ?, ?, 'queued', ?, ?, ?)",
-        (kb_id, filename, parser, size_bytes, now, now),
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (kb_id, filename, parser, status, size_bytes, now, now),
     )
     conn.execute("UPDATE knowledge_bases SET updated_at = ? WHERE id = ?", (now, kb_id))
     conn.commit()
@@ -102,10 +107,55 @@ def list_documents(conn: sqlite3.Connection, kb_id: int) -> list[dict]:
 
 def list_unfinished_documents(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        f"SELECT {DOC_COLUMNS} FROM kb_documents WHERE status IN (?, ?, ?) ORDER BY id",
+        f"SELECT {DOC_COLUMNS} FROM kb_documents WHERE status IN (?, ?, ?, ?) ORDER BY id",
         UNFINISHED_STATUSES,
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def claim_next_document(conn: sqlite3.Connection) -> int | None:
+    """Atomically take the oldest queued document (queued -> parsing); None if there is none."""
+    row = conn.execute(
+        "UPDATE kb_documents SET status = 'parsing', error = NULL, progress_done = 0, updated_at = ? "
+        "WHERE id = (SELECT id FROM kb_documents WHERE status = 'queued' ORDER BY id LIMIT 1) "
+        "AND status = 'queued' RETURNING id",
+        (now_iso(),),
+    ).fetchone()
+    conn.commit()
+    return row["id"] if row else None
+
+
+def requeue_stale_documents(conn: sqlite3.Connection, stale_before: str) -> list[int]:
+    """Put documents whose worker went away (no update since stale_before) back in the queue."""
+    rows = conn.execute(
+        "UPDATE kb_documents SET status = 'queued', progress_done = 0, updated_at = ? "
+        "WHERE status IN ('parsing', 'indexing') AND updated_at < ? RETURNING id",
+        (now_iso(), stale_before),
+    ).fetchall()
+    conn.commit()
+    return sorted(r["id"] for r in rows)
+
+
+def fail_stale_pending_documents(
+    conn: sqlite3.Connection, stale_before: str, message: str
+) -> list[int]:
+    """Fail uploads that never finished (the web process died between 'pending' and 'queued')."""
+    rows = conn.execute(
+        "UPDATE kb_documents SET status = 'failed', error = ?, updated_at = ? "
+        "WHERE status = 'pending' AND updated_at < ? RETURNING id",
+        (message, now_iso(), stale_before),
+    ).fetchall()
+    conn.commit()
+    return sorted(r["id"] for r in rows)
+
+
+def touch_document(conn: sqlite3.Connection, doc_id: int) -> None:
+    """Heartbeat: show that a worker is still busy with this document."""
+    conn.execute(
+        "UPDATE kb_documents SET updated_at = ? WHERE id = ? AND status IN ('parsing', 'indexing')",
+        (now_iso(), doc_id),
+    )
+    conn.commit()
 
 
 def update_document(conn: sqlite3.Connection, doc_id: int, **fields) -> None:

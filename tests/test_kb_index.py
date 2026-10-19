@@ -76,3 +76,18 @@ def test_search_is_not_blocked_while_another_document_is_embedding(tmp_path):
         release.set()
         writer.join(10)
     assert {r.document_id for r in index.search(1, "rocket", 2)} == {10, 11}
+
+
+def test_chroma_host_uses_http_client(monkeypatch, tmp_path):
+    import chromadb
+
+    calls = {}
+
+    def fake_http_client(**kwargs):
+        calls.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(chromadb, "HttpClient", fake_http_client)
+    KnowledgeIndex(str(tmp_path / "chroma"), KeywordEmbedding(), chroma_host="chroma", chroma_port=9000)
+    assert (calls["host"], calls["port"]) == ("chroma", 9000)
+    assert calls["settings"].anonymized_telemetry is False
