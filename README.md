@@ -1,6 +1,6 @@
 # Phoebe
 
-在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React），附知識庫（PDF、txt、md、圖檔；Milvus，BM25 + 向量混合檢索）。
+在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React），附多模態知識庫（PDF、txt、md、圖檔；Milvus，BM25 + 向量混合檢索，文字與圖片共用同一個向量空間）。
 
 ## 事前準備
 
@@ -9,7 +9,7 @@
 - Node 22 以上（前端建置與開發用）
 - Ollama 已啟動，位於 http://localhost:11434
 - 下載模型：`ollama pull gemma4:e4b`（評測另需 `ollama pull qwen3.5:4b`）
-- 知識庫 Embedding 模型：Ollama 中需有 `embeddinggemma-2`
+- 知識庫 Embedding 服務（`embedder`，以 Docker 執行）：`cd docker && docker compose up -d embedder`，位於 http://localhost:8002（見下方「Embedding 服務」）
 
 ## 安裝與執行
 
@@ -57,14 +57,29 @@ cd frontend && npm run typecheck
 
 ## 知識庫
 
-側邊欄「知識庫」可建立知識庫、上傳 PDF；AI 對話上方的下拉選單可為每個對話選用一個知識庫，回答下方會列出引用來源（檔名與頁碼）。
+側邊欄「知識庫」可建立知識庫、上傳文件；AI 對話上方的下拉選單可為每個對話選用一個知識庫。回答下方會列出引用卡片：每張卡片顯示檔名、頁碼、相關度分數與內容預覽（預設收合、只顯示約 120 字，可展開），有圖片的來源會附縮圖，點擊可放大。
 
-上傳時可選擇 PDF 解析器：
+支援的檔案類型：`.pdf`、`.txt`、`.md`、`.png`、`.jpg`、`.jpeg`、`.webp`。
+
+- **PDF**：每頁一個 chunk（整頁文字，加上該頁的圖片資訊）。
+- **txt／md**：txt 依段落合併、md 依標題分段，每個 chunk 至多 1500 字（需為 UTF-8，含 BOM 也可）；不需選解析器。
+- **圖檔**：一張圖一個 chunk，直接以圖片向量檢索。
+
+### Embedding 服務（embedder）
+
+文字與圖片共用同一個 embedding 模型 `google/embeddinggemma-2`（768 維），由獨立的 `embedder` 服務提供（`embedder/`，sentence-transformers，CPU float32，不需 GPU）。應用程式以 `EMBEDDER_URL` 連線（本機預設 `http://localhost:8002`；Docker 內固定為 `http://embedder:8000`）。因此「用文字問、命中圖片內容」可以直接運作，不需要先把圖片轉成文字。
+
+- 首次啟動會從 Hugging Face 下載模型（約 1–2 GB），第一次啟動會等很久；載入完成前 `GET /health` 回 503，檢索與解析會顯示「無法連線到 embedding 服務」。
+- 本機啟動：`cd docker && docker compose up -d embedder`。細節與疑難排解見 [docker/README.md](docker/README.md)。
+
+上傳 PDF 時可選擇解析器：
 
 | 解析器 | 適合 | 說明 |
 | --- | --- | --- |
-| LiteParse | 文字型 PDF | 預設、速度快、不需 GPU；掃描頁會用內建 Tesseract（`chi_tra+eng`）辨識，但中文品質有限 |
-| LightOnOCR-3-0.8B | 掃描檔、表格、複雜版面 | 以 transformers 在本機 GPU 執行，輸出 Markdown；RTX 2060 上每頁約 1–2 分鐘 |
+| LiteParse | 文字型 PDF | 預設、速度快、不需 GPU；掃描頁會用內建 Tesseract（`chi_tra+eng`）辨識，但中文品質有限。每頁另存一張頁面圖（400 DPI 渲染後縮到最長邊 1536 px，`page_{n}.png`），向量由「整頁圖＋該頁文字」產生（**頁面圖向量**），圖表、照片與版面也能被檢索到 |
+| LightOnOCR-3-0.8B | 掃描檔、表格、複雜版面 | 在本機 GPU 執行，輸出 Markdown 與各區塊座標（grounding）；RTX 2060 上每頁約 1–2 分鐘。依座標把頁面中的圖片**裁切**成獨立的圖（`img_{頁}_{序}.png`，捨棄頁首、頁尾與頁碼）；向量由頁面的 Markdown 文字產生，裁切圖附在該頁的引用卡片上，也會一併附給聊天模型 |
+
+兩者差別：LiteParse 以「整頁圖」進入向量（圖片內容本身可被文字問題檢索到），LightOnOCR 以「文字」進入向量、另存「裁切出的單張圖」供引用與附圖（能精準顯示單張圖表）。圖檔（png、jpg、jpeg、webp）可選擇任一解析器，視為單頁。
 
 LightOnOCR 需要額外的 `ocr` 套件群組（torch CUDA 12.6、transformers，約 3GB），並以該群組啟動伺服器：
 
@@ -82,6 +97,23 @@ uv run --group ocr python -m scripts.ocr_smoke 路徑/檔案.pdf
 ```
 
 文件在背景依序處理（排隊中 → 解析中 → 建立索引中 → 完成／失敗）；伺服器重啟後，未完成的文件會自動重新處理。
+
+### 回答時附圖與 `KB_MAX_IMAGES`
+
+回答時會把檢索到的參考圖片一併附給聊天模型（依參考資料順序，頁面圖優先，最多 `KB_MAX_IMAGES` 張，預設 4；最長邊超過 1536 px 會先縮小）。模型不支援圖片時，系統會自動不帶圖重試一次，使用者不會看到錯誤。
+
+注意（Ollama 視覺模型）：4 張大圖可能超過預設的 context 長度（`num_ctx`）。若回答被截斷或失敗，請調低 `KB_MAX_IMAGES`（`0` 為不附圖），或調高 Ollama 的 `num_ctx`（例如在 Modelfile 設 `PARAMETER num_ctx 8192`，或設定環境變數 `OLLAMA_CONTEXT_LENGTH`）。
+
+### 重新處理既有文件
+
+升級自舊版（或更換 embedding 模型、解析設定）後，既有文件需要重新處理：先刪除 Milvus 的 collection，再把所有文件重新排入佇列。Docker 的完整步驟見 [docker/README.md](docker/README.md)；本機：
+
+```
+uv run python -m app.kb.reprocess_all --dry-run   # 只列出每個知識庫會排入幾份文件
+uv run python -m app.kb.reprocess_all
+```
+
+指令會把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），由 worker 依原解析器重新處理；正在處理中的文件會略過，待其完成後再執行一次即可。
 
 ## 測試
 
@@ -117,7 +149,7 @@ uv run --group eval pytest evals -v
   - 模型：從目前提供者即時取得模型清單後選擇
   - 系統提示詞：最多 4000 字
   - temperature：可自訂，或使用模型預設值
-- Embedding（知識庫）一律使用本機 Ollama，不受LLM 供應商影響。
+- Embedding（知識庫）一律使用獨立的 `embedder` 服務（`EMBEDDER_URL`），不受 LLM 供應商影響。
 
 ### Gemini
 
@@ -141,10 +173,10 @@ uv run --group eval pytest evals -v
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
 | `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |
 | `EMBEDDER_URL` | `http://localhost:8002` | Embedding 服務（`embedder`）位址；Docker 內固定為 `http://embedder:8000`；更換模型後需重建知識庫 |
-| `KB_DIR` | `<專案根目錄>/data/kb` | 上傳的 PDF 存放位置 |
+| `KB_DIR` | `<專案根目錄>/data/kb` | 上傳檔案與解析出的圖片存放位置 |
 | `KB_TOP_K` | `5` | 每次回答檢索的段落數 |
 | `KB_MAX_IMAGES` | `4` | 回答時附給模型的參考圖片上限（依參考資料順序，頁面圖優先；最長邊超過 1536 px 會先縮小）；`0` 不附圖。模型不支援圖片時會自動改為不帶圖重試一次 |
-| `MAX_UPLOAD_MB` | `50` | 單一 PDF 上限 |
+| `MAX_UPLOAD_MB` | `50` | 單一上傳檔案上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |
 | `LITEPARSE_OCR_LANGUAGE` | `chi_tra+eng` | LiteParse 內建 Tesseract 的語言 |
 | `KB_WORKER_MODE` | `embedded` | 文件解析 worker：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.worker_main`） |
