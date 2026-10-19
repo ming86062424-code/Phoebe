@@ -1,6 +1,6 @@
 # Docker 部署
 
-服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`milvus-data`、`etcd-data`、`minio-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）、`embedder-hf-cache`（embedder 的模型快取）；舊的 `chroma-data` 僅供遷移。
+服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`milvus-data`、`etcd-data`、`minio-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）、`embedder-hf-cache`（embedder 的模型快取）。
 
 ## 前置需求
 
@@ -74,27 +74,9 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 不啟動應用程式容器的快速測試：`cd docker && docker compose up -d milvus`（會一併啟動 etcd、minio），並在根目錄 `.env` 設 `MILVUS_URI=http://localhost:19530`。
 
-從舊版 Chroma 遷移資料（一次性；`chroma-data` volume 需仍存在）：
-
-```
-cd docker
-docker compose up -d milvus
-docker compose --profile migrate-chroma up -d chroma
-docker compose run --rm --no-deps worker python -m app.kb.migrate_chroma --chroma-host chroma
-docker compose --profile migrate-chroma stop chroma
-```
-
-（`--no-deps` 且先單獨啟動 `milvus`，避免連帶啟動 vllm、web。）
-
-本機（非 Docker）遷移：
-
-```
-uv run --group migrate python -m app.kb.migrate_chroma --chroma-dir data/chroma
-```
-
 若之後刪除或重建 Milvus collection（例如更換 embedding 模型或斷詞設定），請重新啟動 web 與 worker：它們會在程序存活期間快取「collection 已就緒」的狀態。
 
-可加 `--dry-run` 先檢查。worker 映像已包含 `migrate` 依賴群組（chromadb）。遷移完成後 `chroma-data` volume 可自行刪除。
+更早使用 Chroma 的版本：不需要遷移向量，依下方「從舊版升級」重新處理文件即可（原始上傳檔與 SQLite 都還在）。舊的 `chroma-data` volume 已不再使用，可自行刪除：`docker volume rm phoebe_chroma-data`。
 
 ## 從舊版升級（多模態知識庫）
 
@@ -119,7 +101,6 @@ docker compose logs -f worker             # worker 依序重新處理
 - `run --rm --no-deps worker` 會開一個一次性容器，掛載同一個 `phoebe-data` volume，連到 Milvus 與 SQLite，不會影響執行中的 worker；若想用執行中的容器，也可改用 `docker compose exec worker python -m app.kb.reprocess_all`。
 - `reprocess_all` 把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），保留原解析器。正在處理中的文件會略過（避免與 worker 搶同一份文件），待它們完成後再執行一次即可。舊文件的圖片資料夾由 worker 在重新解析前自動清除，指令本身不刪檔，以免與剛認領文件的 worker 競爭。
 - 重新處理時 worker 會逐頁呼叫 embedder（CPU），文件多或頁數多時會花一段時間；PDF 內的圖片在重新處理後才會有縮圖與圖片向量。
-- 從 Chroma 遷移來的舊 chunk 只有文字（無圖片），若原始 PDF 還在，重新處理即可補上。
 
 ## 管理員與 Gemini 聊天
 
@@ -156,7 +137,7 @@ docker run --rm -v phoebe_minio-data:/data -v "$PWD":/backup alpine tar czf /bac
 ## 注意
 
 - Gunicorn 只在 Linux 容器內使用；Windows 本機快速測試請用 `uv run uvicorn app.main:create_app --factory`。
-- 映像版本皆已固定；升級 Milvus 時請與 `uv.lock` 中的 pymilvus 版本相容（目前 pymilvus 2.6.17 對應 Milvus v2.6.25）；etcd、minio 沿用該版官方 standalone compose。`chroma` 映像（1.5.9）只供遷移，須與 chromadb 版本一致。
+- 映像版本皆已固定；升級 Milvus 時請與 `uv.lock` 中的 pymilvus 版本相容（目前 pymilvus 2.6.17 對應 Milvus v2.6.25）；etcd、minio 沿用該版官方 standalone compose。
 - LiteParse 為 Rust 原生套件，內含 pdfium 與 Tesseract，不需另外安裝 Node 或系統 Tesseract。預設語言（`chi_tra`、`chi_tra_vert`、`eng`，來自 tessdata_best 的固定 commit）已內建於 worker 映像；`LITEPARSE_OCR_LANGUAGE` 改用其他語言時，該語言檔會在第一次 OCR 時下載（需要對外網路，且存在容器可寫層，重建映像後需重新下載）。
-- 映像大小：worker 與 web 都不含 torch，各約 1 GB（worker 另含遷移用的 chromadb）；vllm 是官方映像（數 GB）。uv 的下載快取放在 BuildKit cache mount（`/root/.cache/uv`），不會進入映像層；`docker builder prune` 可清除它。程式碼以 `COPY --chown` 放入，不做遞迴 `chown`，避免複製整棵目錄樹。
+- 映像大小：worker 與 web 都不含 torch，各約 1 GB；vllm 是官方映像（數 GB）。uv 的下載快取放在 BuildKit cache mount（`/root/.cache/uv`），不會進入映像層；`docker builder prune` 可清除它。程式碼以 `COPY --chown` 放入，不做遞迴 `chown`，避免複製整棵目錄樹。
 - 根目錄 `.dockerignore` 是白名單（先 `*` 全部排除，再用 `!` 放行 build 需要的檔案）。Dockerfile 新增 `COPY` 來源時，必須同步在 `.dockerignore` 明確放行（`tests/test_config.py` 會檢查）。

@@ -208,14 +208,10 @@ def test_web_and_worker_wait_for_healthy_milvus():
         assert not any(k.startswith("CHROMA_") for k in svc["environment"])
 
 
-def test_chroma_only_under_migrate_profile():
+def test_no_chroma_left_in_compose():
     compose = _compose()
-    chroma = compose["services"]["chroma"]
-    assert chroma["profiles"] == ["migrate-chroma"]
-    assert "chroma-data:/data" in chroma["volumes"]
-    assert "chroma-data" in compose["volumes"]
-    for name in ("web", "worker"):
-        assert "chroma" not in compose["services"][name].get("depends_on", {})
+    assert "chroma" not in compose["services"]
+    assert "chroma-data" not in compose["volumes"]
 
 
 def test_dockerignore_is_an_allowlist_covering_dockerfile_copies():

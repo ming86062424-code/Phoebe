@@ -206,7 +206,7 @@ docker compose up -d --build
 
 ## 資料位置
 
-資料存放在 SQLite 檔案 `data/app.db`，知識庫檔案在 `data/kb/`（位於專案根目錄，與啟動目錄無關；可用 `DB_PATH` 覆寫）。`data/` 已被 git 忽略。向量與 BM25 索引存放在 Milvus（Docker 的 `milvus-data` volume）。舊版 Chroma 資料的遷移方式見 [docker/README.md](docker/README.md)。
+資料存放在 SQLite 檔案 `data/app.db`，知識庫檔案在 `data/kb/`（位於專案根目錄，與啟動目錄無關；可用 `DB_PATH` 覆寫）。`data/` 已被 git 忽略。向量與 BM25 索引存放在 Milvus（Docker 的 `milvus-data` volume）。從舊版升級的方式見 [docker/README.md](docker/README.md)。
 
 ## 專案結構
 

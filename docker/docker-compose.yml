@@ -69,22 +69,6 @@ services:
       timeout: 20s
       retries: 3
 
-  # 只用於把舊的 Chroma 資料遷移到 Milvus（見 docker/README.md）：
-  #   docker compose --profile migrate-chroma up -d chroma
-  chroma:
-    profiles: [migrate-chroma]
-    image: chromadb/chroma:1.5.9
-    # chroma 1.x 預設持久化路徑為 /data
-    volumes:
-      - chroma-data:/data
-    healthcheck:
-      # 已在 chroma 1.5.9 映像內驗證（容器為 healthy）；以 bash /dev/tcp 檢查連接埠（映像無 curl）
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
   # Embedding 服務（sentence-transformers、CPU float32；模型 google/embeddinggemma-2，文字與圖片共用）。
   # 只對本機 127.0.0.1:8002 開放（無驗證）；本機快速測試：docker compose up -d embedder
   # 有自己的模型快取 volume：vLLM 以 root 寫入 hf-cache，共用會有權限衝突
@@ -254,6 +238,5 @@ volumes:
   milvus-data:
   etcd-data:
   minio-data:
-  chroma-data:
   hf-cache:
   embedder-hf-cache:

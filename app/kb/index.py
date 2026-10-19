@@ -172,14 +172,6 @@ class KnowledgeIndex:
                 vectors[i] = vector
         return vectors  # type: ignore[return-value]
 
-    def add_chunks(
-        self, kb_id: int, document_id: int, filename: str, chunks: list[tuple[int, str]]
-    ) -> int:
-        """Index ready-made (page, text) chunks, e.g. migrated ones; they are kind "text"."""
-        return self.add_document(
-            kb_id, document_id, filename, [ParsedChunk(page, text) for page, text in chunks]
-        )
-
     def delete_document(self, kb_id: int, document_id: int) -> None:
         self._store.delete_document(kb_id, document_id)
 
