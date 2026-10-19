@@ -89,12 +89,18 @@ services:
   # 只對本機 127.0.0.1:8002 開放（無驗證）；本機快速測試：docker compose up -d embedder
   # 有自己的模型快取 volume：vLLM 以 root 寫入 hf-cache，共用會有權限衝突
   embedder:
-    <<: *env
     build:
       context: ..
       dockerfile: docker/embedder.Dockerfile
     image: phoebe-embedder:local
     restart: unless-stopped
+    # 不繼承整份 docker/.env（含 GEMINI_API_KEY 等）：只傳需要的變數
+    environment:
+      EMBED_MODEL_ID: ${EMBED_MODEL_ID:-google/embeddinggemma-2}
+      EMBED_IMAGE_TOKENS: ${EMBED_IMAGE_TOKENS:-280}
+      HF_HOME: /hf-cache
+      # 選用：主機環境有設定時才傳入
+      HF_TOKEN:
     ports:
       - "127.0.0.1:8002:8000"
     volumes:

@@ -13,12 +13,14 @@ import io
 import logging
 import os
 import threading
+import warnings
 from contextlib import asynccontextmanager
 from typing import Annotated, Callable, Literal
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
-from PIL import Image, UnidentifiedImageError
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 log = logging.getLogger("embedder")
@@ -26,6 +28,11 @@ log = logging.getLogger("embedder")
 DEFAULT_MODEL_ID = "google/embeddinggemma-2"
 DEFAULT_IMAGE_TOKENS = 280
 MAX_ITEMS = 64
+VALID_IMAGE_TOKENS = (70, 140, 280, 560, 1120)
+MAX_IMAGE_BYTES = 20 * 1024 * 1024  # decoded
+MAX_IMAGE_B64_CHARS = (MAX_IMAGE_BYTES + 2) // 3 * 4
+MAX_IMAGE_PIXELS = 25_000_000
+MAX_BODY_BYTES = 100 * 1024 * 1024
 QUERY_PREFIX = "task: search result | query: "
 
 
@@ -58,13 +65,39 @@ class EmbedRequest(BaseModel):
     items: Annotated[list[Item], Field(max_length=MAX_ITEMS)]
 
 
+def _bad_image(detail: str) -> HTTPException:
+    return HTTPException(status_code=422, detail=detail)
+
+
 def _decode_image(data: str) -> Image.Image:
+    if len(data) > MAX_IMAGE_B64_CHARS:
+        raise _bad_image("image too large")
     try:
-        img = Image.open(io.BytesIO(base64.b64decode(data, validate=True)))
-        img.load()
-    except (binascii.Error, ValueError, UnidentifiedImageError, OSError) as exc:
-        raise HTTPException(status_code=422, detail="invalid image_b64") from exc
-    return img.convert("RGB")
+        raw = base64.b64decode(data, validate=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            img = Image.open(io.BytesIO(raw))
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise _bad_image("image has too many pixels")
+            img.load()
+        img = ImageOps.exif_transpose(img)
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            rgba = img.convert("RGBA")
+            background = Image.new("RGB", rgba.size, "white")
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            return background
+        return img.convert("RGB")
+    except HTTPException:
+        raise
+    except (
+        binascii.Error,
+        ValueError,
+        UnidentifiedImageError,
+        OSError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
+        raise _bad_image("invalid image_b64") from exc
 
 
 def load_sentence_transformer(model_id: str):
@@ -82,12 +115,17 @@ def create_app(
     loader: Callable[[], object] | None = None,
     model_id: str | None = None,
     image_tokens: int | None = None,
+    on_load_error: Callable[[], None] | None = None,
 ) -> FastAPI:
     """``model`` is injected (ready immediately); otherwise ``loader`` (default: the real model)
     runs in a background thread so the server starts answering /health with 503 right away."""
     model_id = model_id or os.environ.get("EMBED_MODEL_ID", DEFAULT_MODEL_ID)
     if image_tokens is None:
         image_tokens = int(os.environ.get("EMBED_IMAGE_TOKENS", DEFAULT_IMAGE_TOKENS))
+    if image_tokens not in VALID_IMAGE_TOKENS:
+        raise ValueError(
+            f"EMBED_IMAGE_TOKENS must be one of {VALID_IMAGE_TOKENS}, got {image_tokens!r}"
+        )
     state = {"model": model, "error": None}
     lock = threading.Lock()  # one encode at a time; the model is not meant for concurrent calls
 
@@ -102,6 +140,13 @@ def create_app(
     app = FastAPI(title="Phoebe embedder", lifespan=lifespan)
     app.state.loading_thread = None
 
+    @app.middleware("http")
+    async def limit_body(request: Request, call_next):
+        length = request.headers.get("content-length", "")
+        if length.isdigit() and int(length) > MAX_BODY_BYTES:
+            return JSONResponse({"detail": "request body too large"}, status_code=413)
+        return await call_next(request)
+
     def load():
         try:
             state["model"] = (loader or (lambda: load_sentence_transformer(model_id)))()
@@ -109,6 +154,8 @@ def create_app(
         except Exception as exc:  # keep serving 503 with the reason
             log.exception("model load failed")
             state["error"] = f"{type(exc).__name__}: {exc}"
+            # exit so that `restart: unless-stopped` retries (e.g. an interrupted download)
+            (on_load_error or (lambda: os._exit(1)))()
 
     @app.get("/health")
     def health():
