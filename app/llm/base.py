@@ -1,3 +1,4 @@
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -40,18 +41,21 @@ class ImagesNotSupported(LlmStreamError):
     """The model refused a request because it carried images (e.g. a text-only model)."""
 
 
-# Words in a provider's error that point at the attached images.
-IMAGE_REJECTION_MARKERS = ("image", "vision", "multimodal", "modality")
-# Ollama also says "<model> does not support thinking" / "... tools": not about images.
-OTHER_CAPABILITIES = ("think", "tool")
+# How providers phrase "this model can't take images". Only these phrasings count, so an
+# unrelated error that merely names a vision model (llama3.2-vision) is never retried.
+_IMAGE_REJECTION = re.compile(
+    r"does not support (?:the )?(?:images?|vision|multimodal)"
+    r"|(?:images?|vision|multimodal)(?: input)? (?:is |are )?not supported"
+    r"|missing data required for image input"
+    r"|image input modality is not enabled"
+    r"|unable to process input image"
+)
 
 
 def mentions_images(message: str | None) -> bool:
-    """Whether a provider error (for a request that carried images) blames the images."""
-    text = (message or "").lower()
-    if any(marker in text for marker in IMAGE_REJECTION_MARKERS):
-        return True
-    return "does not support" in text and not any(w in text for w in OTHER_CAPABILITIES)
+    """Whether a provider's error message (for a request that carried images) says the
+    model can't take images. Pass only the error message, not a whole response body."""
+    return bool(_IMAGE_REJECTION.search((message or "").lower()))
 
 
 def last_user_index(messages: list[dict]) -> int | None:

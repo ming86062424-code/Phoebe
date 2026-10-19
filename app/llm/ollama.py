@@ -31,6 +31,16 @@ def _wire_messages(messages: list[dict]) -> tuple[list[dict], bool]:
     return out, any("images" in m for m in out)
 
 
+def _error_field(body: str) -> str:
+    """The `error` field of an Ollama error body ("" when there is none)."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return ""
+    error = data.get("error") if isinstance(data, dict) else None
+    return error if isinstance(error, str) else ""
+
+
 class OllamaChatClient:
     def __init__(
         self,
@@ -55,8 +65,9 @@ class OllamaChatClient:
         if system:
             messages = [{"role": "system", "content": system}, *messages]
 
-        def failure(message: str) -> LlmStreamError:
-            if with_images and mentions_images(message):
+        def failure(message: str, error: str) -> LlmStreamError:
+            """`error` is Ollama's error field alone; only it decides an image rejection."""
+            if with_images and mentions_images(error):
                 return ImagesNotSupported(message)
             return LlmStreamError(message)
 
@@ -80,7 +91,9 @@ class OllamaChatClient:
                         body = (await response.aread()).decode("utf-8", "replace")
                         if response.status_code == 404:
                             raise ModelNotFound(self.model)
-                        raise failure(f"Ollama 回應錯誤 {response.status_code}: {body}")
+                        raise failure(
+                            f"Ollama 回應錯誤 {response.status_code}: {body}", _error_field(body)
+                        )
                     async for line in response.aiter_lines():
                         if not line.strip():
                             continue
@@ -89,7 +102,7 @@ class OllamaChatClient:
                         except json.JSONDecodeError as e:
                             raise LlmStreamError("Ollama 回傳無法解析的資料") from e
                         if "error" in data:
-                            raise failure(str(data["error"]))
+                            raise failure(str(data["error"]), str(data["error"]))
                         message = data.get("message") or {}
                         if message.get("thinking"):
                             yield ChatDelta("thinking", message["thinking"])

@@ -70,13 +70,16 @@ def load_source_images(
     sources: list[Source], doc_dir: Callable[[int], Path], limit: int
 ) -> list[SourceImage]:
     """Images for the chat model, in source (RRF) order: each source's page image, then
-    its cropped images, until `limit` are loaded. Missing or unreadable files are skipped.
+    its cropped images, until `limit` are loaded. Missing or unreadable files are skipped,
+    and an image already taken for an earlier source is not repeated (it keeps that
+    earlier source's number).
 
     `doc_dir(document_id)` is the document's image folder.
     """
     found: list[SourceImage] = []
     if limit <= 0:
         return found
+    seen: set[tuple[int, str]] = set()  # an image cited by several sources is sent once
     for number, source in enumerate(sources, start=1):
         refs = ([source.page_image] if source.page_image else []) + list(source.images)
         for ref in refs:
@@ -86,6 +89,9 @@ def load_source_images(
             if not isinstance(name, str) or not IMAGE_NAME.fullmatch(name):
                 logger.warning("略過名稱不合法的參考圖片：%r", name)
                 continue
+            if (source.document_id, name) in seen:
+                continue
+            seen.add((source.document_id, name))
             path = doc_dir(source.document_id) / name
             try:
                 data = _png_for_model(path)

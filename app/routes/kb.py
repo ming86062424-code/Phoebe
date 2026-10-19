@@ -290,31 +290,20 @@ def retry_document(
 IMAGE_CACHE_CONTROL = "private, max-age=3600"
 
 
-def _image_viewer(
-    request: Request,
-    conn: sqlite3.Connection = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    """The logged-in user; an anonymous request gets the same 404 as a missing image."""
-    try:
-        return current_user(request, conn, settings)
-    except HTTPException as e:
-        raise HTTPException(status_code=404, detail="找不到圖片") from e
-
-
 @router.get("/kbs/{kb_id}/documents/{doc_id}/images/{name}")
 def document_image(
     kb_id: int,
     doc_id: int,
     name: str,
-    user: dict = Depends(_image_viewer),
+    user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     kb: KbServices = Depends(get_kb_services),
 ):
     """A page or cropped image a parser wrote for the document (PNG).
 
-    Anything that is not the owner's existing document and a whitelisted name that
-    resolves inside the document's folder is 404, so nothing leaks about other files.
+    Logged out is 401 like every API. After that, anything that is not the owner's
+    existing document and a whitelisted name that resolves inside the document's folder
+    is 404, so nothing leaks about other users' knowledge bases or other files.
     """
     not_found = HTTPException(status_code=404, detail="找不到圖片")
     if not IMAGE_NAME.fullmatch(name):

@@ -427,6 +427,8 @@ def _kb_chat_with_images(c, kb_services, monkeypatch, layout):
     sources = []
     for n, (d, page_image, images) in enumerate(layout, start=1):
         for name in ([page_image] if page_image else []) + images:
+            if (d, name) in files:  # the same image cited by another source
+                continue
             data = _png_bytes((4 + n, 3), next(colors))
             files[(d, name)] = data
             (kb_services.doc_dir(kb_id, docs[d]) / name).write_bytes(data)
@@ -688,3 +690,24 @@ def test_no_retry_when_no_images_were_sent(make_user, app):
     c = make_user("alice")
     assert _send(c, _new_conv(c), "嗨").status_code == 503
     assert len(fake.calls) == 1
+
+
+def test_an_image_cited_by_several_sources_is_sent_once(make_user, fake_chat, kb_services, monkeypatch):
+    c = make_user("alice")
+    layout = [
+        (0, "page_1.png", ["img_1_1.png"]),
+        (0, "page_1.png", ["img_1_1.png", "img_1_2.png"]),
+        (1, "page_1.png", []),  # same name, another document: a different image
+    ]
+    cid, _, _, files = _kb_chat_with_images(c, kb_services, monkeypatch, layout)
+    _send(c, cid, "嗨")
+    assert fake_chat.calls[0]["messages"][-1]["images"] == [
+        files[(0, "page_1.png")],
+        files[(0, "img_1_1.png")],
+        files[(0, "img_1_2.png")],
+        files[(1, "page_1.png")],
+    ]
+    system = fake_chat.calls[0]["system"]
+    for line in ("附圖 1 → [1]", "附圖 2 → [1]", "附圖 3 → [2]", "附圖 4 → [3]"):
+        assert line in system
+    assert "附圖 5" not in system

@@ -595,12 +595,12 @@ def test_image_api_serves_png_with_private_cache(make_user, kb_services):
         assert r.content == (kb_services.doc_dir(kb["id"], doc["id"]) / name).read_bytes()
 
 
-def test_image_api_is_404_for_other_users_and_anonymous(make_user, client, kb_services):
+def test_image_api_is_401_logged_out_and_404_for_other_users(make_user, client, kb_services):
     alice, bob = make_user("alice"), make_user("bob")
     kb, doc = _doc_with_images(alice, kb_services)
     url = _image_url(kb["id"], doc["id"], "page_1.png")
     assert bob.get(url).status_code == 404
-    assert client.get(url).status_code == 404  # not logged in: same as not found
+    assert client.get(url).status_code == 401  # logged out: like every other API
     bob_kb = _create_kb(bob)
     # bob's own kb id with alice's document
     assert bob.get(_image_url(bob_kb["id"], doc["id"], "page_1.png")).status_code == 404

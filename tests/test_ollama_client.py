@@ -280,6 +280,11 @@ async def test_image_like_errors_without_images_stay_ordinary_errors():
         ("Image input modality is not enabled", True),
         ("llama3 does not support thinking", False),
         ("llama3 does not support tools", False),
+        ("llama3.2-vision does not support thinking", False),
+        ("model 'llama3.2-vision' failed to load: out of memory", False),
+        ("Image input modality is not enabled for models/x", True),
+        ("Unable to process input image. Please retry", True),
+        ("multimodal input is not supported", True),
         ("out of memory", False),
         ("", False),
     ],
@@ -294,6 +299,34 @@ async def test_thinking_not_supported_is_not_an_image_rejection():
     from app.llm import ImagesNotSupported
 
     response = httpx.Response(400, json={"error": "llama3 does not support thinking"})
+    with pytest.raises(OllamaStreamError) as exc:
+        await collect(make_client(lambda request: response), [{"role": "user", "content": "x", "images": [PNG_A]}])
+    assert not isinstance(exc.value, ImagesNotSupported)
+
+
+async def test_generic_error_naming_a_vision_model_is_not_an_image_rejection():
+    from app.llm import ImagesNotSupported
+
+    client = OllamaClient(
+        "http://ollama.test",
+        "llama3.2-vision",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                500, json={"error": "llama runner process for llama3.2-vision has terminated"}
+            )
+        ),
+    )
+    with pytest.raises(OllamaStreamError) as exc:
+        await collect(client, [{"role": "user", "content": "x", "images": [PNG_A]}])
+    assert not isinstance(exc.value, ImagesNotSupported)
+    assert "llama3.2-vision" in str(exc.value)
+
+
+async def test_only_the_error_field_of_the_body_is_classified():
+    from app.llm import ImagesNotSupported
+
+    body = {"error": "out of memory", "detail": "missing data required for image input"}
+    response = httpx.Response(500, json=body)
     with pytest.raises(OllamaStreamError) as exc:
         await collect(make_client(lambda request: response), [{"role": "user", "content": "x", "images": [PNG_A]}])
     assert not isinstance(exc.value, ImagesNotSupported)
