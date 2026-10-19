@@ -28,10 +28,10 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     HOME=/home/phoebe \
     HF_HOME=/hf-cache
 
-# 非 root 使用者；/data 與 /hf-cache 先建立並交給該使用者，named volume 首次掛載時會沿用此權限
+# 非 root 使用者；/db（SQLite，named volume）首次掛載時會沿用此權限；/data/kb 由 compose 掛載主機目錄
 RUN useradd --uid 1000 --create-home --home-dir /home/phoebe phoebe \
-    && mkdir -p /data /hf-cache /app \
-    && chown phoebe:phoebe /data /hf-cache /app
+    && mkdir -p /db /data/kb /hf-cache /app \
+    && chown phoebe:phoebe /db /data /data/kb /hf-cache /app
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
@@ -41,13 +41,13 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 # ---- web：Gunicorn，不含 torch ----
 FROM base AS web
-# 程式碼唯讀即可（執行時只寫 /data、/hf-cache 與家目錄快取），不需要遞迴 chown 產生額外映像層
+# 程式碼唯讀即可（執行時只寫 /db、/data/kb、/hf-cache 與家目錄快取），不需要遞迴 chown 產生額外映像層
 COPY --chown=phoebe:phoebe app ./app
 COPY --chown=phoebe:phoebe docker/gunicorn.conf.py docker/gunicorn.conf.py
 COPY --chown=phoebe:phoebe --from=frontend /frontend/dist ./frontend/dist
 USER phoebe
 ENV KB_WORKER_MODE=external \
-    DB_PATH=/data/app.db \
+    DB_PATH=/db/app.db \
     KB_DIR=/data/kb
 EXPOSE 8000
 CMD ["gunicorn", "-c", "docker/gunicorn.conf.py", "app.main:create_app()"]
@@ -74,6 +74,6 @@ ADD --chown=phoebe:phoebe --chmod=644 \
     /home/phoebe/.tesseract-rs/tessdata/eng.traineddata
 
 USER phoebe
-ENV DB_PATH=/data/app.db \
+ENV DB_PATH=/db/app.db \
     KB_DIR=/data/kb
 CMD ["python", "-m", "app.kb.worker_main"]
