@@ -532,6 +532,20 @@ def test_image_upload_must_match_its_extension_and_decode(make_user, monkeypatch
     assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
 
 
+def test_mpo_photo_upload_is_accepted_as_jpeg(make_user, tmp_path):
+    from PIL import Image
+
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    path = tmp_path / "p.jpg"
+    Image.new("RGB", (8, 6), "red").save(
+        path, format="MPO", save_all=True, append_images=[Image.new("RGB", (8, 6), "blue")]
+    )
+    r = _upload(alice, kb["id"], filename="phone.jpg", content=path.read_bytes())
+    assert r.status_code == 201
+    assert _upload(alice, kb["id"], filename="phone.png", content=path.read_bytes()).status_code == 422
+
+
 def test_long_filename_keeps_its_extension(make_user, kb_services):
     alice = make_user("alice")
     kb = _create_kb(alice)

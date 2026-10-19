@@ -403,3 +403,121 @@ def test_liteparse_lowers_dpi_only_for_huge_pages():
     dpi = render_dpi(2384, 3370)  # A0 would be ~248 MP at 400 DPI
     assert dpi < 400
     assert (2384 * dpi / 72) * (3370 * dpi / 72) <= images.MAX_PIXELS
+
+
+# ---- fix round 1 ----
+
+
+def _mpo(path):
+    from PIL import Image
+
+    first = Image.new("RGB", (64, 48), (200, 30, 30))
+    second = Image.new("RGB", (64, 48), (30, 30, 200))
+    first.save(path, format="MPO", save_all=True, append_images=[second])
+    return path
+
+
+def test_mpo_photos_count_as_jpeg(tmp_path):
+    from PIL import Image
+
+    from app.kb.parsers.images import open_image
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    path = _mpo(tmp_path / "phone.jpg")
+    with Image.open(path) as raw:
+        assert raw.format == "MPO"
+    assert open_image(path).size == (64, 48)
+    out = tmp_path / "out"
+    out.mkdir()
+    lite = LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+    assert lite[0].page_image.name == "page_1.png"
+    engine = FakeEngine(["![text](0,0,1000,1000) 照片"])
+    ocr = LightOnOcrParser(engine).parse(str(path), out, lambda d, t: None)
+    assert ocr[0].text == "照片"
+    r, g, b = engine.images[0].getpixel((32, 24))
+    assert r > 150 and b < 80  # the first (red) frame, not the second
+
+
+def test_16_bit_images_keep_their_contrast(tmp_path):
+    from PIL import Image
+
+    from app.kb.parsers.images import open_image, to_rgb
+
+    path = tmp_path / "deep.png"
+    Image.new("I;16", (4, 4), 300).save(path)
+    image = open_image(path)
+    assert image.mode == "RGB" and image.getpixel((0, 0)) != (255, 255, 255)
+    assert to_rgb(Image.new("I;16", (2, 2), 300)).getpixel((0, 0)) == (1, 1, 1)
+    # 32-bit integer images are scaled by their real range
+    wide = Image.new("I", (2, 1), 0)
+    wide.putpixel((1, 0), 70000)
+    rgb = to_rgb(wide)
+    assert (rgb.getpixel((0, 0)), rgb.getpixel((1, 0))) == ((0, 0, 0), (255, 255, 255))
+
+
+def test_liteparse_lifts_its_page_cap_to_the_real_page_count(tmp_path, monkeypatch):
+    import liteparse
+
+    created = []
+    real = liteparse.LiteParse
+
+    def spy(**kwargs):
+        created.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(liteparse, "LiteParse", spy)
+    path = tmp_path / "a.pdf"
+    path.write_bytes(make_pdf(["one", "two", "three"]))
+    pages = LiteParseParser("eng").parse(str(path), tmp_path, lambda d, t: None)
+    assert len(pages) == 3
+    text_parsers = [k for k in created if k.get("output_format") == "markdown"]
+    assert text_parsers and all(k["max_pages"] >= 3 for k in text_parsers)
+
+
+def test_liteparse_ocrs_the_upright_page_image(tmp_path, monkeypatch):
+    import liteparse
+
+    parsed = []
+    real = liteparse.LiteParse
+
+    class Spy:
+        def __init__(self, **kwargs):
+            self._real = real(**kwargs)
+
+        def parse(self, path):
+            parsed.append(str(path))
+            return self._real.parse(path)
+
+    monkeypatch.setattr(liteparse, "LiteParse", Spy)
+    path = _image_file(tmp_path / "photo.jpg", size=(300, 200), fmt="JPEG", orientation=6)
+    out = tmp_path / "out"
+    out.mkdir()
+    LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+    assert parsed == [str(out / "page_1.png")]
+
+
+def test_lightonocr_caps_crops_so_the_images_field_never_drops_one(tmp_path):
+    import json
+
+    from app.kb.milvus_store import IMAGES_MAX_BYTES, _images_json
+    from app.kb.parsers.base import ImageRef
+    from app.kb.parsers.lightonocr import MAX_CROPS_PER_PAGE, LightOnOcrParser
+
+    # the longest names and sizes ImageRef allows still fit when every crop is kept
+    worst = [ImageRef("img_123456789_123456789.png", 999_999, 999_999)] * MAX_CROPS_PER_PAGE
+    assert len(json.loads(_images_json(worst))) == MAX_CROPS_PER_PAGE
+    assert len(_images_json(worst).encode()) <= IMAGES_MAX_BYTES
+
+    from PIL import Image
+
+    path = tmp_path / "many.png"
+    Image.new("RGB", (1000, 1000), "white").save(path)
+    raw = "\n".join(f"![image](0,0,10,10) 圖{n}" for n in range(MAX_CROPS_PER_PAGE + 5))
+    out = tmp_path / "out"
+    out.mkdir()
+    chunk = LightOnOcrParser(FakeEngine([raw])).parse(str(path), out, lambda d, t: None)[0]
+    assert len(chunk.images) == MAX_CROPS_PER_PAGE
+    assert chunk.text.count("](img:") == MAX_CROPS_PER_PAGE
+    # descriptions past the cap stay as text, without an image reference
+    assert chunk.text.endswith(f"圖{MAX_CROPS_PER_PAGE + 4}")
+    assert len(json.loads(_images_json(chunk.images))) == len(chunk.images)

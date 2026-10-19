@@ -7,8 +7,15 @@ from app.kb.parsers.base import ImageRef, ParseError
 # Largest image (in pixels) that is ever decoded: a 50 MP RGB image is ~150 MB in memory.
 MAX_PIXELS = 50_000_000
 
-# Upload extension -> the PIL format the content must actually be.
-IMAGE_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
+# Upload extension -> the PIL formats the content may actually be. Phone and camera photos
+# often carry a second frame (multi-picture JPEG), which Pillow reports as MPO.
+_JPEG = frozenset({"JPEG", "MPO"})
+IMAGE_FORMATS = {
+    ".png": frozenset({"PNG"}),
+    ".jpg": _JPEG,
+    ".jpeg": _JPEG,
+    ".webp": frozenset({"WEBP"}),
+}
 
 UNREADABLE = "無法讀取檔案內容"
 
@@ -32,7 +39,7 @@ def open_image(path: str | Path, suffix: str | None = None):
         raise ParseError(UNREADABLE)
     try:
         with Image.open(path) as image:
-            if image.format != expected:
+            if image.format not in expected:
                 raise ParseError(UNREADABLE)
             check_pixels(image.width, image.height)
             image.load()
@@ -50,6 +57,16 @@ def to_rgb(image):
 
     if image.mode == "RGB":
         return image
+    if image.mode.startswith("I;16"):  # 16-bit: 0-65535 -> 0-255
+        return image.convert("I").point(lambda v: v / 256).convert("L").convert("RGB")
+    if image.mode in ("I", "F"):  # 32-bit: scale by the real range
+        lo, hi = image.getextrema()
+        if hi > lo:
+            scale = 255 / (hi - lo)
+            offset = -lo * scale
+        else:
+            scale, offset = 0, min(max(lo, 0), 255)
+        return image.point(lambda v: v * scale + offset).convert("L").convert("RGB")
     if image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info):
         rgba = image.convert("RGBA")
         background = Image.new("RGB", rgba.size, "white")

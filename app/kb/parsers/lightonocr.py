@@ -37,6 +37,10 @@ DROPPED_LABELS = frozenset(
     {"header", "footer", "page_number", "page_header", "page_footer", "header_image", "footer_image"}
 )
 IMAGE_LABEL = "image"
+# Crops kept per page: even at the longest names and sizes ImageRef allows, 100 references
+# fit Milvus' 8192-byte `images` field, so the list never drops an image the text refers to.
+# Image blocks past the cap keep their description as plain text, without a reference.
+MAX_CROPS_PER_PAGE = 100
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,7 @@ def page_markdown(blocks: list[Block], image, page: int, out_dir: Path) -> tuple
     parts: list[str] = []
     refs: list[ImageRef] = []
     prev_kept = False
+    skipped = 0
     for block in blocks:
         if block.label in DROPPED_LABELS:
             prev_kept = False
@@ -104,7 +109,9 @@ def page_markdown(blocks: list[Block], image, page: int, out_dir: Path) -> tuple
         content = block.text
         if block.label == IMAGE_LABEL and block.bbox is not None:
             box = to_pixels(block.bbox, image.width, image.height)
-            if box[2] > box[0] and box[3] > box[1]:
+            if len(refs) >= MAX_CROPS_PER_PAGE:
+                skipped += 1
+            elif box[2] > box[0] and box[3] > box[1]:
                 i = len(refs) + 1
                 ref = save_png(image.crop(box), out_dir, f"img_{page}_{i}.png")
                 refs.append(ref)
@@ -118,6 +125,10 @@ def page_markdown(blocks: list[Block], image, page: int, out_dir: Path) -> tuple
         else:
             parts.append(content)
         prev_kept = True
+    if skipped:
+        logger.warning(
+            "第 %d 頁有 %d 張圖片超過上限 %d，只保留描述文字", page, skipped, MAX_CROPS_PER_PAGE
+        )
     return "\n\n".join(parts), refs
 
 

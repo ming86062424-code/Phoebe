@@ -14,6 +14,23 @@ logger = logging.getLogger(__name__)
 RENDER_DPI = 400
 PAGE_IMAGE_EDGE = 1536
 POINTS_PER_INCH = 72
+# LiteParse stops after `max_pages` (1000 by default); the cap is lifted to the PDF's real
+# page count so a long PDF is never cut short silently.
+LITEPARSE_MAX_PAGES = 1000
+
+
+def pdf_page_count(path: str) -> int:
+    """The PDF's page count (0 when pdfium can't tell; LiteParse then reports the error)."""
+    import pypdfium2 as pdfium
+
+    try:
+        pdf = pdfium.PdfDocument(path)
+    except Exception:
+        return 0
+    try:
+        return len(pdf)
+    finally:
+        pdf.close()
 
 
 def render_dpi(width_pt: float, height_pt: float) -> float:
@@ -37,10 +54,15 @@ class LiteParseParser:
     def availability(self) -> tuple[bool, str]:
         return True, ""
 
-    def _text_parser(self):
+    def _text_parser(self, max_pages: int = LITEPARSE_MAX_PAGES):
         from liteparse import LiteParse
 
-        return LiteParse(output_format="markdown", quiet=True, ocr_language=self.ocr_language)
+        return LiteParse(
+            output_format="markdown",
+            quiet=True,
+            ocr_language=self.ocr_language,
+            max_pages=max_pages,
+        )
 
     def parse(
         self, path: str, out_dir: Path, on_progress: ProgressCallback
@@ -54,11 +76,14 @@ class LiteParseParser:
     ) -> list[ParsedChunk]:
         from liteparse import LiteParse
 
+        count = pdf_page_count(path)
         try:
-            result = self._text_parser().parse(path)
+            result = self._text_parser(max(count, LITEPARSE_MAX_PAGES)).parse(path)
         except Exception as e:
             raise ParseError(f"LiteParse 解析失敗：{e}") from e
         total = len(result.pages)
+        if count and total < count:  # never index a silently shortened document
+            raise ParseError(f"LiteParse 只解析了 {total} 頁（共 {count} 頁）")
         on_progress(0, total)
         # Page images come from LiteParse's own renderer (LiteParse.screenshot, which renders
         # at the instance's `dpi`), one page per call so only one page is in memory at a time.
@@ -94,8 +119,10 @@ class LiteParseParser:
         on_progress(0, 1)
         image = open_image(path)  # format, pixel cap, full decode, EXIF transpose
         ref = save_png(fit(image, PAGE_IMAGE_EDGE), out_dir, "page_1.png")
-        try:  # LiteParse OCRs images (Tesseract); without text the page is still embedded
-            pages = self._text_parser().parse(path).pages
+        # LiteParse OCRs images (Tesseract) on the upright, normalised page image; without
+        # text the page is still embedded
+        try:
+            pages = self._text_parser().parse(out_dir / ref.name).pages
             text = (pages[0].markdown or pages[0].text or "").strip() if pages else ""
         except Exception as e:
             logger.warning("LiteParse 無法取得圖片 %s 的文字：%s", path, e)
