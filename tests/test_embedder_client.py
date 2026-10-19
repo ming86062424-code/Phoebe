@@ -108,6 +108,12 @@ def test_other_http_error_is_reported():
         client.embed_queries(["a"])
 
 
+def test_non_list_embeddings_is_an_error():
+    client = make_client(lambda r: httpx.Response(200, json={"embeddings": 5}))
+    with pytest.raises(KnowledgeStoreError, match="無法解析"):
+        client.embed_queries(["a"])
+
+
 def test_wrong_count_is_an_error():
     client = make_client(lambda r: httpx.Response(200, json={"embeddings": []}))
     with pytest.raises(KnowledgeStoreError, match="embedding 服務"):

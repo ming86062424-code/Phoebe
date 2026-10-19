@@ -37,6 +37,8 @@ class EmbedderClient:
                 embeddings = response.json()["embeddings"]
             except (ValueError, KeyError, TypeError) as exc:
                 raise KnowledgeStoreError("embedding 服務回傳無法解析的資料") from exc
+            if not isinstance(embeddings, list):
+                raise KnowledgeStoreError("embedding 服務回傳無法解析的資料")
             if len(embeddings) != len(batch):
                 raise KnowledgeStoreError("embedding 服務回傳的向量數量不符")
             vectors.extend(embeddings)
