@@ -1,9 +1,18 @@
+import logging
+
+import grpc
 from pymilvus import DataType, Function, FunctionType, MilvusClient
+from pymilvus.client.types import Status
 from pymilvus.exceptions import ConnectError, MilvusException, MilvusUnavailableException
 
 from app.kb.chunk_store import ChunkRecord, Hit, KnowledgeStoreError
 
+logger = logging.getLogger(__name__)
+
 BATCH_SIZE = 256
+TIMEOUT = 10  # seconds; also bounds pymilvus's retry loop (75 retries otherwise)
+TEXT_MAX_BYTES = 65535  # VARCHAR length counts UTF-8 bytes; 8192 chars x 4 bytes fits
+FILENAME_MAX_BYTES = 2048
 CONNECT_ERROR = "無法連線到 Milvus"
 OUTPUT_FIELDS = ["kb_id", "document_id", "filename", "page", "text"]
 
@@ -16,32 +25,44 @@ class MilvusChunkStore:
         self._token = token
         self._collection = collection
         self._client = client
+        self._exists_cached = False
 
     def _conn(self):
         if self._client is None:
             try:
-                self._client = MilvusClient(uri=self._uri, token=self._token)
+                self._client = MilvusClient(uri=self._uri, token=self._token, timeout=TIMEOUT)
             except Exception as exc:
                 raise _translate(exc) from exc
         return self._client
 
     def _exists(self) -> bool:
+        if self._exists_cached:
+            return True
         try:
-            return bool(self._conn().has_collection(self._collection))
+            found = bool(self._conn().has_collection(self._collection, timeout=TIMEOUT))
         except Exception as exc:
             raise _translate(exc) from exc
+        self._exists_cached = found
+        return found
 
     def ensure_ready(self, dim: int) -> None:
         try:
             client = self._conn()
-            if client.has_collection(self._collection):
-                existing = _dense_dim(client.describe_collection(self._collection))
-                if existing != dim:
-                    raise KnowledgeStoreError(
-                        f"EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{existing}）不同，請重建知識庫"
-                    )
-            else:
-                self._create(client, dim)
+            if not client.has_collection(self._collection, timeout=TIMEOUT):
+                try:
+                    self._create(client, dim)
+                    self._exists_cached = True
+                    return
+                except Exception:
+                    # web and worker may start together: the other one created it first
+                    if not client.has_collection(self._collection, timeout=TIMEOUT):
+                        raise
+            existing = _dense_dim(client.describe_collection(self._collection, timeout=TIMEOUT))
+            if existing != dim:
+                raise KnowledgeStoreError(
+                    f"EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{existing}）不同，請重建知識庫"
+                )
+            self._exists_cached = True
         except Exception as exc:
             raise _translate(exc) from exc
 
@@ -52,11 +73,11 @@ class MilvusChunkStore:
         schema.add_field("document_id", DataType.INT64)
         schema.add_field("page", DataType.INT64)
         schema.add_field("chunk_index", DataType.INT64)
-        schema.add_field("filename", DataType.VARCHAR, max_length=512)
+        schema.add_field("filename", DataType.VARCHAR, max_length=FILENAME_MAX_BYTES)
         schema.add_field(
             "text",
             DataType.VARCHAR,
-            max_length=8192,
+            max_length=TEXT_MAX_BYTES,
             enable_analyzer=True,
             analyzer_params={"type": "chinese"},
         )
@@ -76,7 +97,11 @@ class MilvusChunkStore:
             field_name="sparse", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25"
         )
         client.create_collection(
-            self._collection, schema=schema, index_params=index_params, consistency_level="Strong"
+            self._collection,
+            schema=schema,
+            index_params=index_params,
+            consistency_level="Strong",
+            timeout=TIMEOUT,
         )
 
     def insert(self, records: list[ChunkRecord]) -> None:
@@ -87,8 +112,8 @@ class MilvusChunkStore:
                 "document_id": r.document_id,
                 "page": r.page,
                 "chunk_index": r.chunk_index,
-                "filename": r.filename,
-                "text": r.text,
+                "filename": _truncate_bytes(r.filename, FILENAME_MAX_BYTES),
+                "text": _truncate_bytes(r.text, TEXT_MAX_BYTES),
                 "dense": r.dense,
             }
             for r in records
@@ -96,7 +121,7 @@ class MilvusChunkStore:
         try:
             client = self._conn()
             for start in range(0, len(rows), BATCH_SIZE):
-                client.insert(self._collection, rows[start : start + BATCH_SIZE])
+                client.insert(self._collection, rows[start : start + BATCH_SIZE], timeout=TIMEOUT)
         except Exception as exc:
             raise _translate(exc) from exc
 
@@ -110,7 +135,7 @@ class MilvusChunkStore:
         if not self._exists():
             return  # nothing was ever indexed
         try:
-            self._conn().delete(self._collection, filter=expr)
+            self._conn().delete(self._collection, filter=expr, timeout=TIMEOUT)
         except Exception as exc:
             raise _translate(exc) from exc
 
@@ -136,6 +161,7 @@ class MilvusChunkStore:
                 limit=limit,
                 output_fields=OUTPUT_FIELDS,
                 consistency_level="Strong",
+                timeout=TIMEOUT,
             )
         except Exception as exc:
             raise _translate(exc) from exc
@@ -166,8 +192,19 @@ def _translate(exc: Exception) -> KnowledgeStoreError:
     if isinstance(exc, (ConnectError, MilvusUnavailableException, ConnectionError, OSError)):
         return KnowledgeStoreError(CONNECT_ERROR)
     if isinstance(exc, MilvusException):
-        # pymilvus raises a plain MilvusException when the first connection fails
-        if "Fail connecting" in exc.message or "server unavailable" in exc.message:
+        # first connect fails with Status.CONNECT_FAILED; later RPCs end with the gRPC
+        # code once pymilvus's retries are used up or time out
+        if exc.code in (Status.CONNECT_FAILED, grpc.StatusCode.UNAVAILABLE):
             return KnowledgeStoreError(CONNECT_ERROR)
-        return KnowledgeStoreError(f"Milvus 錯誤：{exc.message}")
-    return KnowledgeStoreError(f"Milvus 錯誤：{exc}")
+        if "Fail connecting" in exc.message:
+            return KnowledgeStoreError(CONNECT_ERROR)
+    logger.error("Milvus request failed: %r", exc)
+    return KnowledgeStoreError("Milvus 錯誤")
+
+
+def _truncate_bytes(value: str, limit: int) -> str:
+    """Cut to at most `limit` UTF-8 bytes without splitting a character."""
+    data = value.encode("utf-8")
+    if len(data) <= limit:
+        return value
+    return data[:limit].decode("utf-8", errors="ignore")

@@ -5,7 +5,9 @@ from urllib.parse import urlparse
 
 import pytest
 from pymilvus import DataType, FunctionType, MilvusClient
-from pymilvus.exceptions import ConnectError
+import grpc
+from pymilvus.client.types import Status
+from pymilvus.exceptions import MilvusException
 
 from app.kb.chunk_store import ChunkRecord, KnowledgeStoreError
 from app.kb.milvus_store import MilvusChunkStore
@@ -14,7 +16,8 @@ from app.kb.milvus_store import MilvusChunkStore
 class FakeClient:
     """Records calls; create_schema/prepare_index_params are the real pymilvus builders."""
 
-    def __init__(self, exists=False, dim=4, search_result=None, error=None):
+    def __init__(self, exists=False, dim=4, search_result=None, error=None, create_race=False):
+        self.create_race = create_race
         self.exists = exists
         self.dim = dim
         self.search_result = search_result if search_result is not None else [[]]
@@ -28,20 +31,24 @@ class FakeClient:
     create_schema = staticmethod(MilvusClient.create_schema)
     prepare_index_params = staticmethod(MilvusClient.prepare_index_params)
 
-    def has_collection(self, name):
+    def has_collection(self, name, **kwargs):
         self._maybe_fail()
         return self.exists
 
-    def describe_collection(self, name):
+    def describe_collection(self, name, **kwargs):
         return {"fields": [{"name": "id"}, {"name": "dense", "params": {"dim": self.dim}}]}
 
     def create_collection(self, name, **kwargs):
+        if self.create_race:  # another process created it first
+            self.exists = True
+            raise MilvusException(message="collection already exists")
         self.calls.append(("create_collection", name, kwargs))
         self.exists = True
 
-    def insert(self, name, rows):
+    def insert(self, name, rows, **kwargs):
         self._maybe_fail()
         self.calls.append(("insert", name, rows))
+        self.insert_kwargs = kwargs
 
     def delete(self, name, **kwargs):
         self.calls.append(("delete", name, kwargs))
@@ -75,9 +82,9 @@ def test_ensure_ready_creates_schema_with_bm25_and_chinese_analyzer():
     assert fields["id"].is_primary and fields["id"].dtype == DataType.VARCHAR
     assert fields["id"].params["max_length"] == 64
     assert fields["kb_id"].is_partition_key and fields["kb_id"].dtype == DataType.INT64
-    assert fields["filename"].params["max_length"] == 512
+    assert fields["filename"].params["max_length"] == 2048
     text = fields["text"]
-    assert text.params["max_length"] == 8192
+    assert text.params["max_length"] == 65535
     assert text.params["enable_analyzer"] is True
     assert json.loads(text.params["analyzer_params"]) == {"type": "chinese"}
     assert fields["dense"].dtype == DataType.FLOAT_VECTOR and fields["dense"].params["dim"] == 4
@@ -185,9 +192,15 @@ def test_blank_keyword_query_returns_nothing():
     assert client.calls == []
 
 
-def test_connection_error_maps_to_store_error():
-    client = FakeClient(exists=True, error=ConnectError(message="refused"))
-    store = _store(client)
+CONNECT_FAILED = MilvusException(code=Status.CONNECT_FAILED, message="Fail connecting to server")
+RETRIES_EXHAUSTED = MilvusException(
+    code=grpc.StatusCode.UNAVAILABLE, message="[search] Retry run out of 75 retry times"
+)
+
+
+@pytest.mark.parametrize("error", [CONNECT_FAILED, RETRIES_EXHAUSTED])
+def test_connection_errors_map_to_store_error(error):
+    store = _store(FakeClient(exists=True, error=error))
     with pytest.raises(KnowledgeStoreError, match="^無法連線到 Milvus$"):
         store.ensure_ready(4)
     with pytest.raises(KnowledgeStoreError, match="^無法連線到 Milvus$"):
@@ -196,6 +209,66 @@ def test_connection_error_maps_to_store_error():
         store.keyword_search(1, "x", 5)
 
 
+def test_unknown_errors_get_a_short_message():
+    error = MilvusException(code=1100, message="internal secret stack detail")
+    with pytest.raises(KnowledgeStoreError) as err:
+        _store(FakeClient(exists=True, error=error)).dense_search(1, [0.1], 5)
+    assert str(err.value) == "Milvus 錯誤"
+
+
+def test_calls_are_time_bounded():
+    client = FakeClient(exists=True)
+    store = _store(client)
+    store.dense_search(1, [0.1], 5)
+    store.delete_kb(1)
+    store.insert([_record(1, 0)])
+    kwargs = [c[2] for c in client.calls if c[0] in ("search", "delete")]
+    assert kwargs and all(k["timeout"] == 10 for k in kwargs)
+    assert client.insert_kwargs["timeout"] == 10
+
+
+def test_existence_is_cached():
+    class Counting(FakeClient):
+        checks = 0
+
+        def has_collection(self, name, **kwargs):
+            self.checks += 1
+            return super().has_collection(name, **kwargs)
+
+    client = Counting(exists=True)
+    store = _store(client)
+    store.dense_search(1, [0.1], 5)
+    store.keyword_search(1, "x", 5)
+    store.delete_kb(1)
+    assert client.checks == 1
+
+
+def test_create_race_falls_through_to_dimension_check():
+    client = FakeClient(create_race=True, dim=4)
+    _store(client).ensure_ready(4)  # no error
+    with pytest.raises(KnowledgeStoreError, match="向量維度"):
+        _store(FakeClient(create_race=True, dim=8)).ensure_ready(4)
+
+
+def test_create_failure_without_race_is_reported():
+    class Failing(FakeClient):
+        def create_collection(self, name, **kwargs):
+            raise MilvusException(code=1100, message="bad")
+
+    with pytest.raises(KnowledgeStoreError, match="^Milvus 錯誤$"):
+        _store(Failing()).ensure_ready(4)
+
+
+def test_insert_truncates_by_utf8_bytes():
+    client = FakeClient(exists=True)
+    record = ChunkRecord(1, 1, "名" * 1000, 1, 0, "字" * 30000, [0.1])
+    _store(client).insert([record])
+    row = next(c[2] for c in client.calls if c[0] == "insert")[0]
+    assert len(row["text"].encode()) <= 65535 and row["text"] == "字" * 21845
+    assert len(row["filename"].encode()) <= 2048 and row["filename"] == "名" * 682
+
+
+@pytest.mark.milvus
 def test_unreachable_uri_maps_to_store_error():
     store = MilvusChunkStore("http://127.0.0.1:1", "", "phoebe_chunks")
     with pytest.raises(KnowledgeStoreError, match="^無法連線到 Milvus$"):

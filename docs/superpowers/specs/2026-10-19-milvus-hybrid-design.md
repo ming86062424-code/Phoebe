@@ -43,8 +43,8 @@ tests/fakes_store.py  # InMemoryChunkStore（單元測試用，關鍵字以簡�
   - `id` VARCHAR(64) 主鍵 = `"{document_id}:{chunk_index}"`
   - `kb_id` INT64，**partition key**
   - `document_id` INT64、`page` INT64、`chunk_index` INT64
-  - `filename` VARCHAR(512)
-  - `text` VARCHAR(8192)，`enable_analyzer=True`，`analyzer_params={"type": "chinese"}`
+  - `filename` VARCHAR(2048)（長度以 UTF-8 位元組計，寫入時以位元組安全方式截斷）
+  - `text` VARCHAR(65535)（長度以 UTF-8 位元組計；8192 字元 × 4 位元組可容納，超過仍以位元組安全方式截斷），`enable_analyzer=True`，`analyzer_params={"type": "chinese"}`
   - `dense` FLOAT_VECTOR(dim)
   - `sparse` SPARSE_FLOAT_VECTOR，由 BM25 Function（輸入 `text`）自動產生
 - 索引：`dense` → AUTOINDEX、metric COSINE；`sparse` → SPARSE_INVERTED_INDEX、metric BM25
