@@ -106,6 +106,13 @@ def test_output_is_l2_normalized_768(client):
     assert np.allclose(np.linalg.norm(emb, axis=1), 1.0, atol=1e-5)
 
 
+def test_output_dimension_follows_the_model():
+    client = TestClient(create_app(model=FakeModel(dim=1024)))
+    r = client.post("/embed", json={"items": [{"kind": "query", "text": "a"}]})
+    assert r.status_code == 200
+    assert len(r.json()["embeddings"][0]) == 1024
+
+
 class KindModel:
     """One-hot vector per modality group (dims 0 query, 1 document, 2 image, 3 image_text);
     component 10 carries a per-item number so each row position is identifiable."""

@@ -287,7 +287,8 @@ def retry_document(
     return store.get_document(conn, doc_id)
 
 
-IMAGE_CACHE_CONTROL = "private, max-age=3600"
+# Names are reused when a document is reprocessed, so always revalidate (ETag/Last-Modified).
+IMAGE_CACHE_CONTROL = "private, no-cache"
 
 
 @router.get("/kbs/{kb_id}/documents/{doc_id}/images/{name}")

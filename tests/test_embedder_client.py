@@ -154,3 +154,31 @@ def test_real_embedder_ranks_related_document_closer():
         return sum(x * y for x, y in zip(a, b))
 
     assert dot(query, dog) > dot(query, invoice)
+
+
+def _text_image(text: str) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (640, 320), "white")
+    try:
+        font = ImageFont.truetype("C:/Windows/Fonts/msjh.ttc", 72)
+    except OSError:
+        pytest.skip("CJK font not available")
+    ImageDraw.Draw(img).text((40, 110), text, font=font, fill="black")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.embedder
+def test_real_embedder_ranks_related_page_image_closer():
+    client = EmbedderClient(_embedder_url())
+    query = client.embed_queries(["日本的狗"])[0]
+    dog, invoice = client.embed_images([_text_image("柴犬"), _text_image("發票 2026-1018")])
+
+    def dot(a, b):
+        return sum(x * y for x, y in zip(a, b))
+
+    assert dot(query, dog) > dot(query, invoice)

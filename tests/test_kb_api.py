@@ -591,7 +591,7 @@ def test_image_api_serves_png_with_private_cache(make_user, kb_services):
         r = alice.get(_image_url(kb["id"], doc["id"], name))
         assert r.status_code == 200, name
         assert r.headers["content-type"] == "image/png"
-        assert r.headers["cache-control"] == "private, max-age=3600"
+        assert r.headers["cache-control"] == "private, no-cache"
         assert r.content == (kb_services.doc_dir(kb["id"], doc["id"]) / name).read_bytes()
 
 

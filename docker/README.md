@@ -104,6 +104,7 @@ uv run --group migrate python -m app.kb.migrate_chroma --chroma-dir data/chroma
 git pull                                   # 取得新版程式與 compose
 docker compose up -d --build embedder milvus   # 先建置並啟動 embedder（首次會下載約 1–2 GB 模型）與 milvus
 docker compose ps                          # 等 embedder 與 milvus 都是 healthy
+docker compose stop web worker            # 先停掉舊的 web／worker，避免它們用舊結構重建 collection
 # 刪除舊的 collection（名稱為 MILVUS_COLLECTION，預設 phoebe_chunks）
 docker compose run --rm --no-deps worker python -c "from app.config import Settings; from pymilvus import MilvusClient; s = Settings.from_env(); MilvusClient(uri=s.milvus_uri, token=s.milvus_token).drop_collection(s.milvus_collection)"
 docker compose up -d --build              # 重建並重新啟動 web、worker（它們會快取 collection 狀態，必須重啟）

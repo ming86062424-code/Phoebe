@@ -191,7 +191,7 @@ def create_app(
                 )
 
         image_kwargs = {"processing_kwargs": {"image": {"max_soft_tokens": image_tokens}}}
-        out = np.zeros((len(req.items), 768), dtype=np.float32)
+        out: np.ndarray | None = None
         with lock:
             for idx, inputs, kwargs in (
                 (text_idx, text_in, {}),
@@ -200,6 +200,8 @@ def create_app(
             ):
                 if inputs:
                     vecs = np.asarray(m.encode(inputs, **kwargs), dtype=np.float32)
+                    if out is None:
+                        out = np.zeros((len(req.items), vecs.shape[1]), dtype=np.float32)
                     out[idx] = vecs
         norms = np.linalg.norm(out, axis=1, keepdims=True)
         out = out / np.maximum(norms, 1e-12)
