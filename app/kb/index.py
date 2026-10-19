@@ -141,6 +141,8 @@ class KnowledgeIndex:
         self._store.delete_kb(kb_id)
 
     def search(self, kb_id: int, query: str, top_k: int) -> list[Source]:
+        if top_k <= 0:
+            return []
         vector = [float(x) for x in self._embed_model.get_query_embedding(query)]
         self._ensure_ready(len(vector))
         limit = top_k * CANDIDATE_FACTOR

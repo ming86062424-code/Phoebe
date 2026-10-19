@@ -55,6 +55,21 @@ def test_process_marks_ready_and_indexes(env):
     assert parser.released == 1
 
 
+def test_store_down_marks_failed_with_clear_reason(env, monkeypatch):
+    from app.kb.chunk_store import KnowledgeStoreError
+
+    conn, _, _, services, add_doc = env
+
+    def boom(*args, **kwargs):
+        raise KnowledgeStoreError("無法連線到 Milvus")
+
+    monkeypatch.setattr(services.index._store, "insert", boom)
+    doc = add_doc()
+    services.worker.enqueue(doc["id"])
+    got = store.get_document(conn, doc["id"])
+    assert got["status"] == "failed" and "無法連線到 Milvus" in got["error"]
+
+
 def test_parse_error_marks_failed(env):
     conn, _, parser, services, add_doc = env
     parser.error = ParseError("壞掉了")

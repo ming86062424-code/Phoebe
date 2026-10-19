@@ -373,3 +373,36 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     conn.close()
     assert c.get("/api/parsers").json()[0]["available"] is True
     assert _upload(c, kb["id"]).status_code == 201
+
+
+def _store_down(monkeypatch, kb_services, *names):
+    from app.kb.chunk_store import KnowledgeStoreError
+
+    def boom(*args, **kwargs):
+        raise KnowledgeStoreError("無法連線到 Milvus")
+
+    for name in names:
+        monkeypatch.setattr(kb_services.index._store, name, boom)
+
+
+def test_delete_document_succeeds_when_store_is_down(make_user, kb_services, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+    removed = []
+    monkeypatch.setattr(kb_services.worker, "remove_path", lambda p: removed.append(p))
+    _store_down(monkeypatch, kb_services, "delete_document")
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 204
+    assert removed == [kb_services.file_path(kb["id"], doc["id"])]
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 404
+
+
+def test_delete_kb_succeeds_when_store_is_down(make_user, kb_services, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    removed = []
+    monkeypatch.setattr(kb_services.worker, "remove_path", lambda p: removed.append(p))
+    _store_down(monkeypatch, kb_services, "delete_kb")
+    assert alice.delete(f"/api/kbs/{kb['id']}").status_code == 204
+    assert removed == [kb_services.kb_dir / str(kb["id"])]
+    assert kb["id"] not in [k["id"] for k in alice.get("/api/kbs").json()]

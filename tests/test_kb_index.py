@@ -58,12 +58,44 @@ def test_top_k_and_empty():
 
 
 def test_search_returns_keyword_only_match(store):
-    """A code the embedding can't tell apart is still found through the keyword path."""
-    index = KnowledgeIndex(store, KeywordEmbedding())
+    """A code the embedding can't link to the query is still found through the keyword path."""
+
+    class FarQueryEmbedding(KeywordEmbedding):
+        def _get_query_embedding(self, query):
+            v = [0.0] * self.dim
+            v[0] = 1.0
+            return v
+
+        def _get_text_embedding(self, text):
+            v = [0.0] * self.dim
+            v[1] = 1.0  # orthogonal to every query: cosine 0
+            return v
+
+    class NegativeDense(InMemoryChunkStore):
+        def dense_search(self, kb_id, vector, limit):
+            return []  # the dense path finds nothing at all
+
+    index = KnowledgeIndex(NegativeDense(), FarQueryEmbedding())
     index.add_document(1, 10, "a.pdf", [PageText(1, "Invoice No. 2026-1018 total due")])
     results = index.search(1, "2026-1018", top_k=3)
     assert results and results[0].document_id == 10
+    assert results[0].vector_score is None
     assert results[0].keyword_score is not None
+
+
+def test_search_with_non_positive_top_k_returns_nothing(index):
+    index.add_document(1, 10, "a.pdf", [PageText(1, "apple")])
+    assert index.search(1, "apple", top_k=0) == []
+    assert index.search(1, "apple", top_k=-1) == []
+
+
+def test_dimension_mismatch_propagates(store):
+    class Small(KeywordEmbedding):
+        dim: int = 8
+
+    KnowledgeIndex(store, KeywordEmbedding()).search(1, "x", top_k=1)
+    with pytest.raises(KnowledgeStoreError, match=r"向量維度（8）與既有知識庫（64）不同，請重建知識庫"):
+        KnowledgeIndex(store, Small()).search(1, "x", top_k=1)
 
 
 # ---- KnowledgeIndex ----

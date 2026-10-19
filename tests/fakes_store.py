@@ -1,7 +1,7 @@
 import math
 import re
 
-from app.kb.chunk_store import ChunkRecord, Hit
+from app.kb.chunk_store import ChunkRecord, Hit, KnowledgeStoreError
 
 
 def _tokens(text: str) -> set[str]:
@@ -29,10 +29,16 @@ class InMemoryChunkStore:
         self.dim: int | None = None
 
     def ensure_ready(self, dim: int) -> None:
+        if self.dim is not None and self.dim != dim:
+            raise KnowledgeStoreError(
+                f"EMBED_MODEL 的向量維度（{dim}）與既有知識庫（{self.dim}）不同，請重建知識庫"
+            )
         self.dim = dim
 
     def insert(self, records: list[ChunkRecord]) -> None:
         for r in records:
+            if self.dim is not None and len(r.dense) != self.dim:
+                raise KnowledgeStoreError("Milvus 錯誤")
             self.rows[f"{r.document_id}:{r.chunk_index}"] = r
 
     def delete_document(self, kb_id: int, document_id: int) -> None:

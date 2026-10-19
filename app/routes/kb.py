@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import uuid
 
@@ -11,6 +12,8 @@ from app.config import Settings
 from app.deps import get_db, get_kb_services, get_settings
 from app.kb import store
 from app.kb.services import KbServices
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -115,7 +118,11 @@ def delete_kb(
     _require_kb(conn, user, kb_id)
     store.delete_kb(conn, user["id"], kb_id)
     # the worker notices the deleted rows and stops; files still in use are removed later
-    kb.index.delete_kb(kb_id)
+    try:
+        kb.index.delete_kb(kb_id)
+    except Exception as e:
+        # ids are never reused, so leftover chunks are never searched
+        logger.warning("刪除知識庫 %s 的向量失敗：%s", kb_id, e)
     kb.worker.remove_path(kb.kb_dir / str(kb_id))
     return Response(status_code=204)
 
@@ -209,7 +216,10 @@ def delete_document(
     if not store.delete_document(conn, kb_id, doc_id):
         raise HTTPException(status_code=404, detail="找不到文件")
     # the worker notices the deleted row and stops; a file still in use is removed later
-    kb.index.delete_document(kb_id, doc_id)
+    try:
+        kb.index.delete_document(kb_id, doc_id)
+    except Exception as e:
+        logger.warning("刪除文件 %s 的向量失敗：%s", doc_id, e)
     kb.worker.remove_path(kb.file_path(kb_id, doc_id))
     return Response(status_code=204)
 
