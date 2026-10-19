@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.db import connect, now_iso
 from app.kb import store
+from app.kb.filetypes import UPLOAD_EXTENSIONS
 from app.kb.index import KnowledgeIndex
 from app.kb.parsers.base import Parser, ParseError
 
@@ -54,17 +55,20 @@ class IngestWorker:
         db_path: str,
         index: KnowledgeIndex,
         parsers: dict[str, Parser],
-        file_path: Callable[[int, int], str],
+        file_path: Callable[[int, int, str], str],
         threaded: bool = True,
         poll_seconds: float = 2.0,
         stale_seconds: int = 120,
         kb_dir: str = "",
         heartbeat_seconds: float = 30.0,
+        doc_dir: Callable[[int, int], Path] | None = None,
     ):
         self.db_path = db_path
         self.index = index
         self.parsers = parsers
-        self.file_path = file_path
+        self.file_path = file_path  # (kb_id, doc_id, filename) -> uploaded file
+        # (kb_id, doc_id) -> the folder the parser writes the document's images into
+        self.doc_dir = doc_dir or (lambda kb_id, doc_id: Path(kb_dir) / str(kb_id) / str(doc_id))
         self.threaded = threaded
         self.poll_seconds = poll_seconds
         self.stale_seconds = stale_seconds
@@ -231,7 +235,7 @@ class IngestWorker:
             self._wake.wait(self.poll_seconds)
 
     def cleanup_orphans(self) -> int:
-        """Delete document files and knowledge-base folders that have no database row."""
+        """Delete document files and folders, and knowledge-base folders, with no database row."""
         root = Path(self.kb_dir)
         if not self.kb_dir or not root.is_dir():
             return 0
@@ -241,9 +245,10 @@ class IngestWorker:
         for folder in root.iterdir():
             if folder.is_dir() and folder.name.isdigit():
                 docs = [
-                    (int(f.stem), f)
+                    (int(f.stem if f.is_file() else f.name), f)
                     for f in folder.iterdir()
-                    if f.is_file() and f.suffix == ".pdf" and f.stem.isdigit()
+                    if (f.is_file() and f.suffix.lower() in UPLOAD_EXTENSIONS and f.stem.isdigit())
+                    or (f.is_dir() and f.name.isdigit())
                 ]
                 found.append((int(folder.name), folder, docs))
         removed = 0
@@ -353,18 +358,29 @@ class IngestWorker:
 
         indexed = False
         try:
-            pages = parser.parse(self.file_path(doc["kb_id"], doc_id), on_progress)
+            out_dir = self.doc_dir(doc["kb_id"], doc_id)
+            # images from an earlier attempt must not linger next to the new ones
+            if out_dir.exists():
+                _remove(out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = self.file_path(doc["kb_id"], doc_id, doc["filename"])
+            parsed = parser.parse(path, out_dir, on_progress)
             check_current()
             store.update_document(conn, doc_id, status="indexing")
             # Clear vectors from any earlier, interrupted attempt before writing new ones.
             self.index.delete_document(doc["kb_id"], doc_id)
-            chunks = self.index.add_document(doc["kb_id"], doc_id, doc["filename"], pages)
+            chunks = self.index.add_document(
+                doc["kb_id"], doc_id, doc["filename"], parsed, image_dir=out_dir
+            )
             indexed = True
             check_current()
             if chunks == 0:
-                store.update_document(
-                    conn, doc_id, status="failed", error="沒有擷取到任何文字，掃描檔請改用 LightOnOCR"
+                error = (
+                    "檔案中沒有任何文字"
+                    if parser.id == "text"
+                    else "沒有擷取到任何文字，掃描檔請改用 LightOnOCR"
                 )
+                store.update_document(conn, doc_id, status="failed", error=error)
                 return
             store.update_document(conn, doc_id, status="ready", chunk_count=chunks)
         except _Stopped:

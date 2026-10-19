@@ -52,7 +52,10 @@ class InMemoryChunkStore:
         self.rows = {k: r for k, r in self.rows.items() if r.kb_id != kb_id}
 
     def _hit(self, chunk_id: str, r: ChunkRecord, score: float) -> Hit:
-        return Hit(chunk_id, r.kb_id, r.document_id, r.filename, r.page, r.text, score)
+        return Hit(
+            chunk_id, r.kb_id, r.document_id, r.filename, r.page, r.text, score,
+            kind=r.kind, images=list(r.images), page_image=r.page_image,
+        )  # fmt: skip
 
     def dense_search(self, kb_id: int, vector: list[float], limit: int) -> list[Hit]:
         scored = [

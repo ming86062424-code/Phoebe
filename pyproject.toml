@@ -9,7 +9,6 @@ dependencies = [
     "gunicorn>=26.2.0",
     "httpx>=0.28.1",
     "liteparse>=2.16.0",
-    "llama-index-core>=0.14.25",
     "pillow>=12.3.0",
     "pymilvus==2.6.17",
     "pypdfium2>=5.14.0",

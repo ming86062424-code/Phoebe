@@ -7,7 +7,7 @@ import pytest
 from app.config import Settings
 from app.db import connect, init_db, now_iso
 from app.kb import store
-from app.kb.parsers.base import PageText, ParseError
+from app.kb.parsers.base import ParsedChunk, ParseError
 from app.kb.services import build_kb_services
 from tests.fakes import FakeParser
 from tests.fakes_embedder import FakeEmbedder
@@ -82,7 +82,7 @@ def test_parse_error_marks_failed(env):
 
 def test_no_text_marks_failed(env):
     conn, _, parser, services, add_doc = env
-    parser.pages = [PageText(1, "")]
+    parser.pages = [ParsedChunk(1, "")]
     doc = add_doc()
     services.worker.enqueue(doc["id"])
     assert "LightOnOCR" in store.get_document(conn, doc["id"])["error"]
@@ -128,8 +128,8 @@ def test_document_replaced_mid_parse_is_not_indexed_as_the_new_one(env):
 
     original_parse = parser.parse
 
-    def parse_then_replace(path, on_progress):
-        pages = original_parse(path, on_progress)
+    def parse_then_replace(path, out_dir, on_progress):
+        pages = original_parse(path, out_dir, on_progress)
         other = connect(services.worker.db_path)
         other.execute("DELETE FROM kb_documents WHERE id = ?", (doc["id"],))
         other.execute(
@@ -154,13 +154,13 @@ def test_deleting_a_document_stops_parsing_at_the_next_page(env):
     doc = add_doc()
     pages_done = []
 
-    def slow_parse(path, on_progress):
+    def slow_parse(path, out_dir, on_progress):
         for page in (1, 2, 3):
             if page == 2:
                 store.delete_document(conn, kb["id"], doc["id"])
             on_progress(page, 3)
             pages_done.append(page)
-        return [PageText(1, "apple")]
+        return [ParsedChunk(1, "apple")]
 
     parser.parse = slow_parse
     assert store.claim_next_document(conn) == doc["id"]
@@ -238,11 +238,11 @@ def test_heartbeat_refreshes_updated_at_during_slow_parse(env):
     seen = []
     original = parser.parse
 
-    def slow_parse(path, on_progress):
+    def slow_parse(path, out_dir, on_progress):
         _age(conn, doc["id"])  # as if no update for a long time
         time.sleep(0.4)  # no progress calls: only the heartbeat can refresh
         seen.append(store.get_document(conn, doc["id"])["updated_at"])
-        return original(path, on_progress)
+        return original(path, out_dir, on_progress)
 
     parser.parse = slow_parse
     assert store.claim_next_document(conn) == doc["id"]
@@ -278,7 +278,7 @@ def test_active_document_is_not_requeued_by_another_worker(env):
     original = parser.parse
     outcome = []
 
-    def slow_parse(path, on_progress):
+    def slow_parse(path, out_dir, on_progress):
         _age(conn, doc["id"])
         time.sleep(0.4)
         other = connect(services.worker.db_path)
@@ -289,7 +289,7 @@ def test_active_document_is_not_requeued_by_another_worker(env):
             outcome.append(store.requeue_stale_documents(other, stale_before))
         finally:
             other.close()
-        return original(path, on_progress)
+        return original(path, out_dir, on_progress)
 
     parser.parse = slow_parse
     assert store.claim_next_document(conn) == doc["id"]
@@ -304,13 +304,13 @@ def test_stop_event_ends_processing_after_current_page(env):
     stop = threading.Event()
     pages = []
 
-    def parse(path, on_progress):
+    def parse(path, out_dir, on_progress):
         for page in (1, 2, 3):
             if page == 2:
                 stop.set()
             on_progress(page, 3)
             pages.append(page)
-        return [PageText(1, "x")]
+        return [ParsedChunk(1, "x")]
 
     parser.parse = parse
     assert store.claim_next_document(conn) == doc["id"]
@@ -459,3 +459,52 @@ def test_stale_pending_documents_are_failed(env):
     assert (got["status"], got["error"]) == ("failed", "上傳未完成，請重新上傳")
     assert store.get_document(conn, fresh["id"])["status"] == "pending"
     assert store.get_document(conn, queued["id"])["status"] == "queued"  # other statuses untouched
+
+
+def test_parse_gets_a_fresh_document_folder_and_images_are_indexed(env):
+    from app.kb.parsers.base import ImageRef
+
+    conn, kb, parser, services, add_doc = env
+    doc = add_doc()
+    folder = services.doc_dir(kb["id"], doc["id"])
+    folder.mkdir(parents=True)
+    (folder / "stale.png").write_bytes(b"old attempt")
+
+    def parse(path, out_dir, on_progress):
+        assert out_dir == folder and out_dir.is_dir() and not (out_dir / "stale.png").exists()
+        (out_dir / "page_1.png").write_bytes(b"png")
+        return [ParsedChunk(1, "page text", page_image=ImageRef("page_1.png", 2, 2), kind="page_image")]
+
+    parser.parse = parse
+    services.worker.enqueue(doc["id"])
+    assert store.get_document(conn, doc["id"])["status"] == "ready"
+    (row,) = services.index._store.rows.values()
+    assert row.kind == "page_image" and row.page_image == ImageRef("page_1.png", 2, 2)
+
+
+def test_cleanup_orphans_handles_new_file_types_and_document_folders(env):
+    conn, kb, _, services, add_doc = env
+    keep = add_doc()
+    keep_dir = services.doc_dir(kb["id"], keep["id"])
+    keep_dir.mkdir(parents=True)
+    folder = services.kb_dir / str(kb["id"])
+    orphans = [folder / "9001.txt", folder / "9002.png", folder / "9003.md"]
+    for f in orphans:
+        f.write_bytes(b"x")
+    orphan_dir = folder / "9004"
+    orphan_dir.mkdir()
+    (orphan_dir / "page_1.png").write_bytes(b"x")
+    assert services.worker.cleanup_orphans() == 4
+    assert keep_dir.exists() and services.file_path(kb["id"], keep["id"]).exists()
+    assert not any(f.exists() for f in orphans) and not orphan_dir.exists()
+
+
+def test_empty_text_file_fails_with_a_text_message(env):
+    conn, kb, _, services, _ = env
+    doc = store.create_document(conn, kb["id"], "a.txt", "text", 1)
+    path = services.file_path(kb["id"], doc["id"], "a.txt")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"  \n\n ")
+    services.worker.enqueue(doc["id"])
+    got = store.get_document(conn, doc["id"])
+    assert (got["status"], got["error"]) == ("failed", "檔案中沒有任何文字")

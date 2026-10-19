@@ -1,6 +1,6 @@
 # Phoebe
 
-在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React），附 PDF 知識庫（LlamaIndex + Milvus，BM25 + 向量混合檢索）。
+在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React），附知識庫（PDF、txt、md、圖檔；Milvus，BM25 + 向量混合檢索）。
 
 ## 事前準備
 
@@ -178,7 +178,7 @@ docker compose up -d --build
 ## 專案結構
 
 - `app/` — 後端（設定、資料庫、驗證、對話、Ollama 客戶端、路由）
-- `app/kb/` — 知識庫（資料存取、解析器、LlamaIndex 索引、背景處理）
+- `app/kb/` — 知識庫（資料存取、解析器、索引、背景處理）
 - `scripts/` — 手動驗證腳本
 - `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試

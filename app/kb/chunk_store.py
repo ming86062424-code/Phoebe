@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
+
+from app.kb.parsers.base import ImageRef
 
 
 class KnowledgeStoreError(Exception):
@@ -15,6 +17,9 @@ class ChunkRecord:
     chunk_index: int
     text: str
     dense: list[float]
+    kind: str = "text"  # "text" or "page_image"
+    images: list[ImageRef] = field(default_factory=list)
+    page_image: ImageRef | None = None
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,9 @@ class Hit:
     page: int
     text: str
     score: float  # cosine for dense_search, BM25 for keyword_search
+    kind: str = "text"
+    images: list[ImageRef] = field(default_factory=list)
+    page_image: ImageRef | None = None
 
 
 class ChunkStore(Protocol):

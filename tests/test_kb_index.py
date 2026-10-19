@@ -5,7 +5,7 @@ import pytest
 from app.kb import index as index_module
 from app.kb.chunk_store import Hit, KnowledgeStoreError
 from app.kb.index import KnowledgeIndex, Source, rrf_fuse
-from app.kb.parsers.base import PageText
+from app.kb.parsers.base import ImageRef, ParsedChunk
 from tests.fakes_embedder import FakeEmbedder
 from tests.fakes_store import InMemoryChunkStore
 
@@ -76,7 +76,7 @@ def test_search_returns_keyword_only_match(store):
             return []  # the dense path finds nothing at all
 
     index = KnowledgeIndex(NegativeDense(), FarQueryEmbedding())
-    index.add_document(1, 10, "a.pdf", [PageText(1, "Invoice No. 2026-1018 total due")])
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "Invoice No. 2026-1018 total due")])
     results = index.search(1, "2026-1018", top_k=3)
     assert results and results[0].document_id == 10
     assert results[0].vector_score is None
@@ -84,7 +84,7 @@ def test_search_returns_keyword_only_match(store):
 
 
 def test_search_with_non_positive_top_k_returns_nothing(index):
-    index.add_document(1, 10, "a.pdf", [PageText(1, "apple")])
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "apple")])
     assert index.search(1, "apple", top_k=0) == []
     assert index.search(1, "apple", top_k=-1) == []
 
@@ -102,7 +102,7 @@ def test_dimension_mismatch_propagates(store):
 
 
 def test_search_returns_best_page_with_metadata(index):
-    pages = [PageText(1, "apple banana orchard"), PageText(2, "rocket engine fuel")]
+    pages = [ParsedChunk(1, "apple banana orchard"), ParsedChunk(2, "rocket engine fuel")]
     assert index.add_document(1, 10, "a.pdf", pages) == 2
     results = index.search(1, "rocket fuel", top_k=1)
     assert len(results) == 1
@@ -116,13 +116,13 @@ def test_search_empty_kb_returns_nothing(index):
 
 
 def test_kbs_are_isolated(index):
-    index.add_document(1, 10, "a.pdf", [PageText(1, "apple")])
-    index.add_document(2, 20, "b.pdf", [PageText(1, "apple")])
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "apple")])
+    index.add_document(2, 20, "b.pdf", [ParsedChunk(1, "apple")])
     assert {r.document_id for r in index.search(1, "apple", top_k=5)} == {10}
 
 
 def test_reindex_replaces_old_chunks(index, store):
-    pages = [PageText(1, "apple banana"), PageText(2, "rocket fuel")]
+    pages = [ParsedChunk(1, "apple banana"), ParsedChunk(2, "rocket fuel")]
     assert index.add_document(1, 10, "a.pdf", pages) == 2
     assert index.add_document(1, 10, "a.pdf", pages[:1]) == 1
     assert len(store.rows) == 1
@@ -131,8 +131,8 @@ def test_reindex_replaces_old_chunks(index, store):
 
 
 def test_delete_document_and_kb(index):
-    index.add_document(1, 10, "a.pdf", [PageText(1, "apple")])
-    index.add_document(1, 11, "b.pdf", [PageText(1, "apple pie")])
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "apple")])
+    index.add_document(1, 11, "b.pdf", [ParsedChunk(1, "apple pie")])
     index.delete_document(1, 10)
     assert {r.document_id for r in index.search(1, "apple", top_k=5)} == {11}
     index.delete_kb(1)
@@ -141,37 +141,62 @@ def test_delete_document_and_kb(index):
 
 
 def test_blank_pages_are_skipped(index):
-    assert index.add_document(1, 10, "a.pdf", [PageText(1, "  ")]) == 0
+    assert index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "  ")]) == 0
 
 
 def test_long_text_is_truncated_to_8192(store, monkeypatch):
     assert index_module.MAX_TEXT_CHARS == 8192
     monkeypatch.setattr(index_module, "MAX_TEXT_CHARS", 20)
     index = KnowledgeIndex(store, FakeEmbedder())
-    index.add_document(1, 10, "a.pdf", [PageText(1, "word " * 50)])
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "word " * 50)])
     assert store.rows and all(len(r.text) <= 20 for r in store.rows.values())
 
 
-def test_snippet_is_short_but_content_is_whole_chunk(store):
+def test_source_text_is_the_whole_chunk(store):
     index = KnowledgeIndex(store, FakeEmbedder())
-    text = "alpha " * 100  # about 600 characters, a single chunk
-    index.add_document(1, 10, "a.pdf", [PageText(1, text)])
+    text = "alpha " * 100  # about 600 characters
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, text)])
     (source,) = index.search(1, "alpha", top_k=1)
-    assert len(source.text) == index_module.SNIPPET_CHARS
-    assert source.content == store.rows["10:0"].text and len(source.content) > len(source.text)
+    assert source.text == store.rows["10:0"].text == text
+
+
+def test_each_page_is_one_chunk(store):
+    index = KnowledgeIndex(store, FakeEmbedder())
+    long_page = "word " * 1000  # 5000 characters, still a single chunk
+    assert index.add_document(1, 10, "a.pdf", [ParsedChunk(1, long_page), ParsedChunk(2, "x")]) == 2
+    rows = sorted(store.rows.values(), key=lambda r: r.chunk_index)
+    assert [(r.page, r.chunk_index, r.kind) for r in rows] == [(1, 0, "text"), (2, 1, "text")]
 
 
 def test_source_to_dict_includes_component_scores():
-    data = Source(1, "a.pdf", 2, 0.0328, "snip", "full", 0.9, None).to_dict()
+    data = Source(1, "a.pdf", 2, 0.0328, "full text", 0.9, None).to_dict()
     assert data == {
         "document_id": 1,
         "filename": "a.pdf",
         "page": 2,
         "score": 0.0328,
-        "text": "snip",
+        "text": "full text",
         "vector_score": 0.9,
         "keyword_score": None,
+        "kind": "text",
+        "images": [],
+        "page_image": None,
     }
+
+
+def test_search_carries_kind_and_images(store, tmp_path):
+    (tmp_path / "page_1.png").write_bytes(b"png-1")
+    index = KnowledgeIndex(store, FakeEmbedder())
+    chunk = ParsedChunk(
+        1, "柴犬 photo", images=[ImageRef("img_1_0.png", 30, 40)],
+        page_image=ImageRef("page_1.png", 1536, 1000), kind="page_image",
+    )  # fmt: skip
+    index.add_document(1, 10, "a.pdf", [chunk], image_dir=tmp_path)
+    (source,) = index.search(1, "photo", top_k=1)
+    data = source.to_dict()
+    assert data["kind"] == "page_image"
+    assert data["images"] == [{"name": "img_1_0.png", "width": 30, "height": 40}]
+    assert data["page_image"] == {"name": "page_1.png", "width": 1536, "height": 1000}
 
 
 def test_dimension_is_checked_once_lazily(store):
@@ -209,9 +234,9 @@ def test_search_is_not_blocked_while_another_document_is_embedding(store):
             return super().document_vector(title, text)
 
     index = KnowledgeIndex(store, SlowTextEmbedding())
-    index.add_document(1, 10, "a.pdf", [PageText(1, "apple banana")])
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "apple banana")])
     writer = threading.Thread(
-        target=index.add_document, args=(1, 11, "b.pdf", [PageText(1, "slow rocket")])
+        target=index.add_document, args=(1, 11, "b.pdf", [ParsedChunk(1, "slow rocket")])
     )
     writer.start()
     try:
@@ -259,8 +284,8 @@ def test_real_milvus_finds_invoice_number_through_keyword_path():
     index = KnowledgeIndex(MilvusChunkStore(uri, token, name, client=client), FakeEmbedder())
     try:
         pages = [
-            PageText(1, "Invoice No. 2026-1018 issued to ACME, total due 30 days."),
-            PageText(2, "Quarterly rocket engine fuel report."),
+            ParsedChunk(1, "Invoice No. 2026-1018 issued to ACME, total due 30 days."),
+            ParsedChunk(2, "Quarterly rocket engine fuel report."),
         ]
         index.add_document(1, 10, "inv.pdf", pages)
         results = index.search(1, "2026-1018", top_k=3)
@@ -286,7 +311,7 @@ def test_documents_use_filename_as_title_and_plain_text(store):
             return super().embed_queries(texts)
 
     index = KnowledgeIndex(store, Spy())
-    index.add_document(1, 10, "規章.pdf", [PageText(1, "apple banana")])
+    index.add_document(1, 10, "規章.pdf", [ParsedChunk(1, "apple banana")])
     index.search(1, "apple", top_k=1)
     assert calls == [("規章.pdf", ["apple banana"]), ("q", ["apple"])]
 
@@ -303,4 +328,74 @@ def test_embedder_failure_propagates(store):
     with pytest.raises(KnowledgeStoreError, match="無法連線到 embedding 服務"):
         index.search(1, "x", top_k=1)
     with pytest.raises(KnowledgeStoreError, match="無法連線到 embedding 服務"):
-        index.add_document(1, 10, "a.pdf", [PageText(1, "x")])
+        index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "x")])
+
+
+# ---- page_image chunks use the image + text embedding ----
+
+
+class ImageSpy(FakeEmbedder):
+    def __init__(self):
+        self.calls = []
+
+    def embed_documents(self, title, texts):
+        self.calls.append(("documents", title, list(texts)))
+        return super().embed_documents(title, texts)
+
+    def embed_image_texts(self, items):
+        self.calls.append(("image_texts", list(items)))
+        return super().embed_image_texts(items)
+
+
+def test_page_image_chunks_embed_png_bytes_with_text(store, tmp_path):
+    (tmp_path / "page_1.png").write_bytes(b"png-one")
+    spy = ImageSpy()
+    index = KnowledgeIndex(store, spy)
+    chunks = [
+        ParsedChunk(1, "page one", page_image=ImageRef("page_1.png", 10, 10), kind="page_image"),
+        ParsedChunk(2, "plain text page"),
+    ]
+    assert index.add_document(1, 10, "a.pdf", chunks, image_dir=tmp_path) == 2
+    assert ("image_texts", [(b"png-one", "page one")]) in spy.calls
+    assert ("documents", "a.pdf", ["plain text page"]) in spy.calls
+    rows = sorted(store.rows.values(), key=lambda r: r.chunk_index)
+    assert [(r.page, r.kind) for r in rows] == [(1, "page_image"), (2, "text")]
+    assert rows[0].page_image == ImageRef("page_1.png", 10, 10)
+
+
+def test_page_image_embeddings_are_sent_in_batches_of_eight(store, tmp_path):
+    chunks = []
+    for n in range(1, 21):
+        (tmp_path / f"page_{n}.png").write_bytes(f"png-{n}".encode())
+        chunks.append(
+            ParsedChunk(n, f"page {n}", page_image=ImageRef(f"page_{n}.png", 1, 1), kind="page_image")
+        )
+    spy = ImageSpy()
+    index = KnowledgeIndex(store, spy)
+    assert index.add_document(1, 10, "a.pdf", chunks, image_dir=tmp_path) == 20
+    sizes = [len(c[1]) for c in spy.calls if c[0] == "image_texts"]
+    assert sizes == [8, 8, 4]
+    # vectors line up with their pages
+    rows = sorted(store.rows.values(), key=lambda r: r.chunk_index)
+    assert [r.page for r in rows] == list(range(1, 21))
+    assert rows[19].dense == FakeEmbedder().embed_image_texts([(b"png-20", "page 20")])[0]
+
+
+def test_page_image_without_image_dir_is_an_error(store):
+    index = KnowledgeIndex(store, FakeEmbedder())
+    chunk = ParsedChunk(1, "x", page_image=ImageRef("page_1.png", 1, 1), kind="page_image")
+    with pytest.raises(ValueError):
+        index.add_document(1, 10, "a.pdf", [chunk])
+
+
+def test_page_image_chunk_with_blank_text_is_kept(store, tmp_path):
+    (tmp_path / "page_1.png").write_bytes(b"png")
+    index = KnowledgeIndex(store, FakeEmbedder())
+    chunk = ParsedChunk(1, "", page_image=ImageRef("page_1.png", 1, 1), kind="page_image")
+    assert index.add_document(1, 10, "a.pdf", [chunk], image_dir=tmp_path) == 1
+
+
+def test_add_document_without_chunks_clears_old_ones(index, store):
+    index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "apple")])
+    assert index.add_document(1, 10, "a.pdf", [ParsedChunk(1, "  ")]) == 0
+    assert store.rows == {}

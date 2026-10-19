@@ -3,7 +3,11 @@ import pytest
 chromadb = pytest.importorskip("chromadb")
 pytest.importorskip("llama_index.vector_stores.chroma")
 
+import hashlib
+import re
+
 from llama_index.core import VectorStoreIndex
+from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.schema import TextNode
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
@@ -11,9 +15,31 @@ from app.db import connect, init_db
 from app.kb import store as kb_store
 from app.kb.index import KnowledgeIndex
 from app.kb.migrate_chroma import migrate
-from tests.fakes import KeywordEmbedding
 from tests.fakes_embedder import FakeEmbedder
 from tests.fakes_store import InMemoryChunkStore
+
+
+class KeywordEmbedding(BaseEmbedding):
+    """Deterministic bag-of-words embedding so retrieval order is predictable in tests."""
+
+    dim: int = 64
+
+    def _vec(self, text: str) -> list[float]:
+        v = [0.0] * self.dim
+        for word in re.findall(r"\w+", text.lower()):
+            v[int(hashlib.md5(word.encode()).hexdigest(), 16) % self.dim] += 1.0
+        if not any(v):
+            v[0] = 1.0
+        return v
+
+    def _get_query_embedding(self, query: str) -> list[float]:
+        return self._vec(query)
+
+    def _get_text_embedding(self, text: str) -> list[float]:
+        return self._vec(text)
+
+    async def _aget_query_embedding(self, query: str) -> list[float]:
+        return self._vec(query)
 
 
 @pytest.fixture
@@ -92,6 +118,7 @@ def test_migrates_chunks_with_order_and_metadata(conn, chroma, index, chunk_stor
     rows = stored(chunk_store, doc)
     assert [(r.page, r.text) for r in rows] == old
     assert {(r.kb_id, r.filename) for r in rows} == {(kb, "規章.pdf")}
+    assert {(r.kind, tuple(r.images), r.page_image) for r in rows} == {("text", (), None)}
     assert len(rows[0].dense) == 64
 
 

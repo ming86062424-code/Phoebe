@@ -6,7 +6,10 @@ def test_liteparse_returns_text_per_page(tmp_path):
     path = tmp_path / "a.pdf"
     path.write_bytes(make_pdf(["Hello alpha page one", "Beta page two"]))
     progress = []
-    pages = LiteParseParser("eng").parse(str(path), lambda d, t: progress.append((d, t)))
+    pages = LiteParseParser("eng").parse(
+        str(path), tmp_path, lambda d, t: progress.append((d, t))
+    )
+    assert all(p.kind == "text" for p in pages)
     assert [(p.page, p.text) for p in pages] == [
         (1, "Hello alpha page one"),
         (2, "Beta page two"),
@@ -22,7 +25,7 @@ def test_liteparse_raises_parse_error_on_garbage(tmp_path):
     path = tmp_path / "bad.pdf"
     path.write_bytes(b"%PDF-1.4 not really")
     with pytest.raises(ParseError):
-        LiteParseParser("eng").parse(str(path), lambda d, t: None)
+        LiteParseParser("eng").parse(str(path), tmp_path, lambda d, t: None)
 
 
 def test_lightonocr_generate_kwargs():
@@ -82,7 +85,8 @@ def test_lightonocr_parser_uses_engine_per_page(tmp_path):
     engine = FakeEngine()
     parser = LightOnOcrParser(engine)
     progress = []
-    pages = parser.parse(str(path), lambda d, t: progress.append((d, t)))
+    pages = parser.parse(str(path), tmp_path, lambda d, t: progress.append((d, t)))
+    assert all(p.kind == "text" for p in pages)
     assert engine.calls == 3
     assert [(p.page, p.text) for p in pages] == [(1, "頁1"), (2, "頁2"), (3, "頁3")]
     assert progress == [(0, 3), (1, 3), (2, 3), (3, 3)]

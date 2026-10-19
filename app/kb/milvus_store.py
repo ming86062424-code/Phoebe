@@ -7,6 +7,7 @@ from pymilvus.client.types import LoadState, Status
 from pymilvus.exceptions import ConnectError, MilvusException, MilvusUnavailableException
 
 from app.kb.chunk_store import ChunkRecord, Hit, KnowledgeStoreError
+from app.kb.parsers.base import ImageRef
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +15,16 @@ BATCH_SIZE = 256
 TIMEOUT = 10  # seconds; also bounds pymilvus's retry loop (75 retries otherwise)
 TEXT_MAX_BYTES = 65535  # VARCHAR length counts UTF-8 bytes; 8192 chars x 4 bytes fits
 FILENAME_MAX_BYTES = 2048
+KIND_MAX_BYTES = 16  # "text" or "page_image"
+# JSON [{"name","w","h"}]; one entry is ~45 bytes, so ~180 images per page fit
+IMAGES_MAX_BYTES = 8192
+# JSON {"name","w","h"} of a "page_{n}.png"; empty string when the chunk has none
+PAGE_IMAGE_MAX_BYTES = 256
 CONNECT_ERROR = "無法連線到 Milvus"
 CREATE_TIMEOUT = 60  # creating a collection with indexes can take longer than a normal call
 ANALYZER_CHANGED = "知識庫的斷詞設定已更新，請重建知識庫（刪除 collection 後重新遷移或重新上傳）"
+SCHEMA_CHANGED = "知識庫結構已更新，請重建知識庫（刪除 collection 後重新處理文件）"
+REQUIRED_FIELDS = ("kind", "images", "page_image")
 # Question words and particles would otherwise dominate BM25 for natural-language queries.
 EN_STOP = [
     "_english_", "i", "me", "my", "we", "our", "you", "your", "he", "she", "him", "her", "its",
@@ -33,7 +41,9 @@ TEXT_ANALYZER = {
     "tokenizer": "jieba",
     "filter": ["cnalphanumonly", "lowercase", {"type": "stop", "stop_words": EN_STOP + ZH_STOP}],
 }
-OUTPUT_FIELDS = ["kb_id", "document_id", "filename", "page", "text"]
+OUTPUT_FIELDS = [
+    "kb_id", "document_id", "filename", "page", "text", "kind", "images", "page_image",
+]  # fmt: skip
 
 
 class MilvusChunkStore:
@@ -77,6 +87,9 @@ class MilvusChunkStore:
                     if not client.has_collection(self._collection, timeout=TIMEOUT):
                         raise
             description = client.describe_collection(self._collection, timeout=TIMEOUT)
+            names = {f["name"] for f in description["fields"]}
+            if any(name not in names for name in REQUIRED_FIELDS):
+                raise KnowledgeStoreError(SCHEMA_CHANGED)
             existing = _dense_dim(description)
             if existing != dim:
                 raise KnowledgeStoreError(
@@ -109,6 +122,9 @@ class MilvusChunkStore:
             enable_analyzer=True,
             analyzer_params=TEXT_ANALYZER,
         )
+        schema.add_field("kind", DataType.VARCHAR, max_length=KIND_MAX_BYTES)
+        schema.add_field("images", DataType.VARCHAR, max_length=IMAGES_MAX_BYTES)
+        schema.add_field("page_image", DataType.VARCHAR, max_length=PAGE_IMAGE_MAX_BYTES)
         schema.add_field("dense", DataType.FLOAT_VECTOR, dim=dim)
         schema.add_field("sparse", DataType.SPARSE_FLOAT_VECTOR)
         schema.add_function(
@@ -142,6 +158,9 @@ class MilvusChunkStore:
                 "chunk_index": r.chunk_index,
                 "filename": _truncate_bytes(r.filename, FILENAME_MAX_BYTES),
                 "text": _truncate_bytes(r.text, TEXT_MAX_BYTES),
+                "kind": r.kind,
+                "images": _images_json(r.images),
+                "page_image": "" if r.page_image is None else _ref_json(r.page_image),
                 "dense": r.dense,
             }
             for r in records
@@ -202,9 +221,59 @@ class MilvusChunkStore:
                 page=int(h["entity"]["page"]),
                 text=h["entity"]["text"],
                 score=float(h["distance"]),
+                kind=h["entity"].get("kind") or "text",
+                images=_parse_images(h["entity"].get("images")),
+                page_image=_parse_ref(h["entity"].get("page_image")),
             )
             for h in (results[0] if results else [])
         ]
+
+
+def _ref_json(ref: ImageRef) -> str:
+    return json.dumps({"name": ref.name, "w": ref.width, "h": ref.height}, ensure_ascii=False)
+
+
+def _images_json(images: list[ImageRef]) -> str:
+    """JSON array of the images; trailing ones that don't fit the field are dropped."""
+    entries: list[str] = []
+    size = 2  # the brackets
+    for ref in images:
+        entry = _ref_json(ref)
+        extra = len(entry.encode("utf-8")) + (1 if entries else 0)
+        if size + extra > IMAGES_MAX_BYTES:
+            logger.warning("chunk has %d images; only %d fit", len(images), len(entries))
+            break
+        entries.append(entry)
+        size += extra
+    return "[" + ",".join(entries) + "]"
+
+
+def _to_ref(item) -> ImageRef | None:
+    try:
+        return ImageRef(str(item["name"]), int(item["w"]), int(item["h"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _parse_ref(raw: str | None) -> ImageRef | None:
+    if not raw:
+        return None
+    try:
+        return _to_ref(json.loads(raw))
+    except ValueError:
+        return None
+
+
+def _parse_images(raw: str | None) -> list[ImageRef]:
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(items, list):
+        return []
+    return [ref for ref in map(_to_ref, items) if ref is not None]
 
 
 def _text_analyzer(description: dict) -> dict | None:

@@ -1,4 +1,6 @@
-from app.kb.parsers.base import PageText, ParseError, ProgressCallback
+from pathlib import Path
+
+from app.kb.parsers.base import ParsedChunk, ParseError, ProgressCallback
 from app.kb.parsers.ocr_engines import OcrEngine
 
 RENDER_DPI = 400
@@ -15,17 +17,19 @@ class LightOnOcrParser:
     def availability(self) -> tuple[bool, str]:
         return self.engine.availability()
 
-    def parse(self, pdf_path: str, on_progress: ProgressCallback) -> list[PageText]:
+    def parse(
+        self, path: str, out_dir: Path, on_progress: ProgressCallback
+    ) -> list[ParsedChunk]:
         import pypdfium2 as pdfium
 
         try:
-            pdf = pdfium.PdfDocument(pdf_path)
+            pdf = pdfium.PdfDocument(path)
         except Exception as e:
             raise ParseError(f"LightOnOCR 初始化失敗：{e}") from e
         try:
             total = len(pdf)
             on_progress(0, total)
-            pages: list[PageText] = []
+            pages: list[ParsedChunk] = []
             for i in range(total):
                 page = pdf[i]
                 # rendering exactly as the model card does
@@ -37,7 +41,7 @@ class LightOnOcrParser:
                     raise
                 except Exception as e:
                     raise ParseError(f"第 {i + 1} 頁 OCR 失敗：{e}") from e
-                pages.append(PageText(i + 1, text))
+                pages.append(ParsedChunk(i + 1, text))
                 on_progress(i + 1, total)
             return pages
         finally:

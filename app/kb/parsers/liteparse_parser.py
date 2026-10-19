@@ -1,4 +1,6 @@
-from app.kb.parsers.base import PageText, ParseError, ProgressCallback
+from pathlib import Path
+
+from app.kb.parsers.base import ParsedChunk, ParseError, ProgressCallback
 
 
 class LiteParseParser:
@@ -11,17 +13,19 @@ class LiteParseParser:
     def availability(self) -> tuple[bool, str]:
         return True, ""
 
-    def parse(self, pdf_path: str, on_progress: ProgressCallback) -> list[PageText]:
+    def parse(
+        self, path: str, out_dir: Path, on_progress: ProgressCallback
+    ) -> list[ParsedChunk]:
         from liteparse import LiteParse
 
         try:
             result = LiteParse(
                 output_format="markdown", quiet=True, ocr_language=self.ocr_language
-            ).parse(pdf_path)
+            ).parse(path)
         except Exception as e:
             raise ParseError(f"LiteParse 解析失敗：{e}") from e
         pages = [
-            PageText(page.page_num, (page.markdown or page.text or "").strip())
+            ParsedChunk(page.page_num, (page.markdown or page.text or "").strip())
             for page in result.pages
         ]
         on_progress(len(pages), len(pages))
