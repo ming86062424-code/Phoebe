@@ -243,3 +243,15 @@ def test_gemini_api_key_not_in_repr():
     from app.config import Settings
 
     assert "sk-secret" not in repr(Settings(gemini_api_key="sk-secret"))
+
+
+def test_dockerfile_has_no_literal_backslash_n_outside_comments():
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    bad = [
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#") and chr(92) + "n" in line
+    ]
+    assert bad == []
