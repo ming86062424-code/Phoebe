@@ -493,6 +493,17 @@ def test_kb_answer_sends_source_images_in_order_up_to_the_limit(
     assert all("iVBOR" not in (r[0] + (r[1] or "")) for r in rows)  # no base64 PNG
 
 
+def test_sources_carry_their_knowledge_base_id(make_user, fake_chat, kb_services, monkeypatch):
+    """The UI builds image URLs from it, even after the conversation switches knowledge base."""
+    c = make_user("alice")
+    cid, kb_id, _, _ = _kb_chat_with_images(c, kb_services, monkeypatch, LAYOUT)
+    ev = events(_send(c, cid, "圖片"))
+    assert [s["kb_id"] for s in ev[0]["sources"]] == [kb_id] * len(LAYOUT)
+    c.patch(f"/api/conversations/{cid}", json={"kb_id": None})
+    saved = [m for m in _messages(c, cid) if m["role"] == "assistant"][0]
+    assert [s["kb_id"] for s in saved["sources"]] == [kb_id] * len(LAYOUT)
+
+
 def test_kb_max_images_limits_and_zero_disables(settings, kb_services, monkeypatch):
     for limit in (2, 0):
         app = create_app(replace(settings, kb_max_images=limit), kb_services)

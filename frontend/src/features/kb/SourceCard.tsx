@@ -79,6 +79,8 @@ function Lightbox({ picture, onClose }: { picture: Picture; onClose(): void }) {
 
   useEffect(() => {
     closeRef.current?.focus()
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -90,7 +92,10 @@ function Lightbox({ picture, onClose }: { picture: Picture; onClose(): void }) {
       }
     }
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+    }
   }, [onClose])
 
   return createPortal(
@@ -123,8 +128,10 @@ export default function SourceCard({ source, number, kbId }: Props) {
   const [open, setOpen] = useState<Picture | null>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
 
+  // the source's own knowledge base wins: the conversation may have switched since
+  const sourceKb = source.kb_id ?? kbId
   const picture = (name: string, alt: string): Picture => ({
-    url: kbId === null ? null : imageUrl(kbId, source.document_id, name),
+    url: sourceKb == null ? null : imageUrl(sourceKb, source.document_id, name),
     alt,
   })
   const show = (p: Picture, el: HTMLElement) => {

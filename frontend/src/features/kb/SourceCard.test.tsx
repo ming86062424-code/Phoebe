@@ -183,6 +183,32 @@ describe('SourceCard', () => {
     expect(screen.getByText('第 2 頁（圖片無法載入）')).toBeInTheDocument()
   })
 
+  it("uses the source's own knowledge base over the current one", async () => {
+    render(
+      <SourceCard
+        source={source({ kb_id: 3, page_image: { name: 'page_2.png', width: 10, height: 10 } })}
+        number={1}
+        kbId={5}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: '展開' }))
+    const src = screen.getByRole('img', { name: '第 2 頁' }).getAttribute('src')
+    expect(src).toContain('/kbs/3/')
+    expect(src).toBe(imgSrc('page_2.png'))
+  })
+
+  it('uses the source knowledge base even when the conversation has none', async () => {
+    render(
+      <SourceCard
+        source={source({ kb_id: 3, page_image: { name: 'page_2.png', width: 10, height: 10 } })}
+        number={1}
+        kbId={null}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: '展開' }))
+    expect(screen.getByRole('img', { name: '第 2 頁' })).toHaveAttribute('src', imgSrc('page_2.png'))
+  })
+
   it('tolerates sources saved before images existed', async () => {
     const legacy = { document_id: 1, filename: 'old.pdf', page: 1, score: 0.5, text: '舊資料' } as Source
     render(<SourceCard source={legacy} number={1} kbId={3} />)
@@ -229,6 +255,15 @@ describe('lightbox', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     await userEvent.click(screen.getByTestId('lightbox-backdrop'))
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('locks page scrolling while open and restores it afterwards', async () => {
+    document.body.style.overflow = 'auto'
+    await openLightbox()
+    expect(document.body.style.overflow).toBe('hidden')
+    await userEvent.keyboard('{Escape}')
+    expect(document.body.style.overflow).toBe('auto')
+    document.body.style.overflow = ''
   })
 
   it('closes with the close button', async () => {

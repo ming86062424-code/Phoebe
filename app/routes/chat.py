@@ -72,7 +72,8 @@ async def _with_knowledge(
     )
     return Knowledge(
         build_system_prompt(kb_row["name"], found, images),
-        [s.to_dict() for s in found],
+        # kb_id lets the UI fetch the source's images after the conversation changes knowledge base
+        [{**s.to_dict(), "kb_id": kb_id} for s in found],
         [image.data for image in images],
     )
 

@@ -38,6 +38,8 @@ export interface Source {
   vector_score?: number | null
   keyword_score?: number | null
   text: string // the whole chunk
+  // the knowledge base the source came from (chat sources only; missing on older messages)
+  kb_id?: number
   // missing on sources saved before images were indexed
   kind?: 'text' | 'page_image'
   images?: SourceImage[]
