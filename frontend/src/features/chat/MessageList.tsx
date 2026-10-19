@@ -7,12 +7,13 @@ interface Props {
   items: ChatItem[]
   canRetry: boolean
   onRetry(): void
+  kbId?: number | null
 }
 
 // within this distance of the bottom the list keeps following new text
 const STICK_PX = 80
 
-export default function MessageList({ items, canRetry, onRetry }: Props) {
+export default function MessageList({ items, canRetry, onRetry, kbId = null }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
 
@@ -31,7 +32,7 @@ export default function MessageList({ items, canRetry, onRetry }: Props) {
       <div className={styles.inner}>
         {items.length === 0 && <p className={styles.empty}>開始一段新的對話吧</p>}
         {items.map((item) => (
-          <MessageBubble key={item.key} item={item} />
+          <MessageBubble key={item.key} item={item} kbId={kbId} />
         ))}
         {canRetry && (
           <div className={styles.retry}>

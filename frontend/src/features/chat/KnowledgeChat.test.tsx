@@ -62,11 +62,34 @@ describe('MessageBubble sources', () => {
   const base: ChatItem = { key: 'a', role: 'assistant', content: '答', thinking: '', status: 'done' }
 
   it('expands to show the cited pages', async () => {
-    render(<MessageBubble item={{ ...base, sources: [source] }} />)
+    render(<MessageBubble item={{ ...base, sources: [source] }} kbId={7} />)
     expect(screen.queryByText(/手冊\.pdf/)).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: '來源（1）' }))
-    expect(screen.getByText('[1] 手冊.pdf 第 3 頁')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '參考資料（1）' }))
+    expect(screen.getByText('[1] 手冊.pdf · 第 3 頁')).toBeInTheDocument()
     expect(screen.getByText('員工每年享有特休假十四天')).toBeInTheDocument()
+  })
+
+  it('shows the cards by score with their original numbers and images from the chat knowledge base', async () => {
+    const sources: Source[] = [
+      { ...source, filename: '低.pdf', score: 0.01 },
+      {
+        ...source,
+        document_id: 17,
+        filename: '高.pdf',
+        score: 0.03,
+        page_image: { name: 'page_3.png', width: 10, height: 10 },
+      },
+    ]
+    render(<MessageBubble item={{ ...base, sources }} kbId={7} />)
+    await userEvent.click(screen.getByRole('button', { name: '參考資料（2）' }))
+    const items = screen.getAllByRole('listitem')
+    expect(items[0]).toHaveTextContent('[2] 高.pdf · 第 3 頁')
+    expect(items[1]).toHaveTextContent('[1] 低.pdf · 第 3 頁')
+    await userEvent.click(screen.getAllByRole('button', { name: '展開' })[0])
+    expect(screen.getByRole('img', { name: '第 3 頁' })).toHaveAttribute(
+      'src',
+      '/api/kbs/7/documents/17/images/page_3.png',
+    )
   })
 
   it('says when the knowledge base had nothing relevant', () => {
@@ -99,7 +122,7 @@ describe('ChatPage knowledge base selector', () => {
     await userEvent.selectOptions(await screen.findByRole('combobox', { name: '知識庫' }), '7')
     await userEvent.type(screen.getByRole('textbox'), '特休幾天')
     await userEvent.click(screen.getByRole('button', { name: '送出' }))
-    expect(await screen.findByRole('button', { name: '來源（1）' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '參考資料（1）' })).toBeInTheDocument()
     const order = calls().map(([u, i]) => `${i?.method ?? 'GET'} ${u}`)
     const patch = order.indexOf('PATCH /api/conversations/5')
     expect(patch).toBeGreaterThan(-1)

@@ -97,7 +97,12 @@ export default function ChatPage() {
             {notice}
           </div>
         )}
-        <MessageList items={chat.items} canRetry={chat.canRetry} onRetry={chat.retry} />
+        <MessageList
+          items={chat.items}
+          canRetry={chat.canRetry}
+          onRetry={chat.retry}
+          kbId={chat.kbId}
+        />
         <Composer
           disabled={chat.streaming || chat.loading}
           restore={draft}

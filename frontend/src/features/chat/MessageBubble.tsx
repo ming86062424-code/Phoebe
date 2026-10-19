@@ -4,7 +4,13 @@ import SourceList from './SourceList'
 import ThinkingBlock from './ThinkingBlock'
 import styles from './MessageBubble.module.css'
 
-export default function MessageBubble({ item }: { item: ChatItem }) {
+interface Props {
+  item: ChatItem
+  // the conversation's knowledge base, for source images
+  kbId?: number | null
+}
+
+export default function MessageBubble({ item, kbId = null }: Props) {
   const isUser = item.role === 'user'
   const live = item.status === 'streaming' && item.thinkingSeconds === undefined
   const showAlert = item.status === 'error' && !(item.interrupted && item.error === INTERRUPTED)
@@ -31,7 +37,7 @@ export default function MessageBubble({ item }: { item: ChatItem }) {
           <span className={styles.pending}>…</span>
         )}
         {!isUser && item.sources && item.status !== 'streaming' && (
-          <SourceList sources={item.sources} />
+          <SourceList sources={item.sources} kbId={kbId} />
         )}
         {showAlert && (
           <div role="alert" className={styles.error}>

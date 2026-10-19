@@ -91,7 +91,7 @@ describe('KbPage', () => {
     expect(screen.getByRole('option', { name: /LightOnOCR-3.*不可用/ })).toBeDisabled()
 
     const file = new File(['%PDF-1.4'], 'new.pdf', { type: 'application/pdf' })
-    await userEvent.upload(screen.getByLabelText('選擇 PDF 檔案'), file)
+    await userEvent.upload(screen.getByLabelText('選擇檔案'), file)
     await userEvent.click(screen.getByRole('button', { name: '上傳' }))
     await waitFor(() => expect(uploaded).not.toBeNull())
     expect(uploaded!.get('parser')).toBe('liteparse')
@@ -118,6 +118,70 @@ describe('KbPage', () => {
     expect(screen.getByRole('button', { name: '重試 bad.pdf' })).toBeInTheDocument()
   })
 
+  it('accepts text and image files and hides the parser for txt and md', async () => {
+    window.location.hash = '#/kb/1'
+    let uploaded: FormData | null = null
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents' && init?.method === 'POST') {
+        uploaded = init.body as FormData
+        return Promise.resolve(jsonResponse(doc({ id: 11, filename: 'a.md', parser: 'text' }), 201))
+      }
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const input = await screen.findByLabelText('選擇檔案')
+    expect(input).toHaveAttribute('accept', '.pdf,.txt,.md,.png,.jpg,.jpeg,.webp')
+    expect(screen.getByRole('combobox', { name: '解析器' })).toBeInTheDocument()
+
+    await userEvent.upload(input, new File(['# 標題'], 'a.md', { type: 'text/markdown' }))
+    expect(screen.queryByRole('combobox', { name: '解析器' })).toBeNull()
+    await userEvent.upload(input, new File(['x'], 'b.TXT', { type: 'text/plain' }))
+    expect(screen.queryByRole('combobox', { name: '解析器' })).toBeNull()
+    await userEvent.upload(input, new File(['x'], 'c.png', { type: 'image/png' }))
+    expect(screen.getByRole('combobox', { name: '解析器' })).toBeInTheDocument()
+
+    await userEvent.upload(input, new File(['# 標題'], 'a.md', { type: 'text/markdown' }))
+    await userEvent.click(screen.getByRole('button', { name: '上傳' }))
+    await waitFor(() => expect(uploaded).not.toBeNull())
+    expect((uploaded!.get('file') as File).name).toBe('a.md')
+  })
+
+  it('allows uploading text files even when the chosen parser is unavailable', async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/parsers')
+        return Promise.resolve(jsonResponse(parsers.map((p) => ({ ...p, available: false }))))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const input = await screen.findByLabelText('選擇檔案')
+    await userEvent.upload(input, new File(['x'], 'c.pdf', { type: 'application/pdf' }))
+    expect(screen.getByRole('button', { name: '上傳' })).toBeDisabled()
+    await userEvent.upload(input, new File(['x'], 'a.txt', { type: 'text/plain' }))
+    expect(screen.getByRole('button', { name: '上傳' })).toBeEnabled()
+  })
+
+  it('shows the upload error from the server', async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents' && init?.method === 'POST')
+        return Promise.resolve(jsonResponse({ detail: '無法讀取檔案內容' }, 422))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    await userEvent.upload(await screen.findByLabelText('選擇檔案'), new File(['x'], 'a.txt'))
+    await userEvent.click(screen.getByRole('button', { name: '上傳' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('a.txt：無法讀取檔案內容')
+  })
+
   it('runs a retrieval test', async () => {
     window.location.hash = '#/kb/1'
     fetchMock.mockImplementation((url: string) => {
@@ -134,7 +198,8 @@ describe('KbPage', () => {
     await userEvent.type(await screen.findByRole('textbox', { name: '檢索問題' }), '特休')
     await userEvent.click(screen.getByRole('button', { name: '檢索' }))
     expect(await screen.findByText('特休十四天')).toBeInTheDocument()
-    expect(screen.getByText('向量 0.812／關鍵字 —')).toBeInTheDocument()
+    expect(screen.getByText('[1] a.pdf · 第 2 頁')).toBeInTheDocument()
+    expect(screen.getByText(/^相關度/).textContent).toBe('相關度 0.0328　向量 0.812　關鍵字 —')
     expect(screen.queryByText(/相似度/)).not.toBeInTheDocument()
     expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=%E7%89%B9%E4%BC%91')).toBe(true)
   })
