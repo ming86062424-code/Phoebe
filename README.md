@@ -1,6 +1,6 @@
 # Phoebe
 
-在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React），附 PDF 知識庫（LlamaIndex + Chroma）。
+在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React），附 PDF 知識庫（LlamaIndex + Milvus，BM25 + 向量混合檢索）。
 
 ## 事前準備
 
@@ -136,7 +136,6 @@ uv run --group eval pytest evals -v
 | `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |
 | `EMBED_MODEL` | `embeddinggemma-2` | 知識庫 Embedding 模型（Ollama）；更換後需重新上傳文件 |
 | `KB_DIR` | `<專案根目錄>/data/kb` | 上傳的 PDF 存放位置 |
-| `CHROMA_DIR` | `<專案根目錄>/data/chroma` | 向量資料庫位置 |
 | `KB_TOP_K` | `5` | 每次回答檢索的段落數 |
 | `MAX_UPLOAD_MB` | `50` | 單一 PDF 上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |
@@ -149,14 +148,16 @@ uv run --group eval pytest evals -v
 | `OCR_BACKEND` | `transformers` | `transformers` 或 `vllm` |
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
 | `VLLM_GPU_UTIL` | `0.35` | vLLM 顯存比例（僅 Docker） |
-| `CHROMA_HOST` / `CHROMA_PORT` | 空 / `8000` | 設定主機則連 Chroma 服務，留空使用本機檔案 |
+| `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
+| `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
+| `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |
 | `WEB_CONCURRENCY` | `2` | Gunicorn worker 數（僅 Docker，設在 `docker/.env`） |
 | `PHOEBE_PORT` | `8000` | Docker 對外連接埠 |
 | `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供；使用相對路徑時，會以啟動 uvicorn 的工作目錄為基準 |
 
 ## 部署
 
-以 Docker Compose 部署（Gunicorn web、獨立解析 worker、Chroma，選用 vLLM），詳見 [docker/README.md](docker/README.md)：
+以 Docker Compose 部署（Gunicorn web、獨立解析 worker、Milvus，選用 vLLM），詳見 [docker/README.md](docker/README.md)：
 
 ```
 cd docker
@@ -166,7 +167,7 @@ docker compose up -d --build
 
 ## 資料位置
 
-資料存放在 SQLite 檔案 `data/app.db`，知識庫檔案與向量分別在 `data/kb/`、`data/chroma/`（位於專案根目錄，與啟動目錄無關；可用 `DB_PATH` 覆寫）。`data/` 已被 git 忽略。
+資料存放在 SQLite 檔案 `data/app.db`，知識庫檔案在 `data/kb/`（位於專案根目錄，與啟動目錄無關；可用 `DB_PATH` 覆寫）。`data/` 已被 git 忽略。向量與 BM25 索引存放在 Milvus（Docker 的 `milvus-data` volume）。舊版 Chroma 資料的遷移方式見 [docker/README.md](docker/README.md)。
 
 ## 專案結構
 

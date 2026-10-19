@@ -1,6 +1,6 @@
 # Docker 部署
 
-服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`chroma`（向量資料庫）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`chroma-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）。
+服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）。所有資料都放在 named volume：`phoebe-data`（SQLite、上傳檔案）、`milvus-data`、`etcd-data`、`minio-data`、`hf-cache`（vLLM 的 Hugging Face 模型快取）；舊的 `chroma-data` 僅供遷移。
 
 ## 前置需求
 
@@ -18,7 +18,7 @@ cd docker
 cp .env.example .env
 ```
 
-編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`），同時也當作容器的環境變數（vllm 除外，它不載入 `docker/.env`）。`DB_PATH`、`KB_DIR`、`CHROMA_HOST/PORT`、`OLLAMA_BASE_URL`、`KB_WORKER_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`），同時也當作容器的環境變數（vllm 除外，它不載入 `docker/.env`）。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`OLLAMA_BASE_URL`、`KB_WORKER_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
@@ -57,6 +57,23 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 - 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
 - 沒有 GPU 或想用 transformers 時，只能在本機快速測試用 `uv sync --group ocr` 搭配 `OCR_BACKEND=transformers`；Docker 的 worker 不含 torch。
 
+## Milvus 與舊資料遷移
+
+`milvus` 只對本機 `127.0.0.1:19530` 開放（無驗證）；`web`、`worker` 等它健康後才啟動（首次啟動約需 90 秒）。`MILVUS_TOKEN`、`MILVUS_COLLECTION` 可在 `docker/.env` 設定，`MILVUS_URI` 固定為 `http://milvus:19530`。
+
+不啟動應用程式容器的快速測試：`cd docker && docker compose up -d milvus`（會一併啟動 etcd、minio），並在根目錄 `.env` 設 `MILVUS_URI=http://localhost:19530`。
+
+從舊版 Chroma 遷移資料（一次性；`chroma-data` volume 需仍存在）：
+
+```
+cd docker
+docker compose --profile migrate-chroma up -d chroma
+docker compose run --rm worker python -m app.kb.migrate_chroma --chroma-host chroma
+docker compose --profile migrate-chroma stop chroma
+```
+
+可加 `--dry-run` 先檢查。worker 映像已包含 `migrate` 依賴群組（chromadb）。遷移完成後 `chroma-data` volume 可自行刪除。
+
 ## 管理員與 Gemini 聊天
 
 在 `docker/.env` 設定（修改後需 `docker compose up -d` 重新建立容器才會套用）：
@@ -78,11 +95,13 @@ GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 G
 
 ## 資料備份
 
-資料在 volume 中。備份 `phoebe-data`（建議先 `down`，確保 SQLite 與 Chroma 一致）。以下指令請在 PowerShell 執行；若用 Git Bash，需在每個指令前加 `MSYS_NO_PATHCONV=1`，否則 `-C /data` 與 `/backup` 會被轉成 Windows 路徑：
+資料在 volume 中。備份 `phoebe-data`（建議先 `down`，確保 SQLite 與 Milvus 一致）。以下指令請在 PowerShell 執行；若用 Git Bash，需在每個指令前加 `MSYS_NO_PATHCONV=1`，否則 `-C /data` 與 `/backup` 會被轉成 Windows 路徑：
 
 ```
 docker run --rm -v phoebe_phoebe-data:/data -v "$PWD":/backup alpine tar czf /backup/phoebe-data.tgz -C /data .
-docker run --rm -v phoebe_chroma-data:/data -v "$PWD":/backup alpine tar czf /backup/chroma-data.tgz -C /data .
+docker run --rm -v phoebe_milvus-data:/data -v "$PWD":/backup alpine tar czf /backup/milvus-data.tgz -C /data .
+docker run --rm -v phoebe_etcd-data:/data -v "$PWD":/backup alpine tar czf /backup/etcd-data.tgz -C /data .
+docker run --rm -v phoebe_minio-data:/data -v "$PWD":/backup alpine tar czf /backup/minio-data.tgz -C /data .
 ```
 
 還原時把 `tar xzf` 解回空的 volume。volume 的實際名稱可用 `docker volume ls` 確認（前綴為專案名稱 `phoebe_`）。`hf-cache` 只是模型快取，可不備份。
@@ -90,7 +109,7 @@ docker run --rm -v phoebe_chroma-data:/data -v "$PWD":/backup alpine tar czf /ba
 ## 注意
 
 - Gunicorn 只在 Linux 容器內使用；Windows 本機快速測試請用 `uv run uvicorn app.main:create_app --factory`。
-- 映像版本皆已固定；升級 Chroma 時請與 `uv.lock` 中的 chromadb 版本一致（目前 1.5.9）。
+- 映像版本皆已固定；升級 Milvus 時請與 `uv.lock` 中的 pymilvus 版本相容（目前 pymilvus 2.6.17 對應 Milvus v2.6.25）；etcd、minio 沿用該版官方 standalone compose。`chroma` 映像（1.5.9）只供遷移，須與 chromadb 版本一致。
 - LiteParse 為 Rust 原生套件，內含 pdfium 與 Tesseract，不需另外安裝 Node 或系統 Tesseract。預設語言（`chi_tra`、`chi_tra_vert`、`eng`，來自 tessdata_best 的固定 commit）已內建於 worker 映像；`LITEPARSE_OCR_LANGUAGE` 改用其他語言時，該語言檔會在第一次 OCR 時下載（需要對外網路，且存在容器可寫層，重建映像後需重新下載）。
-- 映像大小：worker 與 web 都不含 torch，各約 1 GB；vllm 是官方映像（數 GB）。uv 的下載快取放在 BuildKit cache mount（`/root/.cache/uv`），不會進入映像層；`docker builder prune` 可清除它。程式碼以 `COPY --chown` 放入，不做遞迴 `chown`，避免複製整棵目錄樹。
+- 映像大小：worker 與 web 都不含 torch，各約 1 GB（worker 另含遷移用的 chromadb）；vllm 是官方映像（數 GB）。uv 的下載快取放在 BuildKit cache mount（`/root/.cache/uv`），不會進入映像層；`docker builder prune` 可清除它。程式碼以 `COPY --chown` 放入，不做遞迴 `chown`，避免複製整棵目錄樹。
 - 根目錄 `.dockerignore` 是白名單（先 `*` 全部排除，再用 `!` 放行 build 需要的檔案）。Dockerfile 新增 `COPY` 來源時，必須同步在 `.dockerignore` 明確放行（`tests/test_config.py` 會檢查）。

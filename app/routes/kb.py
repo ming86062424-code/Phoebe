@@ -122,7 +122,7 @@ def delete_kb(
         kb.index.delete_kb(kb_id)
     except Exception as e:
         # ids are never reused, so leftover chunks are never searched
-        logger.warning("刪除知識庫 %s 的向量失敗：%s", kb_id, e)
+        logger.warning("刪除知識庫 %s 的向量失敗：%s", kb_id, e, exc_info=True)
     kb.worker.remove_path(kb.kb_dir / str(kb_id))
     return Response(status_code=204)
 
@@ -219,7 +219,7 @@ def delete_document(
     try:
         kb.index.delete_document(kb_id, doc_id)
     except Exception as e:
-        logger.warning("刪除文件 %s 的向量失敗：%s", doc_id, e)
+        logger.warning("刪除文件 %s 的向量失敗：%s", doc_id, e, exc_info=True)
     kb.worker.remove_path(kb.file_path(kb_id, doc_id))
     return Response(status_code=204)
 

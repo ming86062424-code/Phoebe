@@ -54,6 +54,8 @@ CMD ["gunicorn", "-c", "docker/gunicorn.conf.py", "app.main:create_app()"]
 
 # ---- worker：只做文件解析與索引；OCR 交給 vllm 服務，不含 torch ----
 FROM base AS worker
+# 一次性 Chroma → Milvus 遷移（python -m app.kb.migrate_chroma）需要 chromadb；wheel 約數十 MB，直接放進 worker
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked     UV_CACHE_DIR=/root/.cache/uv uv sync --frozen --no-dev --group migrate --no-install-project
 COPY --chown=phoebe:phoebe app ./app
 
 # LiteParse 的 Tesseract 語言檔：預設 chi_tra+eng（含直排 chi_tra_vert）內建於映像，不必在首次 OCR 時下載。

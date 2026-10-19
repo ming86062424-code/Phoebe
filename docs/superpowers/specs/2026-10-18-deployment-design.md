@@ -27,7 +27,7 @@
 |---|---|
 | 知識庫解析 worker 是 web process 內的執行緒，佇列在記憶體 | 每個 Gunicorn worker 各啟動一個，重複處理、OCR 模型重複載入 |
 | 回覆並發限制用 `app.state.replying`（記憶體 set） | 只在單一 process 內有效 |
-| 向量庫用 Chroma `PersistentClient`（本機檔案） | 多 process 同時寫入同一資料夾不安全 |
+| 向量庫用 Chroma `PersistentClient`（本機檔案） | 多 process 同時寫入同一資料夾不安全（已由 Milvus 伺服器取代，見 2026-10-19-milvus-hybrid-design） |
 | SQLite 預設 journal 模式 | 多 process 寫入容易 `database is locked` |
 | 設定只讀 `os.environ` | 沒有 `.env` |
 
@@ -47,8 +47,9 @@
 | `KB_WORKER_MODE` | `embedded` | `embedded`：web process 內啟動解析 worker；`external`：不啟動，由獨立 worker 服務處理 |
 | `OCR_BACKEND` | `transformers` | `transformers`：本機載入模型（需 `--group ocr`）；`vllm`：呼叫 vLLM 的 OpenAI 相容 API |
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | `OCR_BACKEND=vllm` 時使用 |
-| `CHROMA_HOST` | （空） | 空：本機檔案模式（`CHROMA_DIR`）；有值：連 Chroma 伺服器（`CHROMA_PORT`，預設 8000） |
-| `CHROMA_PORT` | `8000` | |
+| `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（取代原 `CHROMA_HOST`／`CHROMA_PORT`） |
+| `MILVUS_TOKEN` | （空） | 選用驗證 token |
+| `MILVUS_COLLECTION` | `phoebe_chunks` | collection 名稱 |
 | `REPLY_LOCK_TTL_SECONDS` | `90` | 回覆鎖逾時（process 異常結束時避免永久鎖住）；串流中每 30 秒更新鎖，故需大於 30 |
 
 ### 3.2 解析佇列改為 DB 驅動
@@ -72,9 +73,10 @@
 - `connect()` 加上 `PRAGMA journal_mode=WAL`、`PRAGMA busy_timeout=5000`
 - Docker 一律用 named volume 存 `data/`（不用 Windows bind mount，WSL2 的檔案鎖在 bind mount 上不可靠）
 
-### 3.5 Chroma 伺服器模式（過渡，子專案 3 移除）
-- `KnowledgeIndex` 依設定使用 `chromadb.PersistentClient(path=…)` 或 `chromadb.HttpClient(host, port)`
-- compose 內放一個 `chroma` 服務（官方映像，固定版本），named volume 持久化
+### 3.5 Milvus 伺服器
+- `KnowledgeIndex` 透過 `MILVUS_URI` 連 Milvus（取代過渡期的 Chroma；細節見 2026-10-19-milvus-hybrid-design）
+- compose 內放 `milvus`（standalone）、`etcd`、`minio` 三個服務（固定版本），各用 named volume 持久化
+- `chroma` 僅留在 `migrate-chroma` profile，供一次性遷移讀取舊資料（`python -m app.kb.migrate_chroma`）
 
 ### 3.6 OCR 後端
 - `LightOnOcrParser` 拆成「把 PDF 轉成頁面影像」與「對一張影像做 OCR」兩層；OCR 由 `OcrEngine` 協定提供：`ocr(image) -> str`、`availability() -> tuple[bool, str]`、`release()`
@@ -95,7 +97,7 @@
 ```
 docker/
 ├── Dockerfile            # 多階段：frontend（node 24 建置）→ web（python 3.12 slim + uv，無 torch）→ worker（不含 torch；OCR 交給 vllm 服務）
-├── docker-compose.yml           # 正式部署：web、worker、chroma；vllm 為預設服務
+├── docker-compose.yml           # 正式部署：web、worker、milvus（含 etcd、minio）；chroma 僅 migrate-chroma profile；vllm 為預設服務
 ├── gunicorn.conf.py
 ├── .dockerignore 的內容放在根目錄 .dockerignore（Docker 規定位置；compose 以根目錄為 build context）
 └── README.md             # 部署說明（中文）
@@ -105,21 +107,22 @@ docker/
 
 | 服務 | 映像／target | 說明 |
 |---|---|---|
-| `web` | Dockerfile target `web` | Gunicorn；port `${PHOEBE_PORT:-8000}:8000`；`KB_WORKER_MODE=external`；`CHROMA_HOST=chroma`；`OLLAMA_BASE_URL=http://host.docker.internal:11434`；`DB_PATH`、`KB_DIR` 指向 `/data` volume |
+| `web` | Dockerfile target `web` | Gunicorn；port `${PHOEBE_PORT:-8000}:8000`；`KB_WORKER_MODE=external`；`MILVUS_URI=http://milvus:19530`；等 `milvus` 健康；`OLLAMA_BASE_URL=http://host.docker.internal:11434`；`DB_PATH`、`KB_DIR` 指向 `/data` volume |
 | `worker` | target `worker` | `python -m app.kb.worker_main`；同樣的 `/data` volume；`OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`（固定）；不含 torch、不使用 GPU；`vllm` 容器啟動後即啟動（`service_started`）；vLLM 載入完成前 LightOnOCR 顯示為無法使用，LiteParse 照常運作 |
-| `chroma` | `chromadb/chroma:<固定版本>` | volume `chroma-data` |
+| `milvus` | `milvusdb/milvus:v2.6.25` | standalone；volume `milvus-data`；port `127.0.0.1:19530`（無驗證，僅本機）；healthcheck `GET :9091/healthz`；依賴 `etcd`（`quay.io/coreos/etcd:v3.5.25`）與 `minio`（`milvusdb/minio:RELEASE.2024-12-18T13-15-44Z`）健康 |
+| `chroma`（profile `migrate-chroma`） | `chromadb/chroma:1.5.9` | 只為遷移舊資料；volume `chroma-data` |
 | `vllm`（預設服務） | `vllm/vllm-openai:v0.30.0` | 官方 0.8B 參數（見 §3.6）、`--dtype float16`、`--gpu-memory-utilization ${OCR_VLLM_GPU_UTIL:-0.8}`、`--max-model-len ${OCR_VLLM_MAX_MODEL_LEN:-18000}`、`--enforce-eager`、`--max-num-seqs ${OCR_VLLM_MAX_NUM_SEQS:-8}`（RTX 2060 實測：0.85 失敗、0.8 但使用 CUDA graph 與預設 256 條序列配不到 KV cache；上述組合 KV cache 1.28 GiB／99,243 tokens）；不載入 env_file（避免未知 `VLLM_*` 警告）；需要 NVIDIA 驅動 ≥ 580（CUDA 13 映像）；port `127.0.0.1:8001:8000`（無驗證，僅本機）；使用 GPU；`hf-cache` 掛在 `/root/.cache/huggingface`；healthcheck `GET /health`，`start_period` 600 秒 |
 
-- `web`、`worker` 讀 `env_file: [{path: .env, required: false}]`（即 `docker/.env`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）；`chroma` 與 `vllm` 不載入 env_file
-- Docker 專用設定檔 `docker/.env`（範本 `docker/.env.example`，已被 git 忽略並排除於 build context）；指令在 `docker/` 目錄執行，Compose 自動讀取它做變數插值，`env_file: [{path: .env, required: false}]` 供容器環境變數。根目錄 `.env` 只給本機快速測試。compose `environment:` 固定的鍵（DB_PATH、KB_DIR、CHROMA_HOST/PORT、OLLAMA_BASE_URL、KB_WORKER_MODE、OCR_BACKEND、VLLM_BASE_URL）不可由 `.env` 覆寫
-- 啟動順序：`chroma`（healthcheck）→ `web`（healthcheck：`GET /api/me` 回 401 視為健康）→ `worker`（另外 `vllm` 只需 started，不等健康，所以 vLLM 失敗或仍在下載模型時 LiteParse 照常運作）；`web`、`worker` 設 `stop_grace_period: 30s`；worker 固定覆寫 `VLLM_BASE_URL=http://vllm:8000/v1`
+- `web`、`worker` 讀 `env_file: [{path: .env, required: false}]`（即 `docker/.env`），再以 `environment:` 覆寫容器內必須不同的值（路徑、主機名稱）；`milvus`、`etcd`、`minio`、`chroma` 與 `vllm` 不載入 env_file
+- Docker 專用設定檔 `docker/.env`（範本 `docker/.env.example`，已被 git 忽略並排除於 build context）；指令在 `docker/` 目錄執行，Compose 自動讀取它做變數插值，`env_file: [{path: .env, required: false}]` 供容器環境變數。根目錄 `.env` 只給本機快速測試。compose `environment:` 固定的鍵（DB_PATH、KB_DIR、MILVUS_URI、OLLAMA_BASE_URL、KB_WORKER_MODE、OCR_BACKEND、VLLM_BASE_URL）不可由 `.env` 覆寫
+- 啟動順序：`etcd`／`minio` → `milvus`（healthcheck）→ `web`（healthcheck：`GET /api/me` 回 401 視為健康）→ `worker`（同樣等 `milvus` 健康；另外 `vllm` 只需 started，不等健康，所以 vLLM 失敗或仍在下載模型時 LiteParse 照常運作）；`web`、`worker` 設 `stop_grace_period: 30s`；worker 固定覆寫 `VLLM_BASE_URL=http://vllm:8000/v1`
 - 啟動：`cd docker && docker compose up -d --build`；vLLM 為預設服務，worker 的 `OCR_BACKEND`、`VLLM_BASE_URL` 由 compose 固定
 - 主機 Ollama：`host.docker.internal`；README 說明若連不上需讓 Ollama 監聽 `0.0.0.0`（`OLLAMA_HOST`）
 - **GPU 專用於 OCR**：對話模型可放雲端，不替 Ollama 保留顯存；RTX 2060（6GB，Turing 無 bf16）以 fp16、`OCR_VLLM_GPU_UTIL` 0.8 執行
 
 ### 3.9 快速測試
 - `cp .env.example .env` → 依需要修改 → `uv sync --group ocr`（要用 OCR 時）→ `uv run uvicorn app.main:create_app --factory --reload`
-- 預設 `KB_WORKER_MODE=embedded`、`OCR_BACKEND=transformers`、Chroma 本機模式 → Windows 上不需要 Docker、也不會碰到 vLLM
+- 預設 `KB_WORKER_MODE=embedded`、`OCR_BACKEND=transformers`、Milvus 以 `cd docker && docker compose up -d milvus` 啟動（本機 `.env` 的 `MILVUS_URI=http://localhost:19530`）→ 不需啟動 vLLM
 - 也可只用 Docker 跑 vLLM（`cd docker && docker compose up -d vllm`）並在本機 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（compose 把 vllm 的 8000 對應到主機 8001）
 
 ## 4. 錯誤處理
@@ -134,7 +137,7 @@ docker/
 - `KB_WORKER_MODE=external` 時 lifespan 不啟動 worker
 - `VllmOcrEngine`：用 `httpx.MockTransport` 驗證請求格式（data URL、temperature 0、model）、回應解析、連線失敗訊息、`availability()`
 - `OcrEngine` 選擇：`OCR_BACKEND` 切換；不合法值報錯
-- Chroma：`CHROMA_HOST` 有值時建立 HttpClient（以替身驗證，不連真的伺服器）
+- Milvus：以替身與 `-m milvus` 整合測試驗證（見 2026-10-19-milvus-hybrid-design）
 - WAL：`connect()` 後 `PRAGMA journal_mode` 為 `wal`
 - Docker（實作最後一步，需 Docker Desktop 執行中）：`docker compose build` 成功；`up` 後 `GET /` 回前端、`/api/me` 回 401；註冊、登入、送一則訊息（主機 Ollama）成功；上傳一份小 PDF 用 LiteParse 解析到 `ready`
 - 既有的後端 pytest、前端 vitest、lint、typecheck、build 全部通過
