@@ -41,8 +41,9 @@ def test_new_settings_defaults(monkeypatch):
         "KB_WORKER_MODE",
         "OCR_BACKEND",
         "VLLM_BASE_URL",
-        "CHROMA_HOST",
-        "CHROMA_PORT",
+        "MILVUS_URI",
+        "MILVUS_TOKEN",
+        "MILVUS_COLLECTION",
         "REPLY_LOCK_TTL_SECONDS",
         "KB_WORKER_POLL_SECONDS",
         "KB_STALE_SECONDS",
@@ -52,8 +53,9 @@ def test_new_settings_defaults(monkeypatch):
     assert s.kb_worker_mode == "embedded"
     assert s.ocr_backend == "transformers"
     assert s.vllm_base_url == "http://localhost:8001/v1"
-    assert s.chroma_host == ""
-    assert s.chroma_port == 8000
+    assert s.milvus_uri == "http://localhost:19530"
+    assert s.milvus_token == ""
+    assert s.milvus_collection == "phoebe_chunks"
     assert s.reply_lock_ttl_seconds == 90
     assert s.kb_worker_poll_seconds == 2.0
     assert s.kb_stale_seconds == 120
@@ -93,7 +95,7 @@ def test_docker_env_example_lists_compose_and_settings_keys():
     fixed = set()
     for name in ("web", "worker"):
         fixed |= set(compose["services"][name]["environment"])
-    fixed |= {"FRONTEND_DIST", "CHROMA_DIR"}  # not configurable in containers
+    fixed |= {"FRONTEND_DIST"}  # not configurable in containers
 
     text = (PROJECT_ROOT / "docker" / ".env.example").read_text(encoding="utf-8")
     keys = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, flags=re.M))
@@ -170,6 +172,50 @@ def test_worker_uses_vllm_and_has_no_gpu():
     assert not any("hf-cache" in v for v in worker.get("volumes", []))
 
 
+def _compose():
+    import yaml
+
+    return yaml.safe_load(
+        (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+
+
+def test_milvus_stack_in_compose():
+    services = _compose()["services"]
+    for name in ("milvus", "etcd", "minio"):
+        svc = services[name]
+        assert "profiles" not in svc
+        assert svc["healthcheck"]["test"]
+        assert re.search(r":v?\d+\.\d+", svc["image"]) or "RELEASE." in svc["image"]
+        assert "container_name" not in svc
+    milvus = services["milvus"]
+    assert milvus["image"].startswith("milvusdb/milvus:v")
+    assert milvus["ports"] == ["127.0.0.1:19530:19530"]
+    assert set(milvus["depends_on"]) == {"etcd", "minio"}
+    for dep in milvus["depends_on"].values():
+        assert dep["condition"] == "service_healthy"
+    assert any("9091/healthz" in str(p) for p in milvus["healthcheck"]["test"])
+
+
+def test_web_and_worker_wait_for_healthy_milvus():
+    services = _compose()["services"]
+    for name in ("web", "worker"):
+        svc = services[name]
+        assert svc["depends_on"]["milvus"]["condition"] == "service_healthy"
+        assert svc["environment"]["MILVUS_URI"] == "http://milvus:19530"
+        assert not any(k.startswith("CHROMA_") for k in svc["environment"])
+
+
+def test_chroma_only_under_migrate_profile():
+    compose = _compose()
+    chroma = compose["services"]["chroma"]
+    assert chroma["profiles"] == ["migrate-chroma"]
+    assert "chroma-data:/data" in chroma["volumes"]
+    assert "chroma-data" in compose["volumes"]
+    for name in ("web", "worker"):
+        assert "chroma" not in compose["services"][name].get("depends_on", {})
+
+
 def test_dockerignore_is_an_allowlist_covering_dockerfile_copies():
     lines = [
         ln.strip()
@@ -197,3 +243,15 @@ def test_gemini_api_key_not_in_repr():
     from app.config import Settings
 
     assert "sk-secret" not in repr(Settings(gemini_api_key="sk-secret"))
+
+
+def test_dockerfile_has_no_literal_backslash_n_outside_comments():
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    bad = [
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#") and chr(92) + "n" in line
+    ]
+    assert bad == []

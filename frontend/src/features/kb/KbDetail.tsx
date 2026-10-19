@@ -311,7 +311,10 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
                 <li key={i} className={styles.result}>
                   <div className={styles.resultTitle}>
                     {r.filename} 第 {r.page} 頁
-                    <span className={styles.score}>相似度 {r.score.toFixed(3)}</span>
+                    <span className={styles.score}>
+                      向量 {r.vector_score == null ? '—' : r.vector_score.toFixed(3)}／關鍵字{' '}
+                      {r.keyword_score == null ? '—' : r.keyword_score.toFixed(2)}
+                    </span>
                   </div>
                   <div className={styles.snippet}>{r.text}</div>
                 </li>

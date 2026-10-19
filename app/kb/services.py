@@ -6,7 +6,9 @@ from llama_index.core.base.embeddings.base import BaseEmbedding
 
 from app.config import Settings
 from app.db import connect
+from app.kb.chunk_store import ChunkStore
 from app.kb.index import KnowledgeIndex
+from app.kb.milvus_store import MilvusChunkStore
 from app.kb.parsers.base import Parser
 from app.kb.worker import IngestWorker
 
@@ -68,6 +70,7 @@ def build_kb_services(
     embed_model: BaseEmbedding | None = None,
     parsers: list[Parser] | None = None,
     threaded: bool = True,
+    store: ChunkStore | None = None,
 ) -> KbServices:
     if embed_model is None:
         from llama_index.embeddings.ollama import OllamaEmbedding
@@ -94,9 +97,12 @@ def build_kb_services(
             LiteParseParser(settings.liteparse_ocr_language),
             LightOnOcrParser(build_ocr_engine(settings)),
         ]
-    index = KnowledgeIndex(
-        settings.chroma_dir, embed_model, settings.chroma_host, settings.chroma_port
-    )
+    if store is None:
+        # connects lazily, so building the services never needs a reachable Milvus
+        store = MilvusChunkStore(
+            settings.milvus_uri, settings.milvus_token, settings.milvus_collection
+        )
+    index = KnowledgeIndex(store, embed_model)
     services = KbServices(
         index=index,
         parsers={p.id: p for p in parsers},

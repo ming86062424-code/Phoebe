@@ -1,0 +1,395 @@
+import json
+import os
+import socket
+from urllib.parse import urlparse
+
+import pytest
+from pymilvus import DataType, FunctionType, MilvusClient
+import grpc
+from pymilvus.client.types import LoadState, Status
+from pymilvus.exceptions import MilvusException
+
+from app.kb.chunk_store import ChunkRecord, KnowledgeStoreError
+from app.kb.milvus_store import TEXT_ANALYZER, MilvusChunkStore
+
+
+class FakeClient:
+    """Records calls; create_schema/prepare_index_params are the real pymilvus builders."""
+
+    def __init__(
+        self, exists=False, dim=4, search_result=None, error=None, create_race=False,
+        analyzer=None, loaded=True,
+    ):  # fmt: skip
+        self.analyzer = TEXT_ANALYZER if analyzer is None else analyzer
+        self.loaded = loaded
+        self.create_race = create_race
+        self.exists = exists
+        self.dim = dim
+        self.search_result = search_result if search_result is not None else [[]]
+        self.error = error
+        self.calls = []
+
+    def _maybe_fail(self):
+        if self.error:
+            raise self.error
+
+    create_schema = staticmethod(MilvusClient.create_schema)
+    prepare_index_params = staticmethod(MilvusClient.prepare_index_params)
+
+    def has_collection(self, name, **kwargs):
+        self._maybe_fail()
+        return self.exists
+
+    def describe_collection(self, name, **kwargs):
+        return {
+            "fields": [
+                {"name": "id"},
+                {"name": "text", "params": {"analyzer_params": json.dumps(self.analyzer)}},
+                {"name": "dense", "params": {"dim": self.dim}},
+            ]
+        }
+
+    def get_load_state(self, name, **kwargs):
+        return {"state": LoadState.Loaded if self.loaded else LoadState.NotLoad}
+
+    def load_collection(self, name, **kwargs):
+        self.calls.append(("load_collection", name, kwargs))
+        self.loaded = True
+
+    def create_collection(self, name, **kwargs):
+        if self.create_race:  # another process created it first
+            self.exists = True
+            raise MilvusException(message="collection already exists")
+        self.calls.append(("create_collection", name, kwargs))
+        self.create_kwargs = kwargs
+        self.exists = True
+
+    def insert(self, name, rows, **kwargs):
+        self._maybe_fail()
+        self.calls.append(("insert", name, rows))
+        self.insert_kwargs = kwargs
+
+    def delete(self, name, **kwargs):
+        self.calls.append(("delete", name, kwargs))
+
+    def search(self, name, **kwargs):
+        self._maybe_fail()
+        self.calls.append(("search", name, kwargs))
+        return self.search_result
+
+
+def _store(client):
+    return MilvusChunkStore("http://x", "", "phoebe_chunks", client=client)
+
+
+def _record(doc, idx, kb=3):
+    return ChunkRecord(kb, doc, "a.pdf", 1, idx, f"text {idx}", [0.1, 0.2, 0.3, 0.4])
+
+
+def test_ensure_ready_creates_schema_with_bm25_and_chinese_analyzer():
+    client = FakeClient()
+    _store(client).ensure_ready(4)
+    (_, name, kwargs), = client.calls
+    assert name == "phoebe_chunks"
+    assert kwargs["consistency_level"] == "Strong"
+    schema = kwargs["schema"]
+    fields = {f.name: f for f in schema.fields}
+    assert set(fields) == {
+        "id", "kb_id", "document_id", "page", "chunk_index",
+        "filename", "text", "dense", "sparse",
+    }  # fmt: skip
+    assert fields["id"].is_primary and fields["id"].dtype == DataType.VARCHAR
+    assert fields["id"].params["max_length"] == 64
+    assert fields["kb_id"].is_partition_key and fields["kb_id"].dtype == DataType.INT64
+    assert fields["filename"].params["max_length"] == 2048
+    text = fields["text"]
+    assert text.params["max_length"] == 65535
+    assert text.params["enable_analyzer"] is True
+    assert json.loads(text.params["analyzer_params"]) == TEXT_ANALYZER
+    assert client.create_kwargs["timeout"] == 60
+    assert fields["dense"].dtype == DataType.FLOAT_VECTOR and fields["dense"].params["dim"] == 4
+    assert fields["sparse"].dtype == DataType.SPARSE_FLOAT_VECTOR
+    (function,) = schema.functions
+    assert function.type == FunctionType.BM25
+    assert function.input_field_names == ["text"]
+    assert function.output_field_names == ["sparse"]
+    indexes = {i.field_name: i for i in kwargs["index_params"]}
+    assert indexes["dense"].index_type == "AUTOINDEX"
+    assert indexes["dense"].get_index_configs()["metric_type"] == "COSINE"
+    assert indexes["sparse"].index_type == "SPARSE_INVERTED_INDEX"
+    assert indexes["sparse"].get_index_configs()["metric_type"] == "BM25"
+
+
+def test_ensure_ready_existing_collection_same_dim_is_noop():
+    client = FakeClient(exists=True, dim=4)
+    _store(client).ensure_ready(4)
+    assert client.calls == []
+
+
+def test_analyzer_mismatch_raises_clear_error():
+    client = FakeClient(exists=True, dim=4, analyzer={"type": "chinese"})
+    with pytest.raises(KnowledgeStoreError, match="斷詞設定已更新，請重建知識庫"):
+        _store(client).ensure_ready(4)
+
+
+def test_existing_collection_that_is_not_loaded_gets_loaded():
+    client = FakeClient(exists=True, dim=4, loaded=False)
+    _store(client).ensure_ready(4)
+    assert [c[0] for c in client.calls] == ["load_collection"]
+
+
+def test_analyzer_drops_question_words_and_particles():
+    stop = TEXT_ANALYZER["filter"][2]["stop_words"]
+    assert "_english_" in stop and {"how", "do", "i"} <= set(stop)
+    assert "的" in stop and TEXT_ANALYZER["tokenizer"] == "jieba"
+
+
+def test_deadline_exceeded_maps_to_timeout_message():
+    client = FakeClient(
+        exists=True,
+        error=MilvusException(code=grpc.StatusCode.DEADLINE_EXCEEDED, message="Deadline Exceeded"),
+    )
+    with pytest.raises(KnowledgeStoreError, match="^Milvus 回應逾時$"):
+        _store(client).dense_search(1, [0.1], 5)
+
+
+def test_dimension_mismatch_raises_clear_error():
+    client = FakeClient(exists=True, dim=768)
+    with pytest.raises(KnowledgeStoreError) as err:
+        _store(client).ensure_ready(1024)
+    assert str(err.value) == "EMBED_MODEL 的向量維度（1024）與既有知識庫（768）不同，請重建知識庫"
+    assert client.calls == []
+
+
+def test_insert_batches_and_ids():
+    client = FakeClient(exists=True)
+    _store(client).insert([_record(7, i) for i in range(600)])
+    batches = [c[2] for c in client.calls if c[0] == "insert"]
+    assert [len(b) for b in batches] == [256, 256, 88]
+    first = batches[0][0]
+    assert first["id"] == "7:0" and batches[2][-1]["id"] == "7:599"
+    assert first["kb_id"] == 3 and first["document_id"] == 7 and first["dense"] == [0.1, 0.2, 0.3, 0.4]
+    assert "sparse" not in first  # generated by the BM25 function
+
+
+def test_delete_document_and_kb_use_integer_filters():
+    client = FakeClient(exists=True)
+    store = _store(client)
+    store.delete_document(3, 7)
+    store.delete_kb(3)
+    assert [c[2]["filter"] for c in client.calls] == [
+        "kb_id == 3 and document_id == 7",
+        "kb_id == 3",
+    ]
+
+
+def test_delete_and_search_without_collection_do_nothing():
+    client = FakeClient(exists=False)
+    store = _store(client)
+    store.delete_document(1, 1)
+    store.delete_kb(1)
+    assert store.dense_search(1, [0.1], 5) == []
+    assert store.keyword_search(1, "x", 5) == []
+    assert client.calls == []
+
+
+def _raw_hit(score=0.9):
+    return {
+        "id": "7:0",
+        "distance": score,
+        "entity": {"kb_id": 3, "document_id": 7, "filename": "a.pdf", "page": 2, "text": "柴犬"},
+    }
+
+
+def test_dense_search_maps_hits():
+    client = FakeClient(search_result=[[_raw_hit(0.87)]], exists=True)
+    hits = _store(client).dense_search(3, [0.1, 0.2], 20)
+    (_, name, kwargs), = client.calls
+    assert name == "phoebe_chunks"
+    assert kwargs["data"] == [[0.1, 0.2]]
+    assert kwargs["anns_field"] == "dense"
+    assert kwargs["filter"] == "kb_id == 3"
+    assert kwargs["consistency_level"] == "Strong"
+    assert kwargs["search_params"] == {"metric_type": "COSINE"}
+    assert kwargs["limit"] == 20
+    (hit,) = hits
+    assert (hit.chunk_id, hit.kb_id, hit.document_id, hit.filename, hit.page, hit.text) == (
+        "7:0", 3, 7, "a.pdf", 2, "柴犬",
+    )  # fmt: skip
+    assert hit.score == pytest.approx(0.87)
+
+
+def test_keyword_search_passes_query_as_data_not_filter():
+    client = FakeClient(search_result=[[_raw_hit(3.2)]], exists=True)
+    query = '" or 1==1 \\ "x'
+    hits = _store(client).keyword_search(3, query, 20)
+    (_, _, kwargs), = client.calls
+    assert kwargs["data"] == [query]
+    assert kwargs["filter"] == "kb_id == 3"
+    assert query not in kwargs["filter"]
+    assert kwargs["anns_field"] == "sparse"
+    assert kwargs["search_params"] == {"metric_type": "BM25"}
+    assert kwargs["consistency_level"] == "Strong"
+    assert hits[0].score == pytest.approx(3.2)
+
+
+def test_blank_keyword_query_returns_nothing():
+    client = FakeClient(exists=True)
+    assert _store(client).keyword_search(3, "   ", 5) == []
+    assert client.calls == []
+
+
+CONNECT_FAILED = MilvusException(code=Status.CONNECT_FAILED, message="Fail connecting to server")
+RETRIES_EXHAUSTED = MilvusException(
+    code=grpc.StatusCode.UNAVAILABLE, message="[search] Retry run out of 75 retry times"
+)
+
+
+@pytest.mark.parametrize("error", [CONNECT_FAILED, RETRIES_EXHAUSTED])
+def test_connection_errors_map_to_store_error(error):
+    store = _store(FakeClient(exists=True, error=error))
+    with pytest.raises(KnowledgeStoreError, match="^無法連線到 Milvus$"):
+        store.ensure_ready(4)
+    with pytest.raises(KnowledgeStoreError, match="^無法連線到 Milvus$"):
+        store.insert([_record(1, 0)])
+    with pytest.raises(KnowledgeStoreError, match="^無法連線到 Milvus$"):
+        store.keyword_search(1, "x", 5)
+
+
+def test_unknown_errors_get_a_short_message():
+    error = MilvusException(code=1100, message="internal secret stack detail")
+    with pytest.raises(KnowledgeStoreError) as err:
+        _store(FakeClient(exists=True, error=error)).dense_search(1, [0.1], 5)
+    assert str(err.value) == "Milvus 錯誤"
+
+
+def test_calls_are_time_bounded():
+    client = FakeClient(exists=True)
+    store = _store(client)
+    store.dense_search(1, [0.1], 5)
+    store.delete_kb(1)
+    store.insert([_record(1, 0)])
+    kwargs = [c[2] for c in client.calls if c[0] in ("search", "delete")]
+    assert kwargs and all(k["timeout"] == 10 for k in kwargs)
+    assert client.insert_kwargs["timeout"] == 10
+
+
+def test_existence_is_cached():
+    class Counting(FakeClient):
+        checks = 0
+
+        def has_collection(self, name, **kwargs):
+            self.checks += 1
+            return super().has_collection(name, **kwargs)
+
+    client = Counting(exists=True)
+    store = _store(client)
+    store.dense_search(1, [0.1], 5)
+    store.keyword_search(1, "x", 5)
+    store.delete_kb(1)
+    assert client.checks == 1
+
+
+def test_create_race_falls_through_to_dimension_check():
+    client = FakeClient(create_race=True, dim=4)
+    _store(client).ensure_ready(4)  # no error
+    with pytest.raises(KnowledgeStoreError, match="向量維度"):
+        _store(FakeClient(create_race=True, dim=8)).ensure_ready(4)
+
+
+def test_create_failure_without_race_is_reported():
+    class Failing(FakeClient):
+        def create_collection(self, name, **kwargs):
+            raise MilvusException(code=1100, message="bad")
+
+    with pytest.raises(KnowledgeStoreError, match="^Milvus 錯誤$"):
+        _store(Failing()).ensure_ready(4)
+
+
+def test_insert_truncates_by_utf8_bytes():
+    client = FakeClient(exists=True)
+    record = ChunkRecord(1, 1, "名" * 1000, 1, 0, "字" * 30000, [0.1])
+    _store(client).insert([record])
+    row = next(c[2] for c in client.calls if c[0] == "insert")[0]
+    assert len(row["text"].encode()) <= 65535 and row["text"] == "字" * 21845
+    assert len(row["filename"].encode()) <= 2048 and row["filename"] == "名" * 682
+
+
+@pytest.mark.milvus
+def test_unreachable_uri_maps_to_store_error():
+    store = MilvusChunkStore("http://127.0.0.1:1", "", "phoebe_chunks")
+    with pytest.raises(KnowledgeStoreError, match="^無法連線到 Milvus$"):
+        store.ensure_ready(4)
+
+
+def _milvus_reachable(uri: str) -> bool:
+    parsed = urlparse(uri)
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port or 19530), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.mark.milvus
+def test_real_milvus_roundtrip():
+    uri = os.environ.get("MILVUS_URI", "http://localhost:19530")
+    if not _milvus_reachable(uri):
+        pytest.skip(f"Milvus not reachable at {uri}")
+    name = f"phoebe_test_{os.getpid()}"
+    client = MilvusClient(uri=uri, token=os.environ.get("MILVUS_TOKEN", ""))
+    store = MilvusChunkStore(uri, os.environ.get("MILVUS_TOKEN", ""), name, client=client)
+    try:
+        store.ensure_ready(4)
+        store.ensure_ready(4)
+        with pytest.raises(KnowledgeStoreError, match="向量維度"):
+            store.ensure_ready(8)
+        store.insert(
+            [
+                ChunkRecord(1, 10, "dogs.pdf", 1, 0, "柴犬是一種日本犬種，個性忠誠", [1.0, 0.0, 0.0, 0.0]),
+                ChunkRecord(1, 10, "dogs.pdf", 2, 1, "Invoice No. 2026-1018 is overdue", [0.0, 1.0, 0.0, 0.0]),
+                ChunkRecord(2, 20, "other.pdf", 1, 0, "柴犬 in another knowledge base", [1.0, 0.0, 0.0, 0.0]),
+            ]
+        )  # fmt: skip
+        keyword = store.keyword_search(1, "柴犬", 5)
+        assert [h.document_id for h in keyword] == [10] and keyword[0].page == 1
+        assert store.keyword_search(1, "Invoice", 5)[0].page == 2
+        store.keyword_search(1, '" or 1==1 \\', 5)  # must not raise
+        dense = store.dense_search(1, [0.0, 1.0, 0.0, 0.0], 5)
+        assert dense[0].text.startswith("Invoice") and dense[0].score > 0.9
+        assert all(h.kb_id == 1 for h in dense)
+        store.delete_document(1, 10)
+        assert store.dense_search(1, [1.0, 0.0, 0.0, 0.0], 5) == []
+        assert len(store.dense_search(2, [1.0, 0.0, 0.0, 0.0], 5)) == 1
+        store.delete_kb(2)
+        assert store.dense_search(2, [1.0, 0.0, 0.0, 0.0], 5) == []
+    finally:
+        client.drop_collection(name)
+
+
+@pytest.mark.milvus
+def test_real_milvus_natural_language_query_ignores_question_words():
+    uri = os.environ.get("MILVUS_URI", "http://localhost:19530")
+    if not _milvus_reachable(uri):
+        pytest.skip(f"Milvus not reachable at {uri}")
+    name = f"phoebe_test_an_{os.getpid()}"
+    client = MilvusClient(uri=uri, token=os.environ.get("MILVUS_TOKEN", ""))
+    store = MilvusChunkStore(uri, os.environ.get("MILVUS_TOKEN", ""), name, client=client)
+    try:
+        store.ensure_ready(4)
+        store.insert(
+            [
+                ChunkRecord(1, 1, "a.pdf", 1, 0, "Milvus is a vector database to do search", [1.0, 0, 0, 0]),
+                ChunkRecord(1, 1, "a.pdf", 1, 1, "付款金額 money to pay", [0, 1.0, 0, 0]),
+            ]
+        )
+        hits = store.keyword_search(1, "How much money do I need to pay?", 5)
+        assert hits and hits[0].chunk_id == "1:1"
+        analyzed = client.run_analyzer("How much money do I need to pay?", analyzer_params=TEXT_ANALYZER)
+        tokens = {(t if isinstance(t, str) else t["token"]).lower() for t in analyzed.tokens}
+        assert not tokens & {"how", "do", "i", "to", "much"}
+        assert {"money", "pay"} <= tokens
+        # a second process starting against the same collection accepts it
+        MilvusChunkStore(uri, os.environ.get("MILVUS_TOKEN", ""), name, client=client).ensure_ready(4)
+    finally:
+        client.drop_collection(name)

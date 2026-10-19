@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 """
 
-# Knowledge base ids name files and Chroma collections, so they must never be reused
+# Knowledge base ids name files and filter Milvus chunks (kb_id), so they must never be reused
 # after a delete: these tables use AUTOINCREMENT.
 AUTOINCREMENT_TABLES = {
     "knowledge_bases": """CREATE TABLE {name} (

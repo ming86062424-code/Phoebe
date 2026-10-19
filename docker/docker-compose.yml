@@ -9,14 +9,76 @@ x-env: &env
       required: false
 
 services:
-  chroma:
-    image: chromadb/chroma:1.5.9
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.25
     restart: unless-stopped
-    # chroma 1.x 預設持久化路徑為 /data，不需 0.x 的 IS_PERSISTENT/PERSIST_DIRECTORY
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd-data:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - minio-data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # 向量資料庫（Milvus standalone，沿用官方 v2.6.25 compose 的 etcd／minio 設定）。
+  # 只對本機 127.0.0.1:19530 開放（無驗證）；本機快速測試：docker compose up -d milvus
+  milvus:
+    image: milvusdb/milvus:v2.6.25
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MQ_TYPE: woodpecker
+    volumes:
+      - milvus-data:/var/lib/milvus
+    ports:
+      - "127.0.0.1:19530:19530"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+
+  # 只用於把舊的 Chroma 資料遷移到 Milvus（見 docker/README.md）：
+  #   docker compose --profile migrate-chroma up -d chroma
+  chroma:
+    profiles: [migrate-chroma]
+    image: chromadb/chroma:1.5.9
+    # chroma 1.x 預設持久化路徑為 /data
     volumes:
       - chroma-data:/data
     healthcheck:
-      # ⚠️ 未在 chroma 1.5.9 映像內驗證；以 bash /dev/tcp 檢查連接埠（映像無 curl）
+      # 已在 chroma 1.5.9 映像內驗證（容器為 healthy）；以 bash /dev/tcp 檢查連接埠（映像無 curl）
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
       interval: 10s
       timeout: 5s
@@ -32,15 +94,14 @@ services:
     image: phoebe-web:local
     restart: unless-stopped
     depends_on:
-      chroma:
+      milvus:
         condition: service_healthy
     stop_grace_period: 30s
     ports:
       - "${PHOEBE_PORT:-8000}:8000"
     environment:
       KB_WORKER_MODE: external
-      CHROMA_HOST: chroma
-      CHROMA_PORT: "8000"
+      MILVUS_URI: http://milvus:19530
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       DB_PATH: /data/app.db
       KB_DIR: /data/kb
@@ -78,6 +139,8 @@ services:
     depends_on:
       web:
         condition: service_healthy
+      milvus:
+        condition: service_healthy
       # 只等容器啟動：vLLM 還在下載模型或失敗時，LiteParse 仍可使用（OCR 解析器會顯示未啟動）
       vllm:
         condition: service_started
@@ -85,8 +148,7 @@ services:
     environment:
       OCR_BACKEND: vllm
       VLLM_BASE_URL: http://vllm:8000/v1
-      CHROMA_HOST: chroma
-      CHROMA_PORT: "8000"
+      MILVUS_URI: http://milvus:19530
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       DB_PATH: /data/app.db
       KB_DIR: /data/kb
@@ -151,5 +213,8 @@ services:
 
 volumes:
   phoebe-data:
+  milvus-data:
+  etcd-data:
+  minio-data:
   chroma-data:
   hf-cache:

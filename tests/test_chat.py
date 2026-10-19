@@ -364,3 +364,20 @@ def test_unavailable_provider_returns_503(admin_chat, settings):
     assert r.json()["detail"] == "Gemini 目前不可用：未設定 GEMINI_API_KEY"
     assert built == []
     assert _messages(c, cid) == []
+
+
+def test_store_down_during_retrieval_returns_503(admin_chat, kb_services, monkeypatch):
+    from app.kb.chunk_store import KnowledgeStoreError
+
+    def boom(*args, **kwargs):
+        raise KnowledgeStoreError("無法連線到 Milvus")
+
+    monkeypatch.setattr(kb_services.index._store, "dense_search", boom)
+    make, _, _ = admin_chat
+    c = make()
+    kb = c.post("/api/kbs", json={"name": "手冊"}).json()
+    cid = _new_conv(c)
+    c.patch(f"/api/conversations/{cid}", json={"kb_id": kb["id"]})
+    r = _send(c, cid, "嗨")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "知識庫檢索失敗：無法連線到 Milvus"

@@ -10,6 +10,7 @@ from app.kb import store
 from app.kb.parsers.base import PageText, ParseError
 from app.kb.services import build_kb_services
 from tests.fakes import FakeParser, KeywordEmbedding
+from tests.fakes_store import InMemoryChunkStore
 
 
 @pytest.fixture
@@ -17,7 +18,6 @@ def env(tmp_path):
     settings = Settings(
         db_path=str(tmp_path / "t.db"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
     )
     conn = connect(settings.db_path)
     init_db(conn)
@@ -28,7 +28,10 @@ def env(tmp_path):
     kb = store.create_kb(conn, 1, "k", "")
     parser = FakeParser()
     services = build_kb_services(
-        settings, embed_model=KeywordEmbedding(), parsers=[parser], threaded=False
+        settings, embed_model=KeywordEmbedding(),
+        parsers=[parser],
+        threaded=False,
+        store=InMemoryChunkStore(),
     )
 
     def add_doc():
@@ -50,6 +53,21 @@ def test_process_marks_ready_and_indexes(env):
     assert (got["status"], got["chunk_count"], got["progress_done"]) == ("ready", 2, 2)
     assert services.index.search(kb["id"], "cherry", 1)[0].page == 2
     assert parser.released == 1
+
+
+def test_store_down_marks_failed_with_clear_reason(env, monkeypatch):
+    from app.kb.chunk_store import KnowledgeStoreError
+
+    conn, _, _, services, add_doc = env
+
+    def boom(*args, **kwargs):
+        raise KnowledgeStoreError("無法連線到 Milvus")
+
+    monkeypatch.setattr(services.index._store, "insert", boom)
+    doc = add_doc()
+    services.worker.enqueue(doc["id"])
+    got = store.get_document(conn, doc["id"])
+    assert got["status"] == "failed" and "無法連線到 Milvus" in got["error"]
 
 
 def test_parse_error_marks_failed(env):
@@ -328,13 +346,15 @@ def _external_services(tmp_path, parser):
     settings = Settings(
         db_path=str(tmp_path / "x.db"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
         kb_worker_mode="external",
     )
     conn = connect(settings.db_path)
     init_db(conn)
     services = build_kb_services(
-        settings, embed_model=KeywordEmbedding(), parsers=[parser], threaded=False
+        settings, embed_model=KeywordEmbedding(),
+        parsers=[parser],
+        threaded=False,
+        store=InMemoryChunkStore(),
     )
     return settings, conn, services
 

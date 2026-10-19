@@ -16,7 +16,6 @@ def settings(tmp_path):
         db_path=str(tmp_path / "test.db"),
         frontend_dist=str(tmp_path / "no-dist"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
     )
 
 
@@ -32,12 +31,14 @@ def kb_services(settings, fake_parser):
     from app.kb.parsers.liteparse_parser import LiteParseParser
     from app.kb.services import build_kb_services
     from tests.fakes import KeywordEmbedding
+    from tests.fakes_store import InMemoryChunkStore
 
     return build_kb_services(
         settings,
         embed_model=KeywordEmbedding(),
         parsers=[LiteParseParser("eng"), fake_parser],
         threaded=False,
+        store=InMemoryChunkStore(),
     )
 
 

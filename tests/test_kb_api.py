@@ -340,17 +340,20 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     from app.kb.services import build_kb_services
     from app.main import create_app
     from tests.fakes import KeywordEmbedding
+    from tests.fakes_store import InMemoryChunkStore
 
     settings = Settings(
         db_path=str(tmp_path / "e.db"),
         frontend_dist=str(tmp_path / "no-dist"),
         kb_dir=str(tmp_path / "kb"),
-        chroma_dir=str(tmp_path / "chroma"),
         kb_worker_mode="external",
     )
     fake_parser.available = False  # the web process itself could not use it
     services = build_kb_services(
-        settings, embed_model=KeywordEmbedding(), parsers=[fake_parser], threaded=False
+        settings, embed_model=KeywordEmbedding(),
+        parsers=[fake_parser],
+        threaded=False,
+        store=InMemoryChunkStore(),
     )
     c = TestClient(create_app(settings, services))
     creds = {"username": "eve", "password": "password123"}
@@ -370,3 +373,53 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     conn.close()
     assert c.get("/api/parsers").json()[0]["available"] is True
     assert _upload(c, kb["id"]).status_code == 201
+
+
+def _store_down(monkeypatch, kb_services, *names):
+    from app.kb.chunk_store import KnowledgeStoreError
+
+    def boom(*args, **kwargs):
+        raise KnowledgeStoreError("無法連線到 Milvus")
+
+    for name in names:
+        monkeypatch.setattr(kb_services.index._store, name, boom)
+
+
+def test_delete_document_succeeds_when_store_is_down(make_user, kb_services, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+    removed = []
+    monkeypatch.setattr(kb_services.worker, "remove_path", lambda p: removed.append(p))
+    _store_down(monkeypatch, kb_services, "delete_document")
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 204
+    assert removed == [kb_services.file_path(kb["id"], doc["id"])]
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 404
+
+
+def test_delete_kb_succeeds_when_store_is_down(make_user, kb_services, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    removed = []
+    monkeypatch.setattr(kb_services.worker, "remove_path", lambda p: removed.append(p))
+    _store_down(monkeypatch, kb_services, "delete_kb")
+    assert alice.delete(f"/api/kbs/{kb['id']}").status_code == 204
+    assert removed == [kb_services.kb_dir / str(kb["id"])]
+    assert kb["id"] not in [k["id"] for k in alice.get("/api/kbs").json()]
+
+
+def test_deleted_document_is_never_retrieved_after_a_store_outage(make_user, kb_services, fake_chat, monkeypatch):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    gone = _upload(alice, kb["id"]).json()
+    _store_down(monkeypatch, kb_services, "delete_document")
+    assert alice.delete(f"/api/kbs/{kb['id']}/documents/{gone['id']}").status_code == 204
+    # the chunks are still in the store, but the document no longer exists
+    assert kb_services.index._store.rows
+    assert alice.get(f"/api/kbs/{kb['id']}/search", params={"q": "apple"}).json() == []
+    cid = alice.post("/api/conversations").json()["id"]
+    alice.patch(f"/api/conversations/{cid}", json={"kb_id": kb["id"]})
+    events = _stream_events(alice.post(f"/api/conversations/{cid}/messages", json={"content": "apple"}))
+    sources = next(e for e in events if e["type"] == "sources")
+    assert sources["sources"] == [] if "sources" in sources else True
+    assert gone["filename"] not in fake_chat.calls[-1]["system"]
