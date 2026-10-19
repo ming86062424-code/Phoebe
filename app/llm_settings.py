@@ -21,7 +21,7 @@ class LlmSettings:
 
 def default_values(settings: Settings) -> dict:
     return {
-        "llm_provider": "ollama",
+        "llm_provider": settings.llm_provider,
         "ollama_model": settings.chat_model,
         "gemini_model": settings.gemini_model,
         "system_prompt": "",

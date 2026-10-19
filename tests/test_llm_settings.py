@@ -15,7 +15,7 @@ def conn(tmp_path):
 
 @pytest.fixture
 def env_settings():
-    return Settings(chat_model="chat-x", gemini_model="gem-x")
+    return Settings(chat_model="chat-x", gemini_model="gem-x", llm_provider="ollama")
 
 
 def test_defaults_come_from_env(conn, env_settings):
@@ -73,3 +73,33 @@ def test_gemini_env_settings(monkeypatch):
     assert (s.gemini_api_key, s.gemini_model) == ("", "gemini-2.5-flash")
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     assert Settings.from_env().gemini_api_key == "k"
+
+
+def test_default_provider_follows_settings(conn):
+    assert load_llm_settings(conn, Settings(llm_provider="gemini")).llm_provider == "gemini"
+    assert load_llm_settings(conn, Settings(llm_provider="ollama")).llm_provider == "ollama"
+
+
+def test_llm_provider_and_ollama_context_env(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("OLLAMA_NUM_CTX", raising=False)
+    s = Settings.from_env()
+    assert (s.llm_provider, s.ollama_num_ctx) == ("gemini", 16384)
+    monkeypatch.setenv("LLM_PROVIDER", " Ollama ")
+    monkeypatch.setenv("OLLAMA_NUM_CTX", "8192")
+    s = Settings.from_env()
+    assert (s.llm_provider, s.ollama_num_ctx) == ("ollama", 8192)
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("LLM_PROVIDER", "openai", "LLM_PROVIDER 必須是 ollama 或 gemini"),
+        ("OLLAMA_NUM_CTX", "0", "OLLAMA_NUM_CTX 必須是正整數"),
+        ("OLLAMA_NUM_CTX", "lots", "OLLAMA_NUM_CTX 必須是正整數"),
+    ],
+)
+def test_invalid_provider_or_context_env(monkeypatch, name, value, message):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=message):
+        Settings.from_env()

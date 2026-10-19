@@ -330,3 +330,31 @@ async def test_only_the_error_field_of_the_body_is_classified():
     with pytest.raises(OllamaStreamError) as exc:
         await collect(make_client(lambda request: response), [{"role": "user", "content": "x", "images": [PNG_A]}])
     assert not isinstance(exc.value, ImagesNotSupported)
+
+
+async def test_ollama_sends_its_context_size():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=ndjson({"done": True}))
+
+    client = OllamaClient(
+        "http://ollama.test", MODEL, num_ctx=16384, transport=httpx.MockTransport(handler)
+    )
+    await collect(client)
+    assert seen["body"]["options"] == {"num_ctx": 16384}
+    async for _ in client.stream_chat([{"role": "user", "content": "hi"}], temperature=0.3):
+        pass
+    assert seen["body"]["options"] == {"num_ctx": 16384, "temperature": 0.3}
+
+
+def test_factory_passes_the_context_size_to_ollama():
+    from app.config import Settings
+    from app.llm.factory import build_chat_client
+    from app.llm_settings import LlmSettings
+
+    llm = LlmSettings(
+        llm_provider="ollama", ollama_model="m", gemini_model="g", system_prompt="", temperature=None
+    )
+    assert build_chat_client(Settings(ollama_num_ctx=8192), llm).num_ctx == 8192

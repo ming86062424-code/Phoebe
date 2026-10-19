@@ -31,6 +31,16 @@ def _non_negative_int(name: str, raw: str) -> int:
     return value
 
 
+def _positive_int(name: str, raw: str) -> int:
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{name} 必須是正整數")
+    return value
+
+
 def _check_admin(username: str, password: str) -> None:
     """The admin account from .env follows the same rules as registration."""
     if not username and not password:
@@ -76,6 +86,11 @@ class Settings:
     admin_password: str = field(default="", repr=False)
     gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = "gemini-2.5-flash"
+    # chat provider until an admin picks one on the settings page
+    llm_provider: str = "gemini"
+    # Ollama's own default context is small (4096): a knowledge-base answer with page
+    # images (~740 tokens each) and several pages of text would be cut off silently
+    ollama_num_ctx: int = 16384
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -123,6 +138,10 @@ class Settings:
             admin_password=os.environ.get("ADMIN_PASSWORD", ""),
             gemini_api_key=os.environ.get("GEMINI_API_KEY", d.gemini_api_key).strip(),
             gemini_model=os.environ.get("GEMINI_MODEL", d.gemini_model),
+            llm_provider=_choice("LLM_PROVIDER", d.llm_provider, ("ollama", "gemini")),
+            ollama_num_ctx=_positive_int(
+                "OLLAMA_NUM_CTX", os.environ.get("OLLAMA_NUM_CTX", str(d.ollama_num_ctx))
+            ),
         )
         if settings.kb_heartbeat_seconds >= settings.kb_stale_seconds:
             raise ValueError("KB_HEARTBEAT_SECONDS 必須小於 KB_STALE_SECONDS")
