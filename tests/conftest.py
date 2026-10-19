@@ -31,12 +31,14 @@ def kb_services(settings, fake_parser):
     from app.kb.parsers.liteparse_parser import LiteParseParser
     from app.kb.services import build_kb_services
     from tests.fakes import KeywordEmbedding
+    from tests.fakes_store import InMemoryChunkStore
 
     return build_kb_services(
         settings,
         embed_model=KeywordEmbedding(),
         parsers=[LiteParseParser("eng"), fake_parser],
         threaded=False,
+        store=InMemoryChunkStore(),
     )
 
 
