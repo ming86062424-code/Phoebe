@@ -136,3 +136,41 @@ def test_dry_run_writes_nothing(conn, chroma, index, chunk_store):
 def test_ignores_unrelated_collections(conn, chroma, index):
     chroma.get_or_create_collection("something_else")
     assert migrate(chroma, conn, index, dry_run=False) == {}
+
+
+def test_chunk_without_document_id_is_skipped(conn, chroma, index, chunk_store):
+    kb = make_kb(conn)
+    doc = make_doc(conn, kb)
+    write_old(chroma, kb, doc, "a.pdf", [(1, "alpha")])
+    chroma.get_collection(f"kb_{kb}").add(
+        ids=["stray"], documents=["no doc id"], metadatas=[{"filename": "x.pdf"}],
+        embeddings=[[1.0] * 64],
+    )
+
+    assert migrate(chroma, conn, index, dry_run=False) == {kb: (1, 1)}
+
+
+def test_main_missing_chroma_dir_exits_1_without_creating_it(tmp_path, capsys):
+    from app.kb.migrate_chroma import main
+
+    missing = tmp_path / "nope"
+    assert main(["--chroma-dir", str(missing)]) == 1
+    assert "找不到 Chroma 資料" in capsys.readouterr().err
+    assert not missing.exists()
+
+
+def test_main_without_chromadb_installed(monkeypatch, capsys):
+    import builtins
+
+    from app.kb.migrate_chroma import main
+
+    real = builtins.__import__
+
+    def fake(name, *a, **k):
+        if name == "chromadb":
+            raise ImportError(name)
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake)
+    assert main(["--chroma-dir", "x"]) == 1
+    assert "--group migrate" in capsys.readouterr().err

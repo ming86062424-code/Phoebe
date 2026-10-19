@@ -15,6 +15,7 @@ import logging
 import re
 import sqlite3
 import sys
+from pathlib import Path
 
 from app.config import Settings
 from app.db import connect
@@ -48,6 +49,9 @@ def _read_chunks(collection):
             return
         for document, metadata in zip(batch["documents"], batch["metadatas"], strict=True):
             metadata = metadata or {}
+            if metadata.get("kb_document_id") is None:
+                yield None, "", 0, ""
+                continue
             yield (
                 int(metadata["kb_document_id"]),
                 str(metadata.get("filename", "")),
@@ -77,6 +81,9 @@ def migrate(
         skipped = 0
         live: dict[int, bool] = {}
         for doc_id, filename, page, text in _read_chunks(chroma_client.get_collection(name)):
+            if doc_id is None:
+                skipped += 1
+                continue
             if doc_id not in live:
                 live[doc_id] = kb_exists and (
                     db_conn.execute(
@@ -95,6 +102,7 @@ def migrate(
             else:
                 migrated += index.add_chunks(kb_id, doc_id, filename, chunks)
         result[kb_id] = (migrated, skipped)
+        logger.info("知識庫 %d：遷移 %d 個 chunk，略過 %d 個", kb_id, migrated, skipped)
     return result
 
 
@@ -107,11 +115,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="只統計，不寫入 Milvus")
     args = parser.parse_args(argv)
 
-    import chromadb
+    try:
+        import chromadb
+    except ImportError:
+        print("請以 uv run --group migrate 執行遷移", file=sys.stderr)
+        return 1
 
     from app.kb.services import build_kb_services
 
     logging.basicConfig(level=logging.INFO)
+    if args.chroma_dir and not (Path(args.chroma_dir) / "chroma.sqlite3").is_file():
+        print(f"找不到 Chroma 資料：{args.chroma_dir}", file=sys.stderr)
+        return 1
     try:
         chroma_settings = chromadb.Settings(anonymized_telemetry=False)
         if args.chroma_host:
@@ -128,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             conn.close()
     except Exception as exc:
-        print(f"遷移失敗：{exc}", file=sys.stderr)
+        print(f"遷移失敗：{exc}（可安全地重新執行，遷移不會產生重複資料）", file=sys.stderr)
         return 1
     label = "（試跑，未寫入）" if args.dry_run else ""
     for kb_id, (migrated, skipped) in sorted(result.items()):
