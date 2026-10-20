@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Pencil, RotateCcw, Search, Trash2, Upload } from 'lucide-react'
+import { Pencil, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import type { KbDocument, KnowledgeBase, ParserInfo, Source } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
 import { SourceCards } from './SourceCard'
+import UploadPanel from './UploadPanel'
 import styles from './KbDetail.module.css'
 
 const POLL_MS = 2000
-const ACCEPT = '.pdf,.txt,.md,.png,.jpg,.jpeg,.webp'
-
-// .txt and .md always go through the text parser on the server
-function isTextFile(file: File): boolean {
-  return /\.(txt|md)$/i.test(file.name)
-}
 
 const STATUS_TEXT: Record<KbDocument['status'], string> = {
   pending: '排隊中',
@@ -44,9 +39,6 @@ interface Props {
 export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
   const [docs, setDocs] = useState<KbDocument[] | null>(null)
   const [parsers, setParsers] = useState<ParserInfo[]>([])
-  const [parser, setParser] = useState('liteparse')
-  const [files, setFiles] = useState<File[]>([])
-  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(kb.name)
@@ -58,7 +50,6 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
   // without it the server's default is used)
   const [defaultWeight, setDefaultWeight] = useState<number | null>(null)
   const [weight, setWeight] = useState<number | null>(null)
-  const fileInput = useRef<HTMLInputElement>(null)
 
   const loadDocs = useCallback(() => {
     return api.listDocuments(kb.id).then(setDocs, (e) => setError(errorText(e, '無法載入文件')))
@@ -93,24 +84,9 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
     prevBusy.current = busy
   }, [busy, onDocumentsChanged])
 
-  const upload = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (files.length === 0 || uploading) return
-    setUploading(true)
-    setError(null)
-    const failures: string[] = []
-    for (const file of files) {
-      try {
-        await api.uploadDocument(kb.id, file, parser)
-      } catch (err) {
-        failures.push(`${file.name}：${errorText(err, '上傳失敗')}`)
-      }
-    }
-    setUploading(false)
-    setFiles([])
-    if (fileInput.current) fileInput.current.value = ''
-    if (failures.length > 0) setError(failures.join('\n'))
-    await loadDocs()
+  // each accepted file shows up in the list right away (queued); counts refresh with it
+  const uploaded = () => {
+    void loadDocs()
     onDocumentsChanged()
   }
 
@@ -164,8 +140,6 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
 
   const parserLabel = (id: string) =>
     id === 'text' ? '文字' : (parsers.find((p) => p.id === id)?.label.split('（')[0] ?? id)
-  const selectedParser = parsers.find((p) => p.id === parser)
-  const needsParser = files.length === 0 || !files.every(isTextFile)
 
   return (
     <div className={styles.detail}>
@@ -214,51 +188,14 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
         </div>
       )}
 
-      <form className={styles.card} onSubmit={upload}>
+      <section className={styles.card}>
         <h2 className={styles.cardTitle}>上傳文件</h2>
-        <div className={styles.uploadRow}>
-          <input
-            ref={fileInput}
-            type="file"
-            accept={ACCEPT}
-            multiple
-            aria-label="選擇檔案"
-            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-          />
-          {needsParser && (
-            <select
-              aria-label="解析器"
-              value={parser}
-              onChange={(e) => setParser(e.target.value)}
-            >
-              {parsers.map((p) => (
-                <option key={p.id} value={p.id} disabled={!p.available}>
-                  {p.label}
-                  {p.available ? '' : '（不可用）'}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            type="submit"
-            className={styles.primary}
-            disabled={
-              files.length === 0 || uploading || (needsParser && selectedParser?.available === false)
-            }
-          >
-            <Upload size={16} />
-            {uploading ? '上傳中…' : '上傳'}
-          </button>
-        </div>
-        {needsParser &&
-          parsers
-            .filter((p) => !p.available && p.reason)
-            .map((p) => (
-              <p key={p.id} className={styles.hint}>
-                {p.label.split('（')[0]}：{p.reason}
-              </p>
-            ))}
-      </form>
+        <UploadPanel
+          parsers={parsers}
+          upload={(file, parser) => api.uploadDocument(kb.id, file, parser)}
+          onUploaded={uploaded}
+        />
+      </section>
 
       <div className={styles.card}>
         <h2 className={styles.cardTitle}>文件</h2>
