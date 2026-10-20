@@ -566,3 +566,90 @@ def test_stale_folder_that_cannot_be_removed_fails_the_attempt(env, monkeypatch)
     got = store.get_document(conn, doc["id"])
     assert got["status"] == "failed" and "上次處理" in got["error"]
     assert parser.parsed == []
+
+
+# ---- documents wait while their parser is unavailable (e.g. vLLM still loading) ----
+
+
+def _two_parser_env(tmp_path, first_available=False):
+    settings = Settings(db_path=str(tmp_path / "t.db"), kb_dir=str(tmp_path / "kb"))
+    conn = connect(settings.db_path)
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO users (username, password_hash, created_at) VALUES ('u', 'h', ?)", (now_iso(),)
+    )
+    conn.commit()
+    kb = store.create_kb(conn, 1, "k", "")
+    ocr = FakeParser(available=first_available)
+    ocr.id = "ocr"
+    text = FakeParser()
+    services = build_kb_services(
+        settings, embedder=FakeEmbedder(), parsers=[ocr, text], threaded=False,
+        store=InMemoryChunkStore(),
+    )
+
+    def add_doc(parser_id):
+        doc = store.create_document(conn, kb["id"], "a.pdf", parser_id, 10)
+        path = services.file_path(kb["id"], doc["id"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF")
+        return doc
+
+    return conn, ocr, text, services, add_doc
+
+
+def test_document_waits_while_its_parser_is_unavailable(env):
+    conn, _, parser, services, add_doc = env
+    parser.available = False
+    doc = add_doc()
+    services.worker.enqueue(doc["id"])
+    got = store.get_document(conn, doc["id"])
+    assert (got["status"], got["error"]) == ("queued", None)
+    assert parser.parsed == []
+
+    parser.available = True  # the OCR service finished loading
+    services.worker.enqueue(doc["id"])
+    assert store.get_document(conn, doc["id"])["status"] == "ready"
+
+
+def test_unavailable_parser_does_not_hold_up_other_documents(tmp_path):
+    conn, ocr, text, services, add_doc = _two_parser_env(tmp_path)
+    waiting, other = add_doc("ocr"), add_doc("fake")  # the waiting one is older
+    services.worker.enqueue(other["id"])
+    assert store.get_document(conn, waiting["id"])["status"] == "queued"
+    assert store.get_document(conn, other["id"])["status"] == "ready"
+    assert ocr.parsed == [] and len(text.parsed) == 1
+    conn.close()
+
+
+def test_availability_is_checked_only_for_parsers_with_queued_documents(tmp_path, monkeypatch):
+    conn, ocr, text, services, add_doc = _two_parser_env(tmp_path, first_available=True)
+    checked: list[str] = []
+    for p in (ocr, text):
+        real = p.availability
+        monkeypatch.setattr(p, "availability", lambda p=p, real=real: checked.append(p.id) or real())
+    services.worker.enqueue(0)  # nothing queued: no service is asked
+    assert checked == []
+    add_doc("fake")
+    services.worker.enqueue(0)
+    assert checked == ["fake"]
+    conn.close()
+
+
+def test_failing_availability_check_counts_as_unavailable(env, monkeypatch):
+    conn, _, parser, services, add_doc = env
+
+    def broken():
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(parser, "availability", broken)
+    doc = add_doc()
+    services.worker.enqueue(doc["id"])
+    assert store.get_document(conn, doc["id"])["status"] == "queued"
+
+
+def test_unknown_parser_is_still_claimed_and_failed(env):
+    conn, kb, _, services, _ = env
+    doc = store.create_document(conn, kb["id"], "a.pdf", "gone", 10)
+    services.worker.enqueue(doc["id"])
+    assert store.get_document(conn, doc["id"])["status"] == "failed"
