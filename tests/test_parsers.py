@@ -521,3 +521,111 @@ def test_lightonocr_caps_crops_so_the_images_field_never_drops_one(tmp_path):
     # descriptions past the cap stay as text, without an image reference
     assert chunk.text.endswith(f"圖{MAX_CROPS_PER_PAGE + 4}")
     assert len(json.loads(_images_json(chunk.images))) == len(chunk.images)
+
+
+# ---- LiteParse embedded images ----
+
+
+def _save(path, size=(400, 300), color="red", fmt=None):
+    from PIL import Image
+
+    Image.new("RGB", size, color).save(path, format=fmt)
+    return path
+
+
+def test_liteparse_links_extracted_images(tmp_path):
+    from PIL import Image
+
+    from app.kb.parsers.base import ImageRef
+    from app.kb.parsers.liteparse_parser import link_images
+
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    _save(src / "img_p5_1.jpg", fmt="JPEG")
+    _save(src / "img_p5_2.png", size=(3000, 1000), color="blue")
+    markdown = "intro\n\n![](img_p5_1.jpg)\n\nmiddle\n\n![map](img_p5_2.png)\n\nend"
+    text, refs = link_images(markdown, 5, src, out)
+    assert text == (
+        "intro\n\n![圖片 1](img:img_5_1.png)\n\nmiddle\n\n![圖片 2](img:img_5_2.png) map\n\nend"
+    )
+    assert refs == [ImageRef("img_5_1.png", 400, 300), ImageRef("img_5_2.png", 1536, 512)]
+    with Image.open(out / "img_5_2.png") as image:
+        assert (image.format, image.size) == ("PNG", (1536, 512))
+
+
+def test_liteparse_drops_placeholders_without_a_usable_image(tmp_path):
+    from app.kb.parsers.liteparse_parser import link_images
+
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    (src / "img_p1_2.png").write_bytes(b"not an image")
+    _save(src / "img_p1_3.png", size=(8, 8))  # a spacer, too small to mean anything
+    _save(tmp_path / "outside.png")
+    markdown = (
+        "a ![](img_p1_1.png) b ![](img_p1_2.png) c ![](img_p1_3.png) "
+        "d ![](../outside.png) e ![logo](img_p1_9.tif) f"
+    )
+    text, refs = link_images(markdown, 1, src, out)
+    assert refs == []
+    assert text == "a  b  c  d  e logo f"
+    assert list(out.iterdir()) == []
+
+
+def test_liteparse_caps_images_per_page(tmp_path, monkeypatch):
+    from app.kb.parsers import liteparse_parser
+
+    monkeypatch.setattr(liteparse_parser, "MAX_IMAGES_PER_PAGE", 2)
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    for i in (1, 2, 3):
+        _save(src / f"img_p1_{i}.png")
+    text, refs = liteparse_parser.link_images(
+        "![](img_p1_1.png) ![](img_p1_2.png) ![x](img_p1_3.png)", 1, src, out
+    )
+    assert [r.name for r in refs] == ["img_1_1.png", "img_1_2.png"]
+    assert text == "![圖片 1](img:img_1_1.png) ![圖片 2](img:img_1_2.png) x"
+
+
+def _pdf_with_embedded_image(path):
+    """A one-page PDF with a small picture placed on it (not a full-page scan)."""
+    import pypdfium2 as pdfium
+    from PIL import Image
+
+    pdf = pdfium.PdfDocument.new()
+    page = pdf.new_page(612, 792)
+    image = pdfium.PdfImage.new(pdf)
+    image.set_bitmap(pdfium.PdfBitmap.from_pil(Image.new("RGB", (400, 300), (200, 30, 30))))
+    image.set_matrix(pdfium.PdfMatrix().scale(200, 150).translate(100, 400))
+    page.insert_obj(image)
+    page.gen_content()
+    pdf.save(path)
+    return path
+
+
+def test_liteparse_appends_extracted_images_the_markdown_does_not_mention(tmp_path):
+    from app.kb.parsers.liteparse_parser import link_images
+
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    for name in ("img_p2_1.png", "img_p2_2.png", "img_p3_1.png"):
+        _save(src / name)
+    text, refs = link_images("text ![](img_p2_2.png)", 2, src, out)
+    assert [r.name for r in refs] == ["img_2_1.png", "img_2_2.png"]
+    # the linked image keeps its place; the unmentioned one of this page goes last
+    assert text == "text ![圖片 1](img:img_2_1.png)\n\n![圖片 2](img:img_2_2.png)"
+
+
+def test_liteparse_pdf_pages_carry_their_embedded_images(tmp_path):
+    path = _pdf_with_embedded_image(tmp_path / "embed.pdf")
+    out = tmp_path / "out"
+    out.mkdir()
+    (chunk,) = LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+    assert chunk.kind == "page_image" and chunk.page_image.name == "page_1.png"
+    assert [r.name for r in chunk.images] == ["img_1_1.png"]
+    assert "![圖片 1](img:img_1_1.png)" in chunk.text
+    assert "img_p" not in chunk.text
+    assert sorted(p.name for p in out.iterdir()) == ["img_1_1.png", "page_1.png"]
