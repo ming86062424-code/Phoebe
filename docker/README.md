@@ -1,6 +1,6 @@
 # Docker 部署
 
-服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。資料位置：
+服務：`web`（Gunicorn）、`worker`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。每個服務的功能、互相呼叫的方式與資料流程見 [docs/services.md](../docs/services.md)。資料位置：
 
 | 位置 | 內容 |
 |---|---|
