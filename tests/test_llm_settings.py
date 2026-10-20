@@ -66,13 +66,6 @@ def test_boundaries_are_accepted(conn, env_settings):
     assert s.temperature == 2.0 and len(s.system_prompt) == 4000
 
 
-def test_admin_usernames_parsing(monkeypatch):
-    monkeypatch.setenv("ADMIN_USERNAMES", " alice, bob ,,")
-    assert Settings.from_env().admin_usernames == ("alice", "bob")
-    monkeypatch.delenv("ADMIN_USERNAMES")
-    assert Settings.from_env().admin_usernames == ()
-
-
 def test_gemini_env_settings(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_MODEL", raising=False)

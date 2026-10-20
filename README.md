@@ -143,7 +143,7 @@ uv run --group eval pytest evals -v
 
 ## 管理員與系統設定
 
-- 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAMES=alice,bob`，以逗號分隔，帳號大小寫需與登入帳號完全相符。修改 `.env` 後必須重新啟動服務才會生效。
+- 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`，服務啟動時會自動建立這個帳號，不需要註冊。之後以 `.env` 為準：改了密碼重新啟動就會生效（該帳號原本的登入會被登出）；若已有人註冊了同名帳號，密碼會被改成 `.env` 的值並成為管理員。`.env` 已被 git 忽略，但密碼是明文，請保護好這個檔案。
 - 只有管理員會在側邊欄看到「系統設定」頁，所有使用者的聊天都套用這份設定：
   - LLM 供應商：本機 Ollama 或 Google Gemini（未設定 `GEMINI_API_KEY` 時 Gemini 選項停用）
   - 模型：從目前提供者即時取得模型清單後選擇
@@ -167,7 +167,8 @@ uv run --group eval pytest evals -v
 | `CHAT_MODEL` | `gemma4:e4b` | 聊天使用的模型（Ollama 預設值；可在「系統設定」頁覆寫） |
 | `GEMINI_API_KEY` | 空 | Google Gemini API 金鑰；只能放在 `.env`／`docker/.env`，留空則「系統設定」中的 Gemini 選項停用 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini 預設模型（可在「系統設定」頁覆寫） |
-| `ADMIN_USERNAMES` | 空 | 管理員帳號，以逗號分隔（大小寫需完全相符） |
+| `ADMIN_USERNAME` | 空 | 管理員帳號，啟動時自動建立（3–32 字元） |
+| `ADMIN_PASSWORD` | 空 | 管理員密碼，每次啟動同步到資料庫（8 字元以上，最多 72 位元組） |
 | `EVAL_JUDGE_MODEL` | `qwen3.5:4b` | 評測的裁判模型 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |

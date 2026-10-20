@@ -31,6 +31,21 @@ def _non_negative_int(name: str, raw: str) -> int:
     return value
 
 
+def _check_admin(username: str, password: str) -> None:
+    """The admin account from .env follows the same rules as registration."""
+    if not username and not password:
+        return
+    if not username or not password:
+        raise ValueError("ADMIN_USERNAME 與 ADMIN_PASSWORD 必須同時設定")
+    if not 3 <= len(username) <= 32:
+        raise ValueError("ADMIN_USERNAME 長度需為 3 到 32 個字元")
+    if len(password) < 8:
+        raise ValueError("ADMIN_PASSWORD 至少需要 8 個字元")
+    # bcrypt ignores everything past 72 bytes
+    if len(password.encode()) > 72:
+        raise ValueError("ADMIN_PASSWORD 最多 72 個位元組")
+
+
 @dataclass(frozen=True)
 class Settings:
     ollama_base_url: str = "http://localhost:11434"
@@ -57,7 +72,8 @@ class Settings:
     kb_worker_poll_seconds: float = 2.0
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0
-    admin_usernames: tuple[str, ...] = ()
+    admin_username: str = ""
+    admin_password: str = field(default="", repr=False)
     gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = "gemini-2.5-flash"
 
@@ -103,16 +119,18 @@ class Settings:
             kb_heartbeat_seconds=float(
                 os.environ.get("KB_HEARTBEAT_SECONDS", d.kb_heartbeat_seconds)
             ),
-            admin_usernames=tuple(
-                n.strip()
-                for n in os.environ.get("ADMIN_USERNAMES", "").split(",")
-                if n.strip()
-            ),
+            admin_username=os.environ.get("ADMIN_USERNAME", "").strip(),
+            admin_password=os.environ.get("ADMIN_PASSWORD", ""),
             gemini_api_key=os.environ.get("GEMINI_API_KEY", d.gemini_api_key).strip(),
             gemini_model=os.environ.get("GEMINI_MODEL", d.gemini_model),
         )
         if settings.kb_heartbeat_seconds >= settings.kb_stale_seconds:
             raise ValueError("KB_HEARTBEAT_SECONDS 必須小於 KB_STALE_SECONDS")
+        if os.environ.get("ADMIN_USERNAMES", "").strip():
+            raise ValueError(
+                "ADMIN_USERNAMES 已不再使用，請改設 ADMIN_USERNAME 與 ADMIN_PASSWORD"
+            )
+        _check_admin(settings.admin_username, settings.admin_password)
         if settings.reply_lock_ttl_seconds <= REPLY_HEARTBEAT_SECONDS:
             raise ValueError(
                 f"REPLY_LOCK_TTL_SECONDS 必須大於 {REPLY_HEARTBEAT_SECONDS}（回覆鎖的更新間隔）"

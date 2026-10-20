@@ -23,10 +23,14 @@ def fake_ollama(monkeypatch):
 
 
 def _client(settings, kb_services, username, **overrides):
-    app = create_app(replace(settings, admin_usernames=("admin",), **overrides), kb_services)
+    app = create_app(
+        replace(settings, admin_username="admin", admin_password="password123", **overrides),
+        kb_services,
+    )
     c = TestClient(app)
     creds = {"username": username, "password": "password123"}
-    assert c.post("/api/auth/register", json=creds).status_code == 201
+    if username != "admin":  # the admin account comes from settings
+        assert c.post("/api/auth/register", json=creds).status_code == 201
     assert c.post("/api/auth/login", json=creds).status_code == 200
     return c
 

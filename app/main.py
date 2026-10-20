@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.auth import ensure_admin
 from app.config import Settings
 from app.db import connect, init_db
 from app.kb.services import KbServices, build_kb_services
@@ -18,6 +19,8 @@ def create_app(
     conn = connect(settings.db_path)
     try:
         init_db(conn)
+        if settings.admin_username:
+            ensure_admin(conn, settings.admin_username, settings.admin_password)
     finally:
         conn.close()
     kb_services = kb_services or build_kb_services(settings)
