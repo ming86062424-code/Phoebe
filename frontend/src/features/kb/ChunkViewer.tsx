@@ -19,11 +19,11 @@ const METHODS: Record<string, { name: string; method: string }> = {
   lightonocr: {
     name: 'LightOnOCR',
     method:
-      '每頁一塊。每頁送給 LightOnOCR（grounding 模式）辨識，去掉頁首、頁尾、頁碼，依座標裁出圖片並附上描述；向量由 OCR 整理出的文字產生。',
+      '每頁一塊（辨識不到文字的頁面不建立）。每頁送給 LightOnOCR（grounding 模式）辨識，去掉頁首、頁尾、頁碼，依座標裁出圖片並附上描述；向量由「檔名＋OCR 整理出的文字」產生。',
   },
   text: {
     name: '文字',
-    method: 'txt 依段落合併、md 依標題分段，每塊最多 1500 字（過長的段落再切開）；向量由文字產生。',
+    method: 'txt 依段落合併、md 依標題分段，每塊最多 1500 字（過長的段落再切開）；向量由「檔名＋文字」產生。',
   },
 }
 

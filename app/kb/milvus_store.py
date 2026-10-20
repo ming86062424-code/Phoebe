@@ -45,8 +45,8 @@ OUTPUT_FIELDS = [
     "kb_id", "document_id", "filename", "page", "chunk_index", "text", "kind", "images",
     "page_image",
 ]  # fmt: skip
-# Milvus caps offset + limit of a query at 16384 rows
-QUERY_LIMIT = 16384
+# rows per round trip when listing a document's chunks
+QUERY_BATCH = 1000
 
 
 class MilvusChunkStore:
@@ -223,16 +223,23 @@ class MilvusChunkStore:
     def list_chunks(self, kb_id: int, document_id: int) -> list[Hit]:
         if not self._exists():
             return []
+        # an iterator, not one query: a long text file can have more chunks than a single
+        # query returns (offset + limit <= 16384)
+        rows: list[dict] = []
         try:
-            rows = self._conn().query(
+            iterator = self._conn().query_iterator(
                 self._collection,
+                batch_size=QUERY_BATCH,
                 filter=f"kb_id == {int(kb_id)} and document_id == {int(document_id)}",
                 output_fields=["id", *OUTPUT_FIELDS],
-                # one chunk per page: a document never comes near Milvus' query window
-                limit=QUERY_LIMIT,
                 consistency_level="Strong",
                 timeout=TIMEOUT,
             )
+            try:
+                while batch := iterator.next():
+                    rows.extend(batch)
+            finally:
+                iterator.close()
         except Exception as exc:
             raise _translate(exc) from exc
         hits = [_hit(str(row["id"]), row, 0.0) for row in rows]

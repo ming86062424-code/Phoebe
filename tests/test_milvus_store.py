@@ -69,10 +69,21 @@ class FakeClient:
         self.create_kwargs = kwargs
         self.exists = True
 
-    def query(self, name, **kwargs):
+    def query_iterator(self, name, **kwargs):
         self._maybe_fail()
-        self.calls.append(("query", name, kwargs))
-        return list(self.query_result)
+        self.calls.append(("query_iterator", name, kwargs))
+        size = kwargs["batch_size"]
+        batches = [self.query_result[i : i + size] for i in range(0, len(self.query_result), size)]
+        client = self
+
+        class Iterator:
+            def next(self):
+                return batches.pop(0) if batches else []
+
+            def close(self):
+                client.calls.append(("iterator_closed", name, {}))
+
+        return Iterator()
 
     def insert(self, name, rows, **kwargs):
         self._maybe_fail()
@@ -483,7 +494,7 @@ def test_list_chunks_queries_one_document_and_orders_by_chunk_index():
     client = FakeClient(exists=True, query_result=rows)
     store = MilvusChunkStore("http://x", "", "c", client=client)
     hits = store.list_chunks(1, 10)
-    (call,) = [c for c in client.calls if c[0] == "query"]
+    (call,) = [c for c in client.calls if c[0] == "query_iterator"]
     assert call[2]["filter"] == "kb_id == 1 and document_id == 10"
     assert "chunk_index" in call[2]["output_fields"]
     assert [(h.chunk_index, h.page, h.text) for h in hits] == [(0, 1, "a"), (1, 2, "b")]
@@ -491,10 +502,25 @@ def test_list_chunks_queries_one_document_and_orders_by_chunk_index():
     assert hits[0].page_image == ImageRef("page_1.png", 6, 8)
 
 
+def test_list_chunks_reads_every_batch(monkeypatch):
+    from app.kb import milvus_store
+
+    monkeypatch.setattr(milvus_store, "QUERY_BATCH", 2)
+    rows = [
+        {"id": f"10:{i}", "kb_id": 1, "document_id": 10, "filename": "a.txt", "page": 0,
+         "chunk_index": i, "text": str(i), "kind": "text", "images": "[]", "page_image": ""}
+        for i in reversed(range(5))
+    ]  # fmt: skip
+    client = FakeClient(exists=True, query_result=rows)
+    hits = MilvusChunkStore("http://x", "", "c", client=client).list_chunks(1, 10)
+    assert [h.chunk_index for h in hits] == [0, 1, 2, 3, 4]
+    assert ("iterator_closed", "c", {}) in client.calls
+
+
 def test_list_chunks_without_a_collection_is_empty():
     client = FakeClient(exists=False)
     assert MilvusChunkStore("http://x", "", "c", client=client).list_chunks(1, 10) == []
-    assert not [c for c in client.calls if c[0] == "query"]
+    assert not [c for c in client.calls if c[0] == "query_iterator"]
 
 
 def test_list_chunks_translates_errors():

@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -50,6 +51,9 @@ class Source:
         return asdict(self)
 
 
+_IMAGE_MARKER = re.compile(r"!\[([^\]\n]*)\]\(img:[^)\s]+\)")
+
+
 @dataclass(frozen=True)
 class Chunk:
     """One stored chunk of a document, as the chunk viewer shows it."""
@@ -62,7 +66,8 @@ class Chunk:
     page_image: dict | None = None
 
     def to_dict(self) -> dict:
-        return {**asdict(self), "chars": len(self.text)}
+        # an image marker ![圖片 1](img:NAME) counts as its label, not as markup
+        return {**asdict(self), "chars": len(_IMAGE_MARKER.sub(r"\1", self.text))}
 
 
 def normalize_cosine(score: float) -> float:

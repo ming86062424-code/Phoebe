@@ -490,7 +490,7 @@ def test_list_chunks_returns_the_documents_chunks_in_order(index, tmp_path):
         {"index": 1, "page": 1, "kind": "text", "text": "第一頁的文字", "chars": 6,
          "images": [], "page_image": None},
         {"index": 2, "page": 2, "kind": "page_image", "text": "第二頁 ![圖片 1](img:img_2_1.png) 圖",
-         "chars": 30, "images": [{"name": "img_2_1.png", "width": 3, "height": 4}],
+         "chars": 10, "images": [{"name": "img_2_1.png", "width": 3, "height": 4}],
          "page_image": {"name": "page_2.png", "width": 6, "height": 8}},
         {"index": 3, "page": 4, "kind": "text", "text": "第四頁", "chars": 3,
          "images": [], "page_image": None},
