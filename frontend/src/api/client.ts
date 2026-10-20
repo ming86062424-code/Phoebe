@@ -1,6 +1,7 @@
 import type {
   Conversation,
   ConversationDetail,
+  DocumentChunks,
   KbDocument,
   KnowledgeBase,
   LlmProvider,
@@ -122,6 +123,8 @@ export const api = {
   },
   deleteDocument: (kbId: number, docId: number) =>
     empty(`/api/kbs/${kbId}/documents/${docId}`, jsonInit('DELETE')),
+  listChunks: (kbId: number, docId: number) =>
+    json<DocumentChunks>(`/api/kbs/${kbId}/documents/${docId}/chunks`),
   retryDocument: (kbId: number, docId: number) =>
     json<KbDocument>(`/api/kbs/${kbId}/documents/${docId}/retry`, jsonInit('POST')),
   search: (kbId: number, q: string, vectorWeight?: number) =>

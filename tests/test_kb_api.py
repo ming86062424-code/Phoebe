@@ -1,6 +1,6 @@
 import json
 
-from app.kb.parsers.base import ParsedChunk
+from app.kb.parsers.base import ParsedChunk, ParseError
 from tests.pdf_factory import make_pdf
 
 
@@ -662,3 +662,61 @@ def test_image_api_rejects_traversal(make_user, kb_services, settings):
         r = alice.get(base + tail)
         assert r.status_code == 404, tail
         assert r.headers.get("content-type") != "image/png", tail
+
+
+# ---- chunk viewer API ----
+
+
+def _chunks_url(kb_id, doc_id):
+    return f"/api/kbs/{kb_id}/documents/{doc_id}/chunks"
+
+
+def test_chunks_api_lists_the_documents_chunks(make_user):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+    r = alice.get(_chunks_url(kb["id"], doc["id"]))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["document"]["id"] == doc["id"] and body["document"]["filename"] == "a.pdf"
+    assert [(c["index"], c["page"], c["text"], c["chars"]) for c in body["chunks"]] == [
+        (1, 1, "apple banana", 12),
+        (2, 2, "cherry durian", 13),
+    ]
+
+
+def test_chunks_api_is_401_logged_out_and_404_for_other_users(make_user, client):
+    alice, bob = make_user("alice"), make_user("bob")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+    url = _chunks_url(kb["id"], doc["id"])
+    assert client.get(url).status_code == 401
+    assert bob.get(url).status_code == 404
+    bob_kb = _create_kb(bob)
+    assert bob.get(_chunks_url(bob_kb["id"], doc["id"])).status_code == 404
+    assert alice.get(_chunks_url(kb["id"], 999)).status_code == 404
+
+
+def test_chunks_api_of_a_document_not_indexed_yet_is_empty(make_user, fake_parser):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    fake_parser.error = ParseError("壞掉了")
+    doc = _upload(alice, kb["id"]).json()
+    assert doc["status"] == "failed"
+    body = alice.get(_chunks_url(kb["id"], doc["id"])).json()
+    assert body["chunks"] == [] and body["document"]["status"] == "failed"
+
+
+def test_chunks_api_reports_a_store_failure(make_user, kb_services, monkeypatch):
+    from app.kb.chunk_store import KnowledgeStoreError
+
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    doc = _upload(alice, kb["id"]).json()
+
+    def down(*_):
+        raise KnowledgeStoreError("無法連線到 Milvus")
+
+    monkeypatch.setattr(kb_services.index, "list_chunks", down)
+    r = alice.get(_chunks_url(kb["id"], doc["id"]))
+    assert r.status_code == 503 and r.json()["detail"] == "無法讀取切塊：無法連線到 Milvus"

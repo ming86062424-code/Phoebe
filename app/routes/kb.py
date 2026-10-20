@@ -268,6 +268,26 @@ def delete_document(
     return Response(status_code=204)
 
 
+@router.get("/kbs/{kb_id}/documents/{doc_id}/chunks")
+async def document_chunks(
+    kb_id: int,
+    doc_id: int,
+    user: dict = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+    kb: KbServices = Depends(get_kb_services),
+):
+    """How the document was split: its stored chunks, in order (empty until indexed)."""
+    _require_kb(conn, user, kb_id)
+    doc = store.get_document(conn, doc_id)
+    if doc is None or doc["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail="找不到文件")
+    try:
+        chunks = await run_in_threadpool(kb.index.list_chunks, kb_id, doc_id)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"無法讀取切塊：{e}") from e
+    return {"document": doc, "chunks": [c.to_dict() for c in chunks]}
+
+
 @router.post("/kbs/{kb_id}/documents/{doc_id}/retry")
 def retry_document(
     kb_id: int,

@@ -4,15 +4,18 @@ import { useNavigate, useParams } from 'react-router'
 import { api, errorText } from '../../api/client'
 import type { KnowledgeBase } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
+import ChunkViewer from './ChunkViewer'
 import KbDetail from './KbDetail'
 import styles from './KbPage.module.css'
 
-function parseId(raw: string | undefined): number | null {
-  return raw && /^\d+$/.test(raw) ? Number(raw) : null
+/** `/kb/<kb>` or `/kb/<kb>/documents/<doc>` (the document's chunk viewer). */
+function parsePath(raw: string | undefined): { kbId: number | null; docId: number | null } {
+  const m = raw?.match(/^(\d+)(?:\/documents\/(\d+))?$/)
+  return m ? { kbId: Number(m[1]), docId: m[2] ? Number(m[2]) : null } : { kbId: null, docId: null }
 }
 
 export default function KbPage() {
-  const activeId = parseId(useParams()['*'])
+  const { kbId: activeId, docId } = parsePath(useParams()['*'])
   const navigate = useNavigate()
   const [kbs, setKbs] = useState<KnowledgeBase[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -115,12 +118,20 @@ export default function KbPage() {
         </ul>
       </nav>
       <section className={styles.main}>
-        {active ? (
+        {active && docId !== null ? (
+          <ChunkViewer
+            key={`${active.id}-${docId}`}
+            kb={active}
+            documentId={docId}
+            onBack={() => navigate(`/kb/${active.id}`)}
+          />
+        ) : active ? (
           <KbDetail
             key={active.id}
             kb={active}
             onChanged={(kb) => setKbs((prev) => (prev ?? []).map((k) => (k.id === kb.id ? { ...k, ...kb } : k)))}
             onDocumentsChanged={reload}
+            onViewChunks={(doc) => navigate(`/kb/${active.id}/documents/${doc.id}`)}
           />
         ) : (
           kbs !== null && (
