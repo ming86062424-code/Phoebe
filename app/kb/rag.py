@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,15 +19,28 @@ MAX_IMAGE_EDGE = 1536
 class SourceImage:
     source_number: int  # the [編號] of the source the image belongs to (1-based)
     data: bytes  # PNG
+    # which picture it is, e.g. 「第 5 頁整頁」 or 「第 5 頁的圖片 1」 (the name the chunk
+    # text uses), so the model can tie the image to its description
+    label: str = ""
 
 
 def _where(source: Source) -> str:
     return "全文" if source.page == 0 else f"第 {source.page} 頁"
 
 
+def _image_label(source: Source, name: str, is_page: bool) -> str:
+    """「第 5 頁整頁」, or the picture's name in the chunk text: 「第 5 頁的圖片 1」."""
+    where = _where(source)
+    if is_page:
+        return f"{where}整頁"
+    named = re.search(rf"!\[([^\]]+)\]\(img:{re.escape(name)}\)", source.text)
+    return f"{where}的{named.group(1)}" if named else f"{where}的另一張圖"
+
+
 def _image_lines(images: list[SourceImage]) -> str:
     mapping = "\n".join(
-        f"附圖 {i} → [{image.source_number}]" for i, image in enumerate(images, start=1)
+        f"附圖 {i} → [{image.source_number}] {image.label}".rstrip()
+        for i, image in enumerate(images, start=1)
     )
     return f"\n\n附圖依序對應參考資料 [編號]：\n{mapping}"
 
@@ -81,8 +95,9 @@ def load_source_images(
         return found
     seen: set[tuple[int, str]] = set()  # an image cited by several sources is sent once
     for number, source in enumerate(sources, start=1):
-        refs = ([source.page_image] if source.page_image else []) + list(source.images)
-        for ref in refs:
+        refs = [(ref, True) for ref in ([source.page_image] if source.page_image else [])]
+        refs += [(ref, False) for ref in source.images]
+        for ref, is_page in refs:
             if len(found) >= limit:
                 return found
             name = ref.get("name") if isinstance(ref, dict) else None
@@ -103,5 +118,5 @@ def load_source_images(
                     "參考圖片無法讀取，略過：文件 %s 的 %s（%s）", source.document_id, name, e
                 )
                 continue
-            found.append(SourceImage(number, data))
+            found.append(SourceImage(number, data, _image_label(source, name, is_page)))
     return found
