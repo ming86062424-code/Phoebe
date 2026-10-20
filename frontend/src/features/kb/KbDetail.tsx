@@ -1,22 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Pencil, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { Layers, Pencil, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import type { KbDocument, KnowledgeBase, ParserInfo, Source } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
 import { SourceCards } from './SourceCard'
 import UploadPanel from './UploadPanel'
+import { STATUS_TEXT } from './documentStatus'
 import styles from './KbDetail.module.css'
 
 const POLL_MS = 2000
-
-const STATUS_TEXT: Record<KbDocument['status'], string> = {
-  pending: '排隊中',
-  queued: '排隊中',
-  parsing: '解析中',
-  indexing: '建立索引中',
-  ready: '完成',
-  failed: '失敗',
-}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
@@ -34,9 +26,10 @@ interface Props {
   kb: KnowledgeBase
   onChanged(kb: KnowledgeBase): void
   onDocumentsChanged(): void
+  onViewChunks(doc: KbDocument): void
 }
 
-export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
+export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChunks }: Props) {
   const [docs, setDocs] = useState<KbDocument[] | null>(null)
   const [parsers, setParsers] = useState<ParserInfo[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -225,6 +218,17 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
                   </td>
                   <td>{d.status === 'ready' ? d.chunk_count : '–'}</td>
                   <td className={styles.actions}>
+                    {d.status === 'ready' && d.chunk_count > 0 && (
+                      <button
+                        type="button"
+                        className={styles.icon}
+                        aria-label={`查看切塊 ${d.filename}`}
+                        title="查看切塊"
+                        onClick={() => onViewChunks(d)}
+                      >
+                        <Layers size={14} />
+                      </button>
+                    )}
                     {d.status === 'failed' && (
                       <button
                         type="button"

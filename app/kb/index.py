@@ -50,6 +50,21 @@ class Source:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class Chunk:
+    """One stored chunk of a document, as the chunk viewer shows it."""
+
+    index: int  # 1-based position in the document
+    page: int  # 0 for text files
+    kind: str  # "text" or "page_image"
+    text: str
+    images: list[dict] = field(default_factory=list)  # [{"name", "width", "height"}]
+    page_image: dict | None = None
+
+    def to_dict(self) -> dict:
+        return {**asdict(self), "chars": len(self.text)}
+
+
 def normalize_cosine(score: float) -> float:
     """Milvus WeightedRanker (norm_score) for COSINE: [-1, 1] -> [0, 1]."""
     return (1 + score) * 0.5
@@ -196,6 +211,21 @@ class KnowledgeIndex:
             for i, vector in zip(batch, found, strict=True):
                 vectors[i] = vector
         return vectors  # type: ignore[return-value]
+
+    def list_chunks(self, kb_id: int, document_id: int) -> list[Chunk]:
+        """The document's chunks exactly as stored (and as the model would get them)."""
+        hits = self._store.list_chunks(kb_id, document_id)
+        return [
+            Chunk(
+                index=i,
+                page=hit.page,
+                kind=hit.kind,
+                text=hit.text,
+                images=[_image_dict(ref) for ref in hit.images],
+                page_image=None if hit.page_image is None else _image_dict(hit.page_image),
+            )
+            for i, hit in enumerate(hits, start=1)
+        ]
 
     def delete_document(self, kb_id: int, document_id: int) -> None:
         self._store.delete_document(kb_id, document_id)

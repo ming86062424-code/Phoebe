@@ -223,4 +223,54 @@ describe('KbPage', () => {
     expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=q')).toBe(true)
     expect(screen.queryByRole('slider')).not.toBeInTheDocument()
   })
+
+  it('opens the chunk viewer of a document and comes back', async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc(), doc({ id: 11, filename: 'b.pdf', status: 'parsing' })]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      if (url === '/api/search-settings') return Promise.resolve(jsonResponse({ vector_weight: 0.5, top_k: 5 }))
+      if (url === '/api/kbs/1/documents/10/chunks')
+        return Promise.resolve(
+          jsonResponse({ document: doc(), chunks: [{ index: 1, page: 1, kind: 'text', text: '第一塊內容', chars: 5, images: [], page_image: null }] }),
+        )
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    await userEvent.click(await screen.findByRole('button', { name: '查看切塊 a.pdf' }))
+    await waitFor(() => expect(window.location.hash).toBe('#/kb/1/documents/10'))
+    expect(await screen.findByText('第一塊內容')).toBeInTheDocument()
+    // the knowledge base stays selected in the list
+    expect(screen.getByRole('button', { name: /員工手冊/, current: 'page' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '返回 員工手冊' }))
+    await waitFor(() => expect(window.location.hash).toBe('#/kb/1'))
+    expect(await screen.findByRole('heading', { name: '員工手冊' })).toBeInTheDocument()
+  })
+
+  it('opens the chunk viewer straight from its address', async () => {
+    window.location.hash = '#/kb/1/documents/10'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents/10/chunks')
+        return Promise.resolve(jsonResponse({ document: doc(), chunks: [] }))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    expect(await screen.findByRole('heading', { name: 'a.pdf' })).toBeInTheDocument()
+    expect(window.location.hash).toBe('#/kb/1/documents/10')
+  })
+
+  it('only offers the chunk viewer for documents that have chunks', async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc({ id: 11, filename: 'b.pdf', status: 'parsing' })]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    expect(await screen.findByText('b.pdf')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '查看切塊 b.pdf' })).toBeNull()
+  })
 })

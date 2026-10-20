@@ -19,8 +19,9 @@ class FakeClient:
 
     def __init__(
         self, exists=False, dim=4, search_result=None, error=None, create_race=False,
-        analyzer=None, loaded=True, missing_fields=(),
+        analyzer=None, loaded=True, missing_fields=(), query_result=None,
     ):  # fmt: skip
+        self.query_result = query_result or []
         self.missing_fields = set(missing_fields)
         self.analyzer = TEXT_ANALYZER if analyzer is None else analyzer
         self.loaded = loaded
@@ -67,6 +68,11 @@ class FakeClient:
         self.calls.append(("create_collection", name, kwargs))
         self.create_kwargs = kwargs
         self.exists = True
+
+    def query(self, name, **kwargs):
+        self._maybe_fail()
+        self.calls.append(("query", name, kwargs))
+        return list(self.query_result)
 
     def insert(self, name, rows, **kwargs):
         self._maybe_fail()
@@ -412,6 +418,10 @@ def test_real_milvus_roundtrip():
                 ChunkRecord(2, 20, "other.pdf", 1, 0, "柴犬 in another knowledge base", [1.0, 0.0, 0.0, 0.0]),
             ]
         )  # fmt: skip
+        listed = store.list_chunks(1, 10)
+        assert [(h.chunk_index, h.page, h.kind) for h in listed] == [(0, 1, "page_image"), (1, 2, "text")]
+        assert listed[0].page_image == ImageRef("page_1.png", 1536, 1000)
+        assert store.list_chunks(2, 10) == []  # another knowledge base
         keyword = store.keyword_search(1, "柴犬", 5)
         assert [h.document_id for h in keyword] == [10] and keyword[0].page == 1
         assert keyword[0].kind == "page_image"
@@ -459,3 +469,37 @@ def test_real_milvus_natural_language_query_ignores_question_words():
         MilvusChunkStore(uri, os.environ.get("MILVUS_TOKEN", ""), name, client=client).ensure_ready(4)
     finally:
         client.drop_collection(name)
+
+
+def test_list_chunks_queries_one_document_and_orders_by_chunk_index():
+    rows = [
+        {"id": "10:1", "kb_id": 1, "document_id": 10, "filename": "a.pdf", "page": 2,
+         "chunk_index": 1, "text": "b", "kind": "text", "images": "[]", "page_image": ""},
+        {"id": "10:0", "kb_id": 1, "document_id": 10, "filename": "a.pdf", "page": 1,
+         "chunk_index": 0, "text": "a", "kind": "page_image",
+         "images": '[{"name": "img_1_1.png", "w": 3, "h": 4}]',
+         "page_image": '{"name": "page_1.png", "w": 6, "h": 8}'},
+    ]  # fmt: skip
+    client = FakeClient(exists=True, query_result=rows)
+    store = MilvusChunkStore("http://x", "", "c", client=client)
+    hits = store.list_chunks(1, 10)
+    (call,) = [c for c in client.calls if c[0] == "query"]
+    assert call[2]["filter"] == "kb_id == 1 and document_id == 10"
+    assert "chunk_index" in call[2]["output_fields"]
+    assert [(h.chunk_index, h.page, h.text) for h in hits] == [(0, 1, "a"), (1, 2, "b")]
+    assert hits[0].images == [ImageRef("img_1_1.png", 3, 4)]
+    assert hits[0].page_image == ImageRef("page_1.png", 6, 8)
+
+
+def test_list_chunks_without_a_collection_is_empty():
+    client = FakeClient(exists=False)
+    assert MilvusChunkStore("http://x", "", "c", client=client).list_chunks(1, 10) == []
+    assert not [c for c in client.calls if c[0] == "query"]
+
+
+def test_list_chunks_translates_errors():
+    client = FakeClient(exists=True, error=MilvusException(code=2, message="fail connect"))
+    store = MilvusChunkStore("http://x", "", "c", client=client)
+    store._exists_cached = True
+    with pytest.raises(KnowledgeStoreError):
+        store.list_chunks(1, 10)

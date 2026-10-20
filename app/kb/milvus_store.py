@@ -42,8 +42,11 @@ TEXT_ANALYZER = {
     "filter": ["cnalphanumonly", "lowercase", {"type": "stop", "stop_words": EN_STOP + ZH_STOP}],
 }
 OUTPUT_FIELDS = [
-    "kb_id", "document_id", "filename", "page", "text", "kind", "images", "page_image",
+    "kb_id", "document_id", "filename", "page", "chunk_index", "text", "kind", "images",
+    "page_image",
 ]  # fmt: skip
+# Milvus caps offset + limit of a query at 16384 rows
+QUERY_LIMIT = 16384
 
 
 class MilvusChunkStore:
@@ -213,20 +216,27 @@ class MilvusChunkStore:
         except Exception as exc:
             raise _translate(exc) from exc
         return [
-            Hit(
-                chunk_id=str(h["id"]),
-                kb_id=int(h["entity"]["kb_id"]),
-                document_id=int(h["entity"]["document_id"]),
-                filename=h["entity"]["filename"],
-                page=int(h["entity"]["page"]),
-                text=h["entity"]["text"],
-                score=float(h["distance"]),
-                kind=h["entity"].get("kind") or "text",
-                images=_parse_images(h["entity"].get("images")),
-                page_image=_parse_ref(h["entity"].get("page_image")),
-            )
+            _hit(str(h["id"]), h["entity"], float(h["distance"]))
             for h in (results[0] if results else [])
         ]
+
+    def list_chunks(self, kb_id: int, document_id: int) -> list[Hit]:
+        if not self._exists():
+            return []
+        try:
+            rows = self._conn().query(
+                self._collection,
+                filter=f"kb_id == {int(kb_id)} and document_id == {int(document_id)}",
+                output_fields=["id", *OUTPUT_FIELDS],
+                # one chunk per page: a document never comes near Milvus' query window
+                limit=QUERY_LIMIT,
+                consistency_level="Strong",
+                timeout=TIMEOUT,
+            )
+        except Exception as exc:
+            raise _translate(exc) from exc
+        hits = [_hit(str(row["id"]), row, 0.0) for row in rows]
+        return sorted(hits, key=lambda h: h.chunk_index)
 
 
 def _ref_json(ref: ImageRef) -> str:
@@ -263,6 +273,23 @@ def _to_ref(item) -> ImageRef | None:
         return ImageRef(str(item["name"]), int(item["w"]), int(item["h"]))
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _hit(chunk_id: str, entity: dict, score: float) -> Hit:
+    """A search hit or a queried row (the same fields) as a Hit."""
+    return Hit(
+        chunk_id=chunk_id,
+        kb_id=int(entity["kb_id"]),
+        document_id=int(entity["document_id"]),
+        filename=entity["filename"],
+        page=int(entity["page"]),
+        text=entity["text"],
+        score=score,
+        kind=entity.get("kind") or "text",
+        images=_parse_images(entity.get("images")),
+        page_image=_parse_ref(entity.get("page_image")),
+        chunk_index=int(entity.get("chunk_index") or 0),
+    )
 
 
 def _parse_ref(raw: str | None) -> ImageRef | None:

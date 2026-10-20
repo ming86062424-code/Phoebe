@@ -30,10 +30,11 @@ class Hit:
     filename: str
     page: int
     text: str
-    score: float  # cosine for dense_search, BM25 for keyword_search
+    score: float  # cosine for dense_search, BM25 for keyword_search, 0 for list_chunks
     kind: str = "text"
     images: list[ImageRef] = field(default_factory=list)
     page_image: ImageRef | None = None
+    chunk_index: int = 0  # position of the chunk in its document, from 0
 
 
 class ChunkStore(Protocol):
@@ -48,3 +49,7 @@ class ChunkStore(Protocol):
     def dense_search(self, kb_id: int, vector: list[float], limit: int) -> list[Hit]: ...
 
     def keyword_search(self, kb_id: int, query: str, limit: int) -> list[Hit]: ...
+
+    def list_chunks(self, kb_id: int, document_id: int) -> list[Hit]:
+        """All chunks of one document, in chunk_index order."""
+        ...
