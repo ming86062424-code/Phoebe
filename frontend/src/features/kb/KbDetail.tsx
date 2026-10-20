@@ -54,6 +54,10 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Source[] | null>(null)
   const [searching, setSearching] = useState(false)
+  // hybrid weight for the search test: starts at the chat's default (null until loaded;
+  // without it the server's default is used)
+  const [defaultWeight, setDefaultWeight] = useState<number | null>(null)
+  const [weight, setWeight] = useState<number | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const loadDocs = useCallback(() => {
@@ -64,6 +68,16 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
     void loadDocs()
     api.listParsers().then(setParsers, () => setParsers([]))
   }, [loadDocs])
+
+  useEffect(() => {
+    api.searchSettings().then(
+      (s) => {
+        setDefaultWeight(s.vector_weight)
+        setWeight(s.vector_weight)
+      },
+      () => undefined,
+    )
+  }, [])
 
   const busy = docs?.some((d) => d.status !== 'ready' && d.status !== 'failed') ?? false
   useEffect(() => {
@@ -140,7 +154,7 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
     if (!q || searching) return
     setSearching(true)
     try {
-      setResults(await api.search(kb.id, q))
+      setResults(await api.search(kb.id, q, weight ?? undefined))
     } catch (err) {
       setError(errorText(err, '檢索失敗'))
     } finally {
@@ -316,6 +330,32 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
             檢索
           </button>
         </div>
+        {weight !== null && (
+          <div className={styles.weightRow}>
+            <input
+              type="range"
+              aria-label="向量權重"
+              min={0}
+              max={1}
+              step={0.05}
+              value={weight}
+              onChange={(e) => setWeight(Number(e.target.value))}
+            />
+            <span className={styles.muted}>
+              {`向量 ${weight.toFixed(2)} ／ 關鍵字 ${(1 - weight).toFixed(2)}`}
+              {weight === defaultWeight && '（聊天預設）'}
+            </span>
+            {weight !== defaultWeight && (
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() => setWeight(defaultWeight)}
+              >
+                還原預設
+              </button>
+            )}
+          </div>
+        )}
         {results !== null &&
           (results.length === 0 ? (
             <p className={styles.muted}>沒有找到相關段落</p>

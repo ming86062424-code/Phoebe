@@ -411,7 +411,7 @@ def _ref(name, size=(4, 3)):
 
 def _kb_chat_with_images(c, kb_services, monkeypatch, layout):
     """A conversation on a knowledge base whose search returns `layout`: a list of
-    (document index, page_image name or None, [image names]) in RRF order.
+    (document index, page_image name or None, [image names]) in hybrid score order.
 
     Returns (cid, kb_id, document ids, {(document index, name): bytes written}).
     """

@@ -16,7 +16,7 @@ export interface RankedSource {
   number: number // the [編號] the model saw: the position in the original list
 }
 
-/** Highest RRF score first; the citation number stays the original position. */
+/** Highest hybrid score first; the citation number stays the original position. */
 export function rankSources(sources: Source[]): RankedSource[] {
   return sources
     .map((source, i) => ({ source, number: i + 1 }))

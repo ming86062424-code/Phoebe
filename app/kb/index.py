@@ -1,4 +1,5 @@
 import logging
+import math
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -10,8 +11,8 @@ from app.kb.parsers.base import ImageRef, ParsedChunk
 logger = logging.getLogger(__name__)
 
 MAX_TEXT_CHARS = 8192
-RRF_K = 60
 CANDIDATE_FACTOR = 4  # each retrieval path returns top_k * 4 candidates for fusion
+DEFAULT_VECTOR_WEIGHT = 0.5  # KB_VECTOR_WEIGHT; the keyword path gets the rest
 # page images per embedding request: ~8 PNGs of a 1536 px page stay far below the
 # embedder's 100 MB request cap, and only one batch of image bytes is held at a time
 IMAGE_BATCH_SIZE = 8
@@ -36,7 +37,7 @@ class Source:
     document_id: int
     filename: str
     page: int  # 0 for text files
-    score: float  # RRF score
+    score: float  # weighted hybrid score, 0..1
     text: str  # the whole chunk: for the model, the UI and the saved message
     vector_score: float | None = None  # cosine, None when the dense path missed it
     keyword_score: float | None = None  # BM25, None when the keyword path missed it
@@ -49,25 +50,49 @@ class Source:
         return asdict(self)
 
 
-def rrf_fuse(
-    dense: list[Hit], keyword: list[Hit], top_k: int
-) -> list[tuple[Hit, float, float | None, float | None]]:
-    """Reciprocal rank fusion: score = sum of 1 / (60 + rank), rank starting at 1.
+def normalize_cosine(score: float) -> float:
+    """Milvus WeightedRanker (norm_score) for COSINE: [-1, 1] -> [0, 1]."""
+    return (1 + score) * 0.5
 
-    Returns (hit, rrf score, cosine or None, bm25 or None), best first.
+
+def normalize_bm25(score: float) -> float:
+    """Milvus WeightedRanker (norm_score) for BM25: [0, inf) -> [0, 1)."""
+    return 2 * math.atan(score) / math.pi
+
+
+def weighted_fuse(
+    dense: list[Hit], keyword: list[Hit], top_k: int, vector_weight: float
+) -> list[tuple[Hit, float, float | None, float | None]]:
+    """Weighted hybrid score, as Milvus' WeightedRanker with norm_score (v2.6.25
+    internal/util/function/rerank/util.go):
+
+        score = w * normalize_cosine(cosine) + (1 - w) * normalize_bm25(bm25)
+
+    A path that did not return the hit contributes 0. Returns
+    (hit, score, cosine or None, bm25 or None), best first.
     """
-    fused: dict[str, float] = {}
+    if not 0 <= vector_weight <= 1:
+        raise ValueError("向量權重必須介於 0 到 1")
+    keyword_weight = 1 - vector_weight
     hits: dict[str, Hit] = {}
     vector_scores: dict[str, float] = {}
     keyword_scores: dict[str, float] = {}
-    for rank, hit in enumerate(dense, start=1):
-        fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+    for hit in dense:
         hits.setdefault(hit.chunk_id, hit)
         vector_scores.setdefault(hit.chunk_id, hit.score)
-    for rank, hit in enumerate(keyword, start=1):
-        fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+    for hit in keyword:
         hits.setdefault(hit.chunk_id, hit)
         keyword_scores.setdefault(hit.chunk_id, hit.score)
+
+    def score(cid: str) -> float:
+        total = 0.0
+        if cid in vector_scores:
+            total += vector_weight * normalize_cosine(vector_scores[cid])
+        if cid in keyword_scores:
+            total += keyword_weight * normalize_bm25(keyword_scores[cid])
+        return total
+
+    fused = {cid: score(cid) for cid in hits}
     # sorted() is stable, so ties keep first-seen order (dense list first)
     ranked = sorted(fused, key=lambda cid: fused[cid], reverse=True)[: max(top_k, 0)]
     return [
@@ -178,7 +203,10 @@ class KnowledgeIndex:
     def delete_kb(self, kb_id: int) -> None:
         self._store.delete_kb(kb_id)
 
-    def search(self, kb_id: int, query: str, top_k: int) -> list[Source]:
+    def search(
+        self, kb_id: int, query: str, top_k: int, vector_weight: float = DEFAULT_VECTOR_WEIGHT
+    ) -> list[Source]:
+        """Hybrid search; `vector_weight` (0..1) is the dense path's share of the score."""
         if top_k <= 0:
             return []
         vector = [float(x) for x in self._embedder.embed_queries([query])[0]]
@@ -191,7 +219,7 @@ class KnowledgeIndex:
                 document_id=hit.document_id,
                 filename=hit.filename,
                 page=hit.page,
-                score=round(rrf, 4),
+                score=round(fused, 4),
                 text=hit.text,
                 vector_score=None if vec is None else round(vec, 4),
                 keyword_score=None if kw is None else round(kw, 4),
@@ -199,5 +227,5 @@ class KnowledgeIndex:
                 images=[_image_dict(ref) for ref in hit.images],
                 page_image=None if hit.page_image is None else _image_dict(hit.page_image),
             )
-            for hit, rrf, vec, kw in rrf_fuse(dense, keyword, top_k)
+            for hit, fused, vec, kw in weighted_fuse(dense, keyword, top_k, vector_weight)
         ]

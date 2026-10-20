@@ -59,7 +59,9 @@ async def _with_knowledge(
         return Knowledge()
     question = next(m["content"] for m in reversed(history) if m["role"] == "user")
     try:
-        found = await run_in_threadpool(kb.index.search, kb_id, question, settings.kb_top_k)
+        found = await run_in_threadpool(
+            kb.index.search, kb_id, question, settings.kb_top_k, settings.kb_vector_weight
+        )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
     live = {d["id"] for d in kb_store.list_documents(conn, kb_id)}
