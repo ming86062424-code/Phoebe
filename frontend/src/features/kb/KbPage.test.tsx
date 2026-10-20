@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HashRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -71,16 +71,17 @@ describe('KbPage', () => {
     expect(await screen.findByText('尚未上傳文件')).toBeInTheDocument()
   })
 
-  it('lists documents, marks unavailable parsers and uploads with the chosen parser', async () => {
+  it('lists documents, marks unavailable parsers and uploads a picked file right away', async () => {
     window.location.hash = '#/kb/1'
     let uploaded: FormData | null = null
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
       if (url === '/api/kbs/1/documents' && init?.method === 'POST') {
         uploaded = init.body as FormData
-        return Promise.resolve(jsonResponse(doc({ id: 11, status: 'ready' }), 201))
+        return Promise.resolve(jsonResponse(doc({ id: 11, status: 'queued' }), 201))
       }
-      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
+      if (url === '/api/kbs/1/documents')
+        return Promise.resolve(jsonResponse(uploaded ? [doc(), doc({ id: 11, filename: 'new.pdf' })] : [doc()]))
       if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
       return Promise.reject(new Error('unexpected ' + url))
     })
@@ -92,10 +93,11 @@ describe('KbPage', () => {
 
     const file = new File(['%PDF-1.4'], 'new.pdf', { type: 'application/pdf' })
     await userEvent.upload(screen.getByLabelText('選擇檔案'), file)
-    await userEvent.click(screen.getByRole('button', { name: '上傳' }))
     await waitFor(() => expect(uploaded).not.toBeNull())
     expect(uploaded!.get('parser')).toBe('liteparse')
     expect((uploaded!.get('file') as File).name).toBe('new.pdf')
+    // the document list refreshes with the new file
+    expect(await screen.findByRole('cell', { name: 'new.pdf' })).toBeInTheDocument()
   })
 
   it('shows page progress and failure details', async () => {
@@ -118,55 +120,27 @@ describe('KbPage', () => {
     expect(screen.getByRole('button', { name: '重試 bad.pdf' })).toBeInTheDocument()
   })
 
-  it('accepts text and image files and hides the parser for txt and md', async () => {
+  it('uploads every file dropped on the upload zone', async () => {
     window.location.hash = '#/kb/1'
-    let uploaded: FormData | null = null
+    const names: string[] = []
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
       if (url === '/api/kbs/1/documents' && init?.method === 'POST') {
-        uploaded = init.body as FormData
-        return Promise.resolve(jsonResponse(doc({ id: 11, filename: 'a.md', parser: 'text' }), 201))
+        names.push(((init.body as FormData).get('file') as File).name)
+        return Promise.resolve(jsonResponse(doc({ id: 10 + names.length }), 201))
       }
-      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
       if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
       return Promise.reject(new Error('unexpected ' + url))
     })
     setup()
-    const input = await screen.findByLabelText('選擇檔案')
-    expect(input).toHaveAttribute('accept', '.pdf,.txt,.md,.png,.jpg,.jpeg,.webp')
-    expect(screen.getByRole('combobox', { name: '解析器' })).toBeInTheDocument()
-
-    await userEvent.upload(input, new File(['# 標題'], 'a.md', { type: 'text/markdown' }))
-    expect(screen.queryByRole('combobox', { name: '解析器' })).toBeNull()
-    await userEvent.upload(input, new File(['x'], 'b.TXT', { type: 'text/plain' }))
-    expect(screen.queryByRole('combobox', { name: '解析器' })).toBeNull()
-    await userEvent.upload(input, new File(['x'], 'c.png', { type: 'image/png' }))
-    expect(screen.getByRole('combobox', { name: '解析器' })).toBeInTheDocument()
-
-    await userEvent.upload(input, new File(['# 標題'], 'a.md', { type: 'text/markdown' }))
-    await userEvent.click(screen.getByRole('button', { name: '上傳' }))
-    await waitFor(() => expect(uploaded).not.toBeNull())
-    expect((uploaded!.get('file') as File).name).toBe('a.md')
+    const zone = await screen.findByRole('button', { name: /拖曳檔案到這裡/ })
+    const files = [new File(['%PDF'], 'a.pdf'), new File(['# 標題'], 'b.md'), new File(['x'], 'c.png')]
+    fireEvent.drop(zone, { dataTransfer: { files, types: ['Files'] } })
+    await waitFor(() => expect(names).toEqual(['a.pdf', 'b.md', 'c.png']))
   })
 
-  it('allows uploading text files even when the chosen parser is unavailable', async () => {
-    window.location.hash = '#/kb/1'
-    fetchMock.mockImplementation((url: string) => {
-      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
-      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
-      if (url === '/api/parsers')
-        return Promise.resolve(jsonResponse(parsers.map((p) => ({ ...p, available: false }))))
-      return Promise.reject(new Error('unexpected ' + url))
-    })
-    setup()
-    const input = await screen.findByLabelText('選擇檔案')
-    await userEvent.upload(input, new File(['x'], 'c.pdf', { type: 'application/pdf' }))
-    expect(screen.getByRole('button', { name: '上傳' })).toBeDisabled()
-    await userEvent.upload(input, new File(['x'], 'a.txt', { type: 'text/plain' }))
-    expect(screen.getByRole('button', { name: '上傳' })).toBeEnabled()
-  })
-
-  it('shows the upload error from the server', async () => {
+  it('shows the upload error from the server next to the file', async () => {
     window.location.hash = '#/kb/1'
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
@@ -178,8 +152,8 @@ describe('KbPage', () => {
     })
     setup()
     await userEvent.upload(await screen.findByLabelText('選擇檔案'), new File(['x'], 'a.txt'))
-    await userEvent.click(screen.getByRole('button', { name: '上傳' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('a.txt：無法讀取檔案內容')
+    const row = await screen.findByRole('listitem', { name: 'a.txt' })
+    expect(await within(row).findByText('無法讀取檔案內容')).toBeInTheDocument()
   })
 
   it('runs a retrieval test', async () => {
