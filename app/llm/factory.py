@@ -13,7 +13,10 @@ def build_chat_client(settings: Settings, llm: LlmSettings) -> ChatClient:
             settings.gemini_api_key, llm.gemini_model, think=settings.chat_think
         )
     return OllamaChatClient(
-        settings.ollama_base_url, llm.ollama_model, think=settings.chat_think
+        settings.ollama_base_url,
+        llm.ollama_model,
+        think=settings.chat_think,
+        num_ctx=settings.ollama_num_ctx,
     )
 
 

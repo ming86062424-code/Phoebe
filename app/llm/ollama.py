@@ -48,10 +48,12 @@ class OllamaChatClient:
         model: str,
         think: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
+        num_ctx: int | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.think = think
+        self.num_ctx = num_ctx  # context size; None keeps Ollama's own default
         self._transport = transport
 
     async def stream_chat(
@@ -77,8 +79,13 @@ class OllamaChatClient:
             "stream": True,
             "think": self.think,
         }
+        options: dict = {}
+        if self.num_ctx is not None:
+            options["num_ctx"] = self.num_ctx
         if temperature is not None:
-            payload["options"] = {"temperature": temperature}
+            options["temperature"] = temperature
+        if options:
+            payload["options"] = options
         timeout = httpx.Timeout(None, connect=5.0)
         try:
             async with httpx.AsyncClient(

@@ -16,6 +16,8 @@ def settings(tmp_path):
         db_path=str(tmp_path / "test.db"),
         frontend_dist=str(tmp_path / "no-dist"),
         kb_dir=str(tmp_path / "kb"),
+        # most tests exercise the Ollama path; the Gemini default has its own tests
+        llm_provider="ollama",
     )
 
 

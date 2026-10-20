@@ -167,6 +167,8 @@ uv run --group eval pytest evals -v
 | `CHAT_MODEL` | `gemma4:e4b` | 聊天使用的模型（Ollama 預設值；可在「系統設定」頁覆寫） |
 | `GEMINI_API_KEY` | 空 | Google Gemini API 金鑰；只能放在 `.env`／`docker/.env`，留空則「系統設定」中的 Gemini 選項停用 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini 預設模型（可在「系統設定」頁覆寫） |
+| `LLM_PROVIDER` | `gemini` | 預設的聊天供應商（`gemini` 或 `ollama`），可在「系統設定」頁覆寫 |
+| `OLLAMA_NUM_CTX` | `16384` | Ollama 每次對話的 context 長度。Ollama 本身預設只有 4096，知識庫回答帶整頁圖（每張約 740 token）時會被截斷 |
 | `ADMIN_USERNAME` | 空 | 管理員帳號，啟動時自動建立（3–32 字元） |
 | `ADMIN_PASSWORD` | 空 | 管理員密碼，每次啟動同步到資料庫（8 字元以上，最多 72 位元組） |
 | `EVAL_JUDGE_MODEL` | `qwen3.5:4b` | 評測的裁判模型 |
