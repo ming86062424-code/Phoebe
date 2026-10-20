@@ -82,6 +82,7 @@ class IngestWorker:
         self._status_stop = threading.Event()
         self._pending_removal: set[Path] = set()
         self._removal_lock = threading.Lock()
+        self._waiting_for: tuple[str, ...] = ()  # parsers whose documents are held back
 
     def requeue_stale(self) -> None:
         """Re-queue documents whose worker disappeared."""
@@ -191,11 +192,35 @@ class IngestWorker:
             self._drain()
 
     def _claim(self) -> int | None:
+        """Claim the oldest queued document whose parser can run now.
+
+        A document whose parser is unavailable (e.g. the vLLM OCR service is still loading
+        after a restart) stays queued instead of failing, and is picked up once the parser
+        is back. Only the parsers of queued documents are checked, so an idle worker never
+        polls the OCR service. Unknown parsers are still claimed (and fail clearly).
+        """
         conn = connect(self.db_path)
         try:
-            return store.claim_next_document(conn)
+            queued = store.queued_parsers(conn)
+            if not queued:
+                return None
+            waiting = tuple(
+                sorted(p for p in queued if p in self.parsers and not self._available(p))
+            )
+            if waiting != self._waiting_for:
+                if waiting:
+                    logger.info("解析器 %s 目前無法使用，相關文件先保留在佇列中", "、".join(waiting))
+                self._waiting_for = waiting
+            return store.claim_next_document(conn, waiting)
         finally:
             conn.close()
+
+    def _available(self, parser_id: str) -> bool:
+        try:
+            return bool(self.parsers[parser_id].availability()[0])
+        except Exception:
+            logger.warning("檢查解析器 %s 是否可用時失敗，先視為無法使用", parser_id, exc_info=True)
+            return False
 
     def _drain(self) -> None:
         while (doc_id := self._claim()) is not None:
