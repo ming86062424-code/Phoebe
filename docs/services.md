@@ -41,8 +41,51 @@
 ### 啟動順序
 
 - web 等 milvus、embedder 健康檢查通過後才啟動
-- ingest 等 web、milvus、embedder 健康後才啟動。vllm（需啟用 `lightonocr` profile）只要容器開始執行即可；沒啟用時 ingest 照常啟動，LightOnOCR 顯示未啟動，不必等健康：vLLM 載入模型要幾分鐘，這段期間 LiteParse 照常可用
+- ingest 等 web、milvus、embedder 健康後才啟動
+- vllm 只在啟用 `lightonocr` profile 時才會啟動。ingest 不等它健康：vLLM 載入模型要幾分鐘，這段期間 LiteParse 照常可用；沒啟用時 ingest 也照常啟動，LightOnOCR 顯示「目前無法使用」
 - LightOnOCR 的文件如果在 vLLM 就緒前排入佇列，會留在「排隊中」，等 vLLM 好了再自動處理
+
+## ingest：文件處理服務
+
+ingest 負責把上傳的文件變成可以檢索的 chunk。它是知識庫唯一的「處理者」：web 只負責接收檔案、排入佇列，之後的工作都由 ingest 完成。
+
+### 一份文件的處理流程
+
+1. 從佇列（SQLite 的 `kb_documents` 表）認領一份「排隊中」的文件
+2. 依文件類型與**知識庫設定的解析器**，呼叫對應的解析模組
+3. 請 embedder 為每個 chunk 產生向量
+4. 寫入 Milvus，文件狀態改為「完成」；失敗則記錄原因，可在知識庫頁重試
+
+### 解析模組在哪裡執行
+
+| 解析模組 | 用於 | 在哪裡執行 | ingest 做的事 |
+|---|---|---|---|
+| **LiteParse** | PDF、圖檔（知識庫設定為 LiteParse 時） | ingest 容器內，CPU | 全部：抽文字、Tesseract OCR、整頁圖、抽出內嵌圖片 |
+| **LightOnOCR** | PDF、圖檔（知識庫設定為 LightOnOCR 時） | 辨識在 **vllm** 服務（GPU） | 把每頁轉成圖片送給 vLLM，收到結果後解析區塊、裁切圖片、組成 markdown |
+| **文字解析** | txt、md（一律使用，不看知識庫設定） | ingest 容器內 | 全部：依段落或標題切塊 |
+
+新增解析模組時的原則：如果它只是一個 Python 套件（像 LiteParse），直接放進 ingest；如果它需要常駐的大型模型或 GPU（像 LightOnOCR），就交給獨立的模型服務，由 ingest 透過 HTTP 呼叫，並用 compose profile 讓它可以選擇是否啟動。
+
+### 同時處理
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `INGEST_CONCURRENCY` | 1 | ingest 同時處理幾份文件。一個分派者負責認領文件，最多交給這麼多條執行緒同時處理 |
+| `OCR_CONCURRENCY` | 4 | LightOnOCR 處理一份文件時，同時送給 vLLM 的頁數 |
+| `OCR_TIMEOUT_SECONDS` | 600 | 每一頁 OCR 請求的逾時秒數 |
+
+vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這個乘積不要超過 vLLM 的 `--max-num-seqs`（預設 4，`OCR_VLLM_MAX_NUM_SEQS`），超過的部分會在 vLLM 內排隊、拖慢每一頁。
+
+程式不限制這兩個值，換了更強的硬體時調高即可；目前的預設值是配合 RTX 2060 6 GB 與 16 GB 記憶體的 Docker 環境。實測數據見 [vllm-rtx2060.md](vllm-rtx2060.md)。
+
+**調高 `INGEST_CONCURRENCY` 前先看記憶體**（2026-10-23 實測）：LiteParse 每處理一份 PDF 都要把頁面轉成 400 DPI 的圖、跑 Tesseract，同時處理 2 份時 ingest 的記憶體高峰約 **3.2 GB**（一次一份時約 0.2–0.4 GB），embedder 高峰約 5 GB。Docker 虛擬機只有 15.5 GB，在同時開著 vLLM 和其他程式（例如約 5 GB 的 RAGFlow）的情況下設成 2，虛擬機記憶體不足，系統終止了 embedder，處理中的文件因此失敗；關掉 vLLM 後同樣設定就能順利完成。
+
+### 可靠性
+
+- **解析模組暫時不能用**（例如 vLLM 還在載入）：該解析器的文件留在「排隊中」，其他文件照常處理，恢復後自動接續
+- **心跳**：處理中的文件會定時更新時間；ingest 當掉而停住的文件，超過 `KB_STALE_SECONDS` 會被重新排入
+- **文件在處理中被刪除**：處理到下一頁時發現並停止，不會寫入任何 chunk
+- **執行緒安全**：PDF 轉圖用的 pdfium 不是執行緒安全的，所有 pypdfium2 的呼叫都經過同一把鎖；LiteParse 內建自己的 pdfium，不受影響
 
 ## Docker 外的服務
 

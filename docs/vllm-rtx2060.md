@@ -87,13 +87,32 @@ OCR_VLLM_MAX_NUM_SEQS=4
   - 錯誤訊息建議調高使用率，但第 2 步已經證明 0.85 不行。
 - **解法**：
   - 加上 `--enforce-eager`，不使用 CUDA graph，把那塊顯存留給 KV cache。代價是吞吐量比較低，但 OCR 一次只處理一頁，影響不大。
-  - 加上 `--max-num-seqs`，把同時序列數從 256 降到 8（現行預設再降為 4，以下 KV cache 數字是 8 條時的實測，將於 Task 6 以 4 條重新量測）。
+  - 加上 `--max-num-seqs`，把同時序列數從 256 降到 8，之後再降為 4（配合「一次送多頁」，見下方的速度實測）。降為 4 後重新量測，KV cache 仍是 1.28 GiB、99,243 tokens。
   - 兩者一起調整後，服務就能正常啟動。
 
 ### 4. 不支援 bfloat16
 
 - **原因**：RTX 2060 是 Turing 架構（compute capability 7.5）。bfloat16 要 Ampere（8.0）以上才有硬體支援。
 - **解法**：固定 `--dtype float16`。
+
+## 一次送多頁的速度實測（2026-10-23）
+
+LightOnOCR 一份文件可以同時送好幾頁給 vLLM（`OCR_CONCURRENCY`），讓 vLLM 用批次處理（continuous batching）同時算。
+
+測試條件：
+- `test_data/草莓園入園方案.pdf`，12 頁，解析器 LightOnOCR
+- `--max-num-seqs 4`，`INGEST_CONCURRENCY=1`
+- 同一台機器上另有 RAGFlow（約 5 GB 記憶體）在執行
+
+| `OCR_CONCURRENCY` | 總時間 | 每頁平均 | 加速 | 記憶體高峰（ingest／vLLM／embedder） |
+|---|---|---|---|---|
+| 1（舊的做法，一次一頁） | 630 秒 | 52.5 秒 | 1× | 223 MB／4.8 GB／4.1 GB |
+| 2 | 365 秒 | 30.4 秒 | 1.73× | 342 MB／4.6 GB／4.0 GB |
+| **4** | **279 秒** | **23.3 秒** | **2.26×** | 377 MB／4.7 GB／4.0 GB |
+
+- 一次 4 頁最快，記憶體只在 ingest 多用約 150 MB，因此 **`OCR_CONCURRENCY` 預設為 4**。
+- 加速不是線性的：RTX 2060 的運算量有限，又關掉了 CUDA graph（`--enforce-eager`），同時處理的頁越多，每頁越慢，但總時間仍明顯縮短。
+- `INGEST_CONCURRENCY` × `OCR_CONCURRENCY` 是 vLLM 同時收到的請求數。目前 1 × 4 剛好等於 `--max-num-seqs` 的 4；若把 `INGEST_CONCURRENCY` 調高，超過的請求會在 vLLM 內排隊，總處理量不會再增加，只是讓多份文件輪流前進。
 
 ## 和主機 Ollama 共用 GPU
 

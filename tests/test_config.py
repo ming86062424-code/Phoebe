@@ -356,9 +356,9 @@ def test_env_examples_document_ingest_concurrency():
 
 def test_ocr_concurrency_must_be_positive(monkeypatch):
     monkeypatch.delenv("OCR_CONCURRENCY", raising=False)
-    assert Settings.from_env().ocr_concurrency == 2
-    monkeypatch.setenv("OCR_CONCURRENCY", "4")
     assert Settings.from_env().ocr_concurrency == 4
+    monkeypatch.setenv("OCR_CONCURRENCY", "2")
+    assert Settings.from_env().ocr_concurrency == 2
     for bad in ("0", "abc", "-1"):
         monkeypatch.setenv("OCR_CONCURRENCY", bad)
         with pytest.raises(ValueError, match="OCR_CONCURRENCY 必須是正整數"):
@@ -379,7 +379,7 @@ def test_ocr_timeout_defaults_to_600_and_must_be_positive(monkeypatch):
 def test_env_examples_document_ocr_concurrency():
     for path in (PROJECT_ROOT / ".env.example", PROJECT_ROOT / "docker" / ".env.example"):
         text = path.read_text(encoding="utf-8")
-        assert "OCR_CONCURRENCY=2" in text and "OCR_TIMEOUT_SECONDS=600" in text
+        assert "OCR_CONCURRENCY=4" in text and "OCR_TIMEOUT_SECONDS=600" in text
         assert "每份文件同時送給 vLLM 的頁數" in text
         assert "--max-num-seqs" in text
 

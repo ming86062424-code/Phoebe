@@ -191,12 +191,16 @@ uv run --group eval pytest evals -v
 | `LITEPARSE_OCR_LANGUAGE` | `chi_tra+eng` | LiteParse 內建 Tesseract 的語言 |
 | `KB_INGEST_MODE` | `embedded` | 文件處理（ingest）：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.ingest_main`） |
 | `KB_INGEST_POLL_SECONDS` | `2` | ingest 輪詢間隔 |
+| `INGEST_CONCURRENCY` | `1` | ingest 同時處理幾份文件 |
+| `OCR_CONCURRENCY` | `4` | LightOnOCR 處理一份文件時，同時送給 vLLM 的頁數。`INGEST_CONCURRENCY` × `OCR_CONCURRENCY` 不要超過 vLLM 的 `--max-num-seqs`（預設 4） |
+| `OCR_TIMEOUT_SECONDS` | `600` | 每一頁 OCR 請求的逾時秒數 |
 | `KB_STALE_SECONDS` | `120` | 解析中逾時多久視為卡住並重新排入 |
 | `KB_HEARTBEAT_SECONDS` | `30` | 處理中的文件刷新 `updated_at` 的間隔 |
 | `REPLY_LOCK_TTL_SECONDS` | `600` | 對話回覆鎖逾時秒數 |
 | `OCR_BACKEND` | `transformers` | `transformers` 或 `vllm` |
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
-| `VLLM_GPU_UTIL` | `0.35` | vLLM 顯存比例（僅 Docker） |
+| `OCR_VLLM_GPU_UTIL` | `0.8` | vLLM 顯存比例（僅 Docker） |
+| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 同時處理的請求上限（僅 Docker） |
 | `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |

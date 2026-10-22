@@ -59,7 +59,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 |---|---|---|
 | `OCR_VLLM_GPU_UTIL` | `0.8` | 0.85 失敗：可用顯存 4.98 GiB < 需要的 5.1 GiB（Windows 桌面約佔 1 GiB）；0.8 可以啟動 |
 | `--enforce-eager`（固定） | 開 | CUDA graph 的額外記憶體會讓 KV cache 配不到空間（「No available memory for the cache blocks」），改用 eager 模式 |
-| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 預設 256 條序列 × 18000 tokens 在 6GB 配不到 KV cache；以下為 8 條時的實測（改為 4 條後將於 Task 6 重新量測）：KV cache 1.28 GiB（99,243 tokens，18000 長度下約 5.5 倍並行），GPU 總用量約 4.4/6 GiB |
+| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 預設 256 條序列 × 18000 tokens 在 6GB 配不到 KV cache；改為 4 條後實測：KV cache 1.28 GiB（99,243 tokens，18000 長度下約 5.5 倍並行），GPU 總用量約 4.4/6 GiB，與 8 條時相同 |
 
 顯存更大的 GPU 可調高 `OCR_VLLM_GPU_UTIL` 與 `OCR_VLLM_MAX_NUM_SEQS`，並視需要移除 compose 中的 `--enforce-eager` 以啟用 CUDA graph（吞吐量較高）。Compose 變數刻意不用 `VLLM_` 開頭，否則 vLLM 會警告未知的環境變數（vllm 服務也不載入 `docker/.env`）。
 
@@ -93,6 +93,22 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 若之後刪除或重建 Milvus collection（例如更換 embedding 模型或斷詞設定），請重新啟動 web 與 ingest：它們會在程序存活期間快取「collection 已就緒」的狀態。
 
 更早使用 Chroma 的版本：不需要遷移向量，依下方「從舊版升級」重新處理文件即可（原始上傳檔與 SQLite 都還在）。舊的 `chroma-data` volume 已不再使用，可自行刪除：`docker volume rm phoebe_chroma-data`。
+
+## 從舊版升級（worker 改名為 ingest）
+
+文件處理服務從 `worker` 改名為 `ingest`（服務、映像、環境變數都改了），vLLM 也改成選用的 `lightonocr` profile。升級時：
+
+1. 修改 `docker/.env`：
+   - `KB_WORKER_POLL_SECONDS` 改為 `KB_INGEST_POLL_SECONDS`（`KB_WORKER_MODE` 若有也一樣改為 `KB_INGEST_MODE`）。**舊名稱仍存在時服務會拒絕啟動**，錯誤訊息會提示新名稱
+   - `OCR_VLLM_MAX_NUM_SEQS=8` 改為 `4`，或刪除這行改用新的預設值
+   - 視需要加上 `INGEST_CONCURRENCY`、`OCR_CONCURRENCY`、`OCR_TIMEOUT_SECONDS`（說明見 `.env.example`）
+2. 第一次啟動新版時加上 `--remove-orphans`，清掉舊的 `worker` 容器；否則它會繼續執行，和新的 ingest 搶同一個佇列：
+
+   ```
+   docker compose --profile lightonocr up -d --build --remove-orphans
+   ```
+
+3. 之後要用 LightOnOCR，啟動與停止都要帶 `--profile lightonocr`。
 
 ## 從舊版升級（多模態知識庫）
 

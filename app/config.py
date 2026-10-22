@@ -107,8 +107,9 @@ class Settings:
     kb_ingest_poll_seconds: float = 2.0
     # how many documents the ingester processes at the same time
     ingest_concurrency: int = 1
-    # pages of one document LightOnOCR keeps in flight at the same time
-    ocr_concurrency: int = 2
+    # pages of one document LightOnOCR keeps in flight at the same time; 4 was fastest on
+    # the RTX 2060 benchmark (docs/vllm-rtx2060.md)
+    ocr_concurrency: int = 4
     # one OCR request, including the time it queues inside vLLM
     ocr_timeout_seconds: float = 600.0
     kb_stale_seconds: int = 120
