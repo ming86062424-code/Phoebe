@@ -8,7 +8,7 @@ import KbPage from './KbPage'
 
 const fetchMock = vi.fn()
 
-const kb = { id: 1, name: '員工手冊', description: '', document_count: 1, created_at: '', updated_at: '' }
+const kb = { id: 1, name: '員工手冊', description: '', parser: 'liteparse', document_count: 1, created_at: '', updated_at: '' }
 const parsers = [
   { id: 'liteparse', label: 'LiteParse（快速）', available: true, reason: '' },
   { id: 'lightonocr', label: 'LightOnOCR-3（GPU OCR）', available: false, reason: '未安裝 OCR 套件' },
@@ -88,13 +88,13 @@ describe('KbPage', () => {
     setup()
     expect(await screen.findByText('a.pdf')).toBeInTheDocument()
     expect(screen.getByText('完成')).toBeInTheDocument()
-    expect(await screen.findByText(/未安裝 OCR 套件/)).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /LightOnOCR-3.*不可用/ })).toBeDisabled()
+    expect(screen.getByRole('option', { name: /LightOnOCR-3.*目前無法使用/ })).toBeInTheDocument()
 
     const file = new File(['%PDF-1.4'], 'new.pdf', { type: 'application/pdf' })
     await userEvent.upload(screen.getByLabelText('選擇檔案'), file)
     await waitFor(() => expect(uploaded).not.toBeNull())
-    expect(uploaded!.get('parser')).toBe('liteparse')
+    // the knowledge base's setting decides the parser: the upload does not send one
+    expect(uploaded!.get('parser')).toBeNull()
     expect((uploaded!.get('file') as File).name).toBe('new.pdf')
     // the document list refreshes with the new file
     expect(await screen.findByRole('cell', { name: 'new.pdf' })).toBeInTheDocument()
@@ -272,5 +272,63 @@ describe('KbPage', () => {
     setup()
     expect(await screen.findByText('b.pdf')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '查看切塊 b.pdf' })).toBeNull()
+  })
+
+  it("shows the knowledge base's parser setting, which survives a reload", async () => {
+    window.location.hash = '#/kb/1'
+    const ocrKb = { ...kb, parser: 'lightonocr' }
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([ocrKb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc({ parser: 'lightonocr' })]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const select = await screen.findByRole('combobox', { name: '知識庫的解析器' })
+    await waitFor(() => expect(select).toHaveValue('lightonocr'))
+    expect(screen.getByText(/只影響之後上傳的 PDF 與圖片/)).toBeInTheDocument()
+    expect(screen.getByText(/PDF 與圖片會用「LightOnOCR-3」解析/)).toBeInTheDocument()
+  })
+
+  it('saves a new parser setting for the knowledge base', async () => {
+    window.location.hash = '#/kb/1'
+    let patched: unknown = null
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/kbs/1' && init?.method === 'PATCH') {
+        patched = JSON.parse(init.body as string)
+        return Promise.resolve(jsonResponse({ ...kb, parser: 'lightonocr' }))
+      }
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
+      if (url === '/api/parsers')
+        return Promise.resolve(jsonResponse(parsers.map((p) => ({ ...p, available: true }))))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const select = await screen.findByRole('combobox', { name: '知識庫的解析器' })
+    await waitFor(() => expect(select).toHaveValue('liteparse'))
+    await userEvent.selectOptions(select, 'lightonocr')
+    await waitFor(() => expect(patched).toEqual({ parser: 'lightonocr' }))
+    await waitFor(() => expect(select).toHaveValue('lightonocr'))
+    // documents already uploaded keep the parser they were processed with
+    expect(screen.getByRole('cell', { name: 'LiteParse' })).toBeInTheDocument()
+  })
+
+  it('shows why the parser setting could not be saved', async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/kbs/1' && init?.method === 'PATCH')
+        return Promise.resolve(jsonResponse({ detail: '未知的解析器' }, 422))
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const select = await screen.findByRole('combobox', { name: '知識庫的解析器' })
+    await waitFor(() => expect(select).not.toBeDisabled())
+    await userEvent.selectOptions(select, 'lightonocr')
+    expect(await screen.findByRole('alert')).toHaveTextContent('未知的解析器')
+    expect(select).toHaveValue('liteparse')
   })
 })

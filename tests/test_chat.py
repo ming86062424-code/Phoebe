@@ -415,13 +415,12 @@ def _kb_chat_with_images(c, kb_services, monkeypatch, layout):
 
     Returns (cid, kb_id, document ids, {(document index, name): bytes written}).
     """
-    kb_id = c.post("/api/kbs", json={"name": "手冊"}).json()["id"]
+    kb_id = c.post("/api/kbs", json={"name": "手冊", "parser": "fake"}).json()["id"]
     docs = []
     for i in range(1 + max(d for d, _, _ in layout)):
         r = c.post(
             f"/api/kbs/{kb_id}/documents",
             files={"file": (f"d{i}.pdf", make_pdf(["x"]), "application/pdf")},
-            data={"parser": "fake"},
         )
         docs.append(r.json()["id"])
     colors = iter(["red", "green", "blue", "yellow", "white", "black", "gray", "orange"])

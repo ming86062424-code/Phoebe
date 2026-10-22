@@ -77,6 +77,7 @@ def _clean_description(v: str) -> str:
 class KbIn(BaseModel):
     name: str
     description: str = ""
+    parser: str = "liteparse"  # for the PDFs and images uploaded to it
 
     @field_validator("name")
     @classmethod
@@ -92,6 +93,7 @@ class KbIn(BaseModel):
 class KbPatch(BaseModel):
     name: str | None = None
     description: str | None = None
+    parser: str | None = None  # only documents uploaded afterwards use it
 
     @field_validator("name")
     @classmethod
@@ -102,6 +104,13 @@ class KbPatch(BaseModel):
     @classmethod
     def validate_description(cls, v: str | None) -> str | None:
         return None if v is None else _clean_description(v)
+
+
+def _check_parser(kb: KbServices, parser: str | None) -> None:
+    """A knowledge base's parser must be one users can pick for PDFs and images (not the
+    text parser). It may be unavailable right now: uploads say so until it is back."""
+    if parser is not None and parser not in kb.parsers:
+        raise HTTPException(status_code=422, detail="未知的解析器")
 
 
 def _require_kb(conn: sqlite3.Connection, user: dict, kb_id: int) -> dict:
@@ -125,9 +134,13 @@ def list_kbs(user: dict = Depends(current_user), conn: sqlite3.Connection = Depe
 
 @router.post("/kbs", status_code=201)
 def create_kb(
-    body: KbIn, user: dict = Depends(current_user), conn: sqlite3.Connection = Depends(get_db)
+    body: KbIn,
+    user: dict = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+    kb: KbServices = Depends(get_kb_services),
 ):
-    return store.create_kb(conn, user["id"], body.name, body.description)
+    _check_parser(kb, body.parser)
+    return store.create_kb(conn, user["id"], body.name, body.description, body.parser)
 
 
 @router.patch("/kbs/{kb_id}")
@@ -136,8 +149,17 @@ def update_kb(
     body: KbPatch,
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
+    services: KbServices = Depends(get_kb_services),
 ):
-    kb = store.update_kb(conn, user["id"], kb_id, name=body.name, description=body.description)
+    _check_parser(services, body.parser)
+    kb = store.update_kb(
+        conn,
+        user["id"],
+        kb_id,
+        name=body.name,
+        description=body.description,
+        parser=body.parser,
+    )
     if kb is None:
         raise HTTPException(status_code=404, detail="找不到知識庫")
     return kb
@@ -179,12 +201,12 @@ async def upload_document(
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
-    """multipart form: file and parser (default liteparse).
+    """multipart form: file.
 
-    PDFs and images use the chosen parser; .txt and .md always use the text parser, so
-    the parser field is ignored for them (and "text" can't be chosen for anything else).
+    PDFs and images use the knowledge base's parser setting; .txt and .md always use the
+    text parser. A `parser` form field from older clients is ignored.
     """
-    _require_kb(conn, user, kb_id)
+    kb_row = _require_kb(conn, user, kb_id)
     limit = settings.max_upload_mb * 1024 * 1024
     too_big = HTTPException(status_code=413, detail=f"檔案超過 {settings.max_upload_mb}MB 上限")
     # The form is parsed here rather than by FastAPI so an oversized upload is
@@ -194,7 +216,6 @@ async def upload_document(
         raise too_big
     form = await request.form()
     file = form.get("file")
-    parser = form.get("parser", "liteparse")
     if not isinstance(file, UploadFile):
         raise HTTPException(status_code=422, detail="請選擇要上傳的檔案")
     filename = _short_filename((file.filename or "").strip())
@@ -204,9 +225,12 @@ async def upload_document(
     if suffix in TEXT_EXTENSIONS:
         chosen = kb.text_parser
     else:
-        chosen = kb.parsers.get(parser) if isinstance(parser, str) else None
-        if chosen is None:
-            raise HTTPException(status_code=422, detail="未知的解析器")
+        chosen = kb.parsers.get(kb_row["parser"])
+        if chosen is None:  # e.g. the parser was removed from this installation
+            raise HTTPException(
+                status_code=422,
+                detail=f"知識庫設定的解析器 {kb_row['parser']} 已不存在，請到知識庫設定更換",
+            )
         available, reason = await run_in_threadpool(kb.availability, chosen.id)
         if not available:
             raise HTTPException(status_code=422, detail=reason or "此解析器目前無法使用")

@@ -12,9 +12,9 @@ const parsers: ParserInfo[] = [
 
 const pdf = (name = 'a.pdf') => new File(['%PDF-1.4'], name, { type: 'application/pdf' })
 
-function setup(upload = vi.fn().mockResolvedValue(undefined), list: ParserInfo[] = parsers) {
+function setup(upload = vi.fn().mockResolvedValue(undefined), parser: ParserInfo | null = parsers[0]) {
   const onUploaded = vi.fn()
-  render(<UploadPanel parsers={list} upload={upload} onUploaded={onUploaded} />)
+  render(<UploadPanel parser={parser} upload={upload} onUploaded={onUploaded} />)
   return { upload, onUploaded }
 }
 
@@ -34,10 +34,7 @@ describe('UploadPanel', () => {
     await userEvent.upload(screen.getByLabelText('選擇檔案'), [pdf('a.pdf'), pdf('b.pdf')])
     await waitFor(() => expect(within(row('b.pdf')).getByText('已上傳')).toBeInTheDocument())
     expect(within(row('a.pdf')).getByText('已上傳')).toBeInTheDocument()
-    expect(upload.mock.calls.map(([f, p]) => [f.name, p])).toEqual([
-      ['a.pdf', 'liteparse'],
-      ['b.pdf', 'liteparse'],
-    ])
+    expect(upload.mock.calls.map(([f]) => f.name)).toEqual(['a.pdf', 'b.pdf'])
     expect(onUploaded).toHaveBeenCalledTimes(2)
   })
 
@@ -57,13 +54,10 @@ describe('UploadPanel', () => {
     expect(zone).toHaveAttribute('data-dragging', 'false')
   })
 
-  it('uses the parser chosen before the upload', async () => {
-    const list = parsers.map((p) => ({ ...p, available: true }))
-    const { upload } = setup(undefined, list)
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '解析器' }), 'lightonocr')
-    drop([pdf()])
-    await waitFor(() => expect(upload).toHaveBeenCalled())
-    expect(upload.mock.calls[0][1]).toBe('lightonocr')
+  it("says which parser the knowledge base uses, without offering to change it here", () => {
+    setup(undefined, { ...parsers[1], available: true })
+    expect(screen.getByText('PDF 與圖片會用「LightOnOCR-3」解析（在上方的知識庫設定中更改）')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).toBeNull()
   })
 
   it('rejects unsupported files without sending them', async () => {
@@ -85,9 +79,9 @@ describe('UploadPanel', () => {
     expect(within(row('bad.pdf')).getByText('無法讀取檔案內容')).toBeInTheDocument()
   })
 
-  it('does not send PDFs or images while the chosen parser is unavailable, but text files go', async () => {
-    const list = parsers.map((p) => ({ ...p, available: false }))
-    const { upload } = setup(undefined, list)
+  it("does not send PDFs or images while the knowledge base's parser is unavailable, but text files go", async () => {
+    const { upload } = setup(undefined, parsers[1])
+    expect(screen.getByText(/LightOnOCR-3：OCR 服務未啟動/)).toBeInTheDocument()
     drop([pdf('scan.pdf'), new File(['x'], 'b.TXT')])
     await waitFor(() => expect(within(row('b.TXT')).getByText('已上傳')).toBeInTheDocument())
     expect(within(row('scan.pdf')).getByText(/目前無法使用/)).toBeInTheDocument()

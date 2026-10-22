@@ -111,14 +111,14 @@ export const api = {
   listKbs: () => json<KnowledgeBase[]>('/api/kbs'),
   createKb: (name: string, description = '') =>
     json<KnowledgeBase>('/api/kbs', jsonInit('POST', { name, description })),
-  updateKb: (id: number, patch: { name?: string; description?: string }) =>
+  updateKb: (id: number, patch: { name?: string; description?: string; parser?: string }) =>
     json<KnowledgeBase>(`/api/kbs/${id}`, jsonInit('PATCH', patch)),
   deleteKb: (id: number) => empty(`/api/kbs/${id}`, jsonInit('DELETE')),
   listDocuments: (kbId: number) => json<KbDocument[]>(`/api/kbs/${kbId}/documents`),
-  uploadDocument: (kbId: number, file: File, parser: string) => {
+  // PDFs and images go through the knowledge base's parser setting
+  uploadDocument: (kbId: number, file: File) => {
     const form = new FormData()
     form.append('file', file)
-    form.append('parser', parser)
     return json<KbDocument>(`/api/kbs/${kbId}/documents`, { method: 'POST', body: form })
   },
   deleteDocument: (kbId: number, docId: number) =>
