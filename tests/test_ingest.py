@@ -653,3 +653,294 @@ def test_unknown_parser_is_still_claimed_and_failed(env):
     doc = store.create_document(conn, kb["id"], "a.pdf", "gone", 10)
     services.ingester.enqueue(doc["id"])
     assert store.get_document(conn, doc["id"])["status"] == "failed"
+
+
+# ---- several documents at once (INGEST_CONCURRENCY) ----
+
+
+def _concurrent_env(tmp_path, concurrency, parsers=None):
+    settings = Settings(
+        db_path=str(tmp_path / "c.db"),
+        kb_dir=str(tmp_path / "kb"),
+        kb_ingest_poll_seconds=0.05,
+        ingest_concurrency=concurrency,
+    )
+    conn = connect(settings.db_path)
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO users (username, password_hash, created_at) VALUES ('u', 'h', ?)", (now_iso(),)
+    )
+    conn.commit()
+    kb = store.create_kb(conn, 1, "k", "")
+    services = build_kb_services(
+        settings, embedder=FakeEmbedder(), parsers=parsers or [FakeParser()], threaded=True,
+        store=InMemoryChunkStore(),
+    )
+
+    def add_doc(parser_id="fake"):
+        doc = store.create_document(conn, kb["id"], "a.pdf", parser_id, 10)
+        path = services.file_path(kb["id"], doc["id"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF")
+        return doc
+
+    return conn, kb, services, add_doc
+
+
+class _Running:
+    """run_forever in a thread; stopped (with a bounded wait) when the block ends."""
+
+    def __init__(self, ingester):
+        self.ingester = ingester
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=ingester.run_forever, args=(self.stop,), daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.ingester.wake()
+        self.thread.join(timeout=10)
+        assert not self.thread.is_alive(), "run_forever did not return"
+
+
+def _doc_id(path) -> int:
+    from pathlib import Path
+
+    return int(Path(path).stem)
+
+
+def _wait_for(predicate, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def _status(conn, doc):
+    got = store.get_document(conn, doc["id"])
+    return None if got is None else got["status"]
+
+
+def _all_settled(conn, docs):
+    return lambda: all(_status(conn, d) in ("ready", "failed", None) for d in docs)
+
+
+def test_concurrency_setting_reaches_the_ingester(tmp_path):
+    conn, _, services, _ = _concurrent_env(tmp_path, 3)
+    assert services.ingester.concurrency == 3
+    conn.close()
+
+
+def test_two_documents_are_processed_at_the_same_time(tmp_path):
+    conn, _, services, add_doc = _concurrent_env(tmp_path, 2)
+    parser = services.parsers["fake"]
+    barrier = threading.Barrier(2, timeout=5)
+    original = parser.parse
+
+    def parse(path, out_dir, on_progress):
+        barrier.wait()  # both must be inside parse at once
+        return original(path, out_dir, on_progress)
+
+    parser.parse = parse
+    docs = [add_doc(), add_doc()]
+    with _Running(services.ingester):
+        assert _wait_for(_all_settled(conn, docs))
+    assert [_status(conn, d) for d in docs] == ["ready", "ready"]
+    conn.close()
+
+
+def test_never_more_than_the_concurrency_limit(tmp_path):
+    conn, _, services, add_doc = _concurrent_env(tmp_path, 2)
+    parser = services.parsers["fake"]
+    lock = threading.Lock()
+    current = [0]
+    peak = [0]
+    original = parser.parse
+
+    def parse(path, out_dir, on_progress):
+        with lock:
+            current[0] += 1
+            peak[0] = max(peak[0], current[0])
+        try:
+            time.sleep(0.2)
+            return original(path, out_dir, on_progress)
+        finally:
+            with lock:
+                current[0] -= 1
+
+    parser.parse = parse
+    docs = [add_doc() for _ in range(5)]
+    with _Running(services.ingester):
+        assert _wait_for(_all_settled(conn, docs))
+    assert [_status(conn, d) for d in docs] == ["ready"] * 5
+    assert peak[0] == 2
+    conn.close()
+
+
+def test_concurrency_one_processes_in_order(tmp_path):
+    conn, _, services, add_doc = _concurrent_env(tmp_path, 1)
+    parser = services.parsers["fake"]
+    order = []
+    original = parser.parse
+
+    def parse(path, out_dir, on_progress):
+        order.append(_doc_id(path))
+        return original(path, out_dir, on_progress)
+
+    parser.parse = parse
+    docs = [add_doc() for _ in range(3)]
+    with _Running(services.ingester):
+        assert _wait_for(_all_settled(conn, docs))
+    assert order == [d["id"] for d in docs]
+    conn.close()
+
+
+def test_a_crashing_document_frees_its_slot(tmp_path, monkeypatch):
+    conn, _, services, add_doc = _concurrent_env(tmp_path, 1)
+    first, second = add_doc(), add_doc()
+    ingester = services.ingester
+    real = ingester.process
+
+    def process(doc_id, stop=None):
+        if doc_id == first["id"]:
+            raise RuntimeError("boom")
+        return real(doc_id, stop)
+
+    monkeypatch.setattr(ingester, "process", process)
+    with _Running(ingester):
+        assert _wait_for(lambda: _status(conn, second) == "ready")
+    assert _status(conn, first) == "parsing"  # left for the stale requeue
+    conn.close()
+
+
+def test_deleting_one_document_leaves_the_parallel_one_alone(tmp_path):
+    conn, kb, services, add_doc = _concurrent_env(tmp_path, 2)
+    parser = services.parsers["fake"]
+    doomed, kept = add_doc(), add_doc()
+    both_started = threading.Barrier(2, timeout=5)
+    pages_done: dict[int, list[int]] = {doomed["id"]: [], kept["id"]: []}
+
+    def parse(path, out_dir, on_progress):
+        doc_id = _doc_id(path)
+        for page in (1, 2, 3):
+            on_progress(page, 3)
+            pages_done[doc_id].append(page)
+            if page == 1:
+                both_started.wait()
+                if doc_id == doomed["id"]:
+                    other = connect(services.ingester.db_path)
+                    store.delete_document(other, kb["id"], doomed["id"])
+                    other.close()
+        return [ParsedChunk(1, f"apple {doc_id}"), ParsedChunk(2, f"cherry {doc_id}")]
+
+    parser.parse = parse
+    with _Running(services.ingester):
+        assert _wait_for(lambda: _status(conn, kept) == "ready")
+    assert store.get_document(conn, doomed["id"]) is None
+    assert pages_done[doomed["id"]] == [1]
+    assert pages_done[kept["id"]] == [1, 2, 3]
+    rows = list(services.index._store.rows.values())
+    assert [r.document_id for r in rows] == [kept["id"], kept["id"]]
+    conn.close()
+
+
+def test_two_documents_of_one_knowledge_base_index_side_by_side(tmp_path):
+    conn, kb, services, add_doc = _concurrent_env(tmp_path, 2)
+    parser = services.parsers["fake"]
+    barrier = threading.Barrier(2, timeout=5)
+
+    def parse(path, out_dir, on_progress):
+        barrier.wait()  # both index at about the same time
+        on_progress(2, 2)
+        doc_id = _doc_id(path)
+        return [ParsedChunk(1, f"apple {doc_id}"), ParsedChunk(2, f"cherry {doc_id}")]
+
+    parser.parse = parse
+    docs = [add_doc(), add_doc()]
+    with _Running(services.ingester):
+        assert _wait_for(_all_settled(conn, docs))
+    assert [_status(conn, d) for d in docs] == ["ready", "ready"]
+    rows = list(services.index._store.rows.values())
+    assert sorted(r.document_id for r in rows) == sorted([d["id"] for d in docs] * 2)
+    assert all(r.kb_id == kb["id"] for r in rows)
+    conn.close()
+
+
+def test_unavailable_parser_still_waits_with_parallel_slots(tmp_path):
+    ocr = FakeParser(available=False)
+    ocr.id = "ocr"
+    conn, _, services, add_doc = _concurrent_env(tmp_path, 2, parsers=[ocr, FakeParser()])
+    waiting, other = add_doc("ocr"), add_doc("fake")  # the waiting one is older
+    with _Running(services.ingester):
+        assert _wait_for(lambda: _status(conn, other) == "ready")
+        time.sleep(0.2)  # several more dispatcher rounds with free slots
+        assert _status(conn, waiting) == "queued"
+        assert ocr.parsed == []
+        ocr.available = True  # the OCR service finished loading
+        services.ingester.wake()
+        assert _wait_for(lambda: _status(conn, waiting) == "ready")
+    conn.close()
+
+
+def test_parsers_are_released_only_when_all_slots_are_idle(tmp_path):
+    conn, _, services, add_doc = _concurrent_env(tmp_path, 2)
+    parser = services.parsers["fake"]
+    slow, fast = add_doc(), add_doc()
+    slow_started = threading.Event()
+    finish_slow = threading.Event()
+    original = parser.parse
+
+    def parse(path, out_dir, on_progress):
+        if _doc_id(path) == slow["id"]:
+            slow_started.set()
+            assert finish_slow.wait(5)
+        return original(path, out_dir, on_progress)
+
+    parser.parse = parse
+    with _Running(services.ingester):
+        assert slow_started.wait(5)
+        assert _wait_for(lambda: _status(conn, fast) == "ready")
+        time.sleep(0.2)  # several idle dispatcher rounds while the slow one still parses
+        assert parser.released == 0
+        finish_slow.set()
+        assert _wait_for(lambda: _status(conn, slow) == "ready")
+        assert _wait_for(lambda: parser.released >= 1)
+    conn.close()
+
+
+def test_stop_waits_for_running_documents(tmp_path):
+    conn, _, services, add_doc = _concurrent_env(tmp_path, 2)
+    parser = services.parsers["fake"]
+    on_page_one = threading.Event()
+    go_on = threading.Event()
+    pages = []
+
+    def parse(path, out_dir, on_progress):
+        for page in (1, 2, 3):
+            on_progress(page, 3)
+            pages.append(page)
+            if page == 1:
+                on_page_one.set()
+                assert go_on.wait(5)
+        return [ParsedChunk(1, "x")]
+
+    parser.parse = parse
+    doc = add_doc()
+    running = _Running(services.ingester)
+    with running:
+        assert on_page_one.wait(5)
+        running.stop.set()
+        services.ingester.wake()
+        time.sleep(0.2)
+        assert running.thread.is_alive()  # still waiting for the document in flight
+        go_on.set()
+        running.thread.join(timeout=10)
+        assert not running.thread.is_alive()
+    assert pages == [1]
+    assert _status(conn, doc) == "parsing"  # the stale requeue picks it up later
+    conn.close()

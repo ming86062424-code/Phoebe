@@ -35,7 +35,7 @@ def main() -> None:
     # The loop runs on the main thread, so don't call start() (it would spawn a second one).
     ingester.requeue_stale()
     ingester.start_status_publisher()
-    logger.info("ingest 已啟動")
+    logger.info("ingest 已啟動，同時處理 %d 份文件", settings.ingest_concurrency)
     try:
         ingester.run_forever(stop)
     finally:

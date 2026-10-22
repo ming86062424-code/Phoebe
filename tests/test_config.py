@@ -335,3 +335,20 @@ def test_vllm_is_opt_in_behind_the_lightonocr_profile():
 def test_docker_env_example_defaults_to_four_sequences():
     text = (PROJECT_ROOT / "docker" / ".env.example").read_text(encoding="utf-8")
     assert "OCR_VLLM_MAX_NUM_SEQS=4" in text
+
+
+def test_ingest_concurrency_defaults_to_one_and_must_be_positive(monkeypatch):
+    monkeypatch.delenv("INGEST_CONCURRENCY", raising=False)
+    assert Settings.from_env().ingest_concurrency == 1
+    monkeypatch.setenv("INGEST_CONCURRENCY", "3")
+    assert Settings.from_env().ingest_concurrency == 3
+    for bad in ("0", "abc", "-1"):
+        monkeypatch.setenv("INGEST_CONCURRENCY", bad)
+        with pytest.raises(ValueError, match="INGEST_CONCURRENCY 必須是正整數"):
+            Settings.from_env()
+
+
+def test_env_examples_document_ingest_concurrency():
+    for path in (PROJECT_ROOT / ".env.example", PROJECT_ROOT / "docker" / ".env.example"):
+        text = path.read_text(encoding="utf-8")
+        assert "INGEST_CONCURRENCY=1" in text and "同時處理幾份文件" in text

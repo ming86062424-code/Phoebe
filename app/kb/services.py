@@ -111,6 +111,7 @@ def build_kb_services(
         doc_dir=services.doc_dir,
         threaded=threaded,
         poll_seconds=settings.kb_ingest_poll_seconds,
+        concurrency=settings.ingest_concurrency,
         stale_seconds=settings.kb_stale_seconds,
         heartbeat_seconds=settings.kb_heartbeat_seconds,
         kb_dir=str(services.kb_dir),

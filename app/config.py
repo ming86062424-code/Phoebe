@@ -93,6 +93,8 @@ class Settings:
     milvus_collection: str = "phoebe_chunks"
     reply_lock_ttl_seconds: int = 90
     kb_ingest_poll_seconds: float = 2.0
+    # how many documents the ingester processes at the same time
+    ingest_concurrency: int = 1
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0
     admin_username: str = ""
@@ -145,6 +147,10 @@ class Settings:
             ),
             kb_ingest_poll_seconds=float(
                 os.environ.get("KB_INGEST_POLL_SECONDS", d.kb_ingest_poll_seconds)
+            ),
+            ingest_concurrency=_positive_int(
+                "INGEST_CONCURRENCY",
+                os.environ.get("INGEST_CONCURRENCY", str(d.ingest_concurrency)),
             ),
             kb_stale_seconds=int(os.environ.get("KB_STALE_SECONDS", d.kb_stale_seconds)),
             kb_heartbeat_seconds=float(

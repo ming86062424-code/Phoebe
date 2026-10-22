@@ -3,6 +3,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -44,11 +45,11 @@ class _Superseded(Exception):
 
 
 class Ingester:
-    """Parses and indexes uploaded documents one at a time.
+    """Parses and indexes uploaded documents, up to `concurrency` at a time.
 
     The queue is the kb_documents table: ingesters atomically claim 'queued' rows, so several
     ingesters (or a standalone ingest process) can share it. With threaded=False, enqueue()
-    processes queued documents immediately (used by tests).
+    processes queued documents immediately and one at a time (used by tests).
     """
 
     def __init__(
@@ -63,7 +64,10 @@ class Ingester:
         kb_dir: str = "",
         heartbeat_seconds: float = 30.0,
         doc_dir: Callable[[int, int], Path] | None = None,
+        concurrency: int = 1,
     ):
+        if concurrency < 1:
+            raise ValueError("concurrency must be at least 1")
         self.db_path = db_path
         self.index = index
         self.parsers = parsers
@@ -75,9 +79,15 @@ class Ingester:
         self.stale_seconds = stale_seconds
         self.kb_dir = kb_dir
         self.heartbeat_seconds = heartbeat_seconds
+        self.concurrency = concurrency
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        self._wake = threading.Event()
+        # Wakes the dispatcher: wake() and every finished document set _woken and notify.
+        # A flag rather than a bare notify, so a wake-up that comes while the dispatcher is
+        # busy claiming is not lost. _in_flight is the number of documents being processed.
+        self._cond = threading.Condition()
+        self._woken = False
+        self._in_flight = 0
         self._status_thread: threading.Thread | None = None
         self._status_stop = threading.Event()
         self._pending_removal: set[Path] = set()
@@ -174,7 +184,7 @@ class Ingester:
         self.stop_status_publisher()
         if self._thread is not None:
             self._stop.set()
-            self._wake.set()
+            self.wake()
             self._thread.join(timeout=5)
             if self._thread.is_alive():
                 logger.warning("解析執行緒尚未結束，保留參考以免重複啟動")
@@ -182,7 +192,11 @@ class Ingester:
                 self._thread = None
 
     def wake(self) -> None:
-        self._wake.set()
+        # Condition wraps an RLock, so this is safe from a signal handler that interrupts
+        # the dispatcher on the main thread while it holds the lock (ingest_main).
+        with self._cond:
+            self._woken = True
+            self._cond.notify_all()
 
     def enqueue(self, doc_id: int) -> None:
         """The document is already 'queued' in the database; make sure the ingester looks at it."""
@@ -231,34 +245,79 @@ class Ingester:
         self._release_parsers()
 
     def run_forever(self, stop: threading.Event) -> None:
+        """The dispatcher: claims documents and hands them to a pool of `concurrency` threads.
+
+        Only this thread claims documents (and so reads and writes _waiting_for) and runs the
+        maintenance. Parsers are released only once no document is in flight and none can
+        be claimed, so a model another thread is using is never unloaded. On stop it claims
+        nothing more and waits for the pool; documents in flight stop at their next page.
+        """
         last_scan: float | None = None
         worked = False
-        while not stop.is_set():
-            self._wake.clear()
-            try:
-                doc_id = self._claim()
-            except Exception:
-                logger.exception("認領文件失敗")
+        with self._cond:
+            self._in_flight = 0
+        pool = ThreadPoolExecutor(max_workers=self.concurrency, thread_name_prefix="kb-ingest")
+        try:
+            while not stop.is_set():
+                with self._cond:
+                    # cleared before looking at the queue: anything that happens from here
+                    # on sets it again, so the wait below can't miss it
+                    self._woken = False
+                    in_flight = self._in_flight
                 doc_id = None
-            if doc_id is not None:
-                worked = True
-                try:
-                    self.process(doc_id, stop)
-                except Exception:
-                    logger.exception("處理文件 %s 時發生未預期錯誤", doc_id)
-                continue
-            if worked:
-                self._release_parsers()
-                worked = False
-            self.cleanup()
-            if last_scan is None or time.monotonic() - last_scan >= CLEANUP_INTERVAL_SECONDS:
-                last_scan = time.monotonic()
-                try:
-                    self.requeue_stale()
-                    self.cleanup_orphans()
-                except Exception:
-                    logger.exception("定期維護（重新排入逾時文件、清理孤立檔案）失敗")
-            self._wake.wait(self.poll_seconds)
+                if in_flight < self.concurrency:
+                    try:
+                        doc_id = self._claim()
+                    except Exception:
+                        logger.exception("認領文件失敗")
+                if doc_id is not None:
+                    worked = True
+                    self._submit(pool, doc_id, stop)
+                    continue
+                if in_flight == 0:
+                    if worked:
+                        self._release_parsers()
+                        worked = False
+                    self.cleanup()
+                    if (
+                        last_scan is None
+                        or time.monotonic() - last_scan >= CLEANUP_INTERVAL_SECONDS
+                    ):
+                        last_scan = time.monotonic()
+                        try:
+                            self.requeue_stale()
+                            self.cleanup_orphans()
+                        except Exception:
+                            logger.exception("定期維護（重新排入逾時文件、清理孤立檔案）失敗")
+                with self._cond:
+                    self._cond.wait_for(
+                        lambda: self._woken or stop.is_set(), timeout=self.poll_seconds
+                    )
+        finally:
+            pool.shutdown(wait=True)
+
+    def _submit(self, pool: ThreadPoolExecutor, doc_id: int, stop: threading.Event) -> None:
+        with self._cond:
+            self._in_flight += 1
+        try:
+            pool.submit(self._run_one, doc_id, stop)
+        except BaseException:
+            self._finished()  # never ran: the document stays 'parsing' until requeued as stale
+            raise
+
+    def _run_one(self, doc_id: int, stop: threading.Event) -> None:
+        try:
+            self.process(doc_id, stop)
+        except Exception:
+            logger.exception("處理文件 %s 時發生未預期錯誤", doc_id)
+        finally:
+            self._finished()
+
+    def _finished(self) -> None:
+        with self._cond:
+            self._in_flight -= 1
+            self._woken = True
+            self._cond.notify_all()
 
     def cleanup_orphans(self) -> int:
         """Delete document files and folders, and knowledge-base folders, with no database row."""
