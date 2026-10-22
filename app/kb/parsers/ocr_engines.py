@@ -176,9 +176,17 @@ class TransformersOcrEngine:
 
 
 class VllmOcrEngine:
-    def __init__(self, base_url: str, model: str, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        transport: httpx.BaseTransport | None = None,
+        timeout: float = 600,
+    ):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        # per page request; it includes the time the request queues inside vLLM
+        self.timeout = timeout
         self._transport = transport
 
     def _client(self, timeout: float) -> httpx.Client:
@@ -214,7 +222,7 @@ class VllmOcrEngine:
             "max_tokens": MAX_NEW_TOKENS,
         }
         try:
-            with self._client(300) as client:
+            with self._client(self.timeout) as client:
                 resp = client.post(f"{self.base_url}/chat/completions", json=body)
                 resp.raise_for_status()
             return fix_escaped_dollars(resp.json()["choices"][0]["message"]["content"].strip())
@@ -227,5 +235,7 @@ class VllmOcrEngine:
 
 def build_ocr_engine(settings: Settings) -> OcrEngine:
     if settings.ocr_backend == "vllm":
-        return VllmOcrEngine(settings.vllm_base_url, settings.ocr_model)
+        return VllmOcrEngine(
+            settings.vllm_base_url, settings.ocr_model, timeout=settings.ocr_timeout_seconds
+        )
     return TransformersOcrEngine(settings.ocr_model, settings.ollama_base_url)

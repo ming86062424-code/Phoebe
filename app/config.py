@@ -1,3 +1,4 @@
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,6 +52,17 @@ def _positive_int(name: str, raw: str) -> int:
     return value
 
 
+def _positive_float(name: str, raw: str) -> float:
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        value = 0.0
+    # rejects nan and inf too: neither is a usable timeout
+    if not (0 < value < math.inf):
+        raise ValueError(f"{name} 必須是正數")
+    return value
+
+
 def _check_admin(username: str, password: str) -> None:
     """The admin account from .env follows the same rules as registration."""
     if not username and not password:
@@ -95,6 +107,10 @@ class Settings:
     kb_ingest_poll_seconds: float = 2.0
     # how many documents the ingester processes at the same time
     ingest_concurrency: int = 1
+    # pages of one document LightOnOCR keeps in flight at the same time
+    ocr_concurrency: int = 2
+    # one OCR request, including the time it queues inside vLLM
+    ocr_timeout_seconds: float = 600.0
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0
     admin_username: str = ""
@@ -151,6 +167,13 @@ class Settings:
             ingest_concurrency=_positive_int(
                 "INGEST_CONCURRENCY",
                 os.environ.get("INGEST_CONCURRENCY", str(d.ingest_concurrency)),
+            ),
+            ocr_concurrency=_positive_int(
+                "OCR_CONCURRENCY", os.environ.get("OCR_CONCURRENCY", str(d.ocr_concurrency))
+            ),
+            ocr_timeout_seconds=_positive_float(
+                "OCR_TIMEOUT_SECONDS",
+                os.environ.get("OCR_TIMEOUT_SECONDS", str(d.ocr_timeout_seconds)),
             ),
             kb_stale_seconds=int(os.environ.get("KB_STALE_SECONDS", d.kb_stale_seconds)),
             kb_heartbeat_seconds=float(

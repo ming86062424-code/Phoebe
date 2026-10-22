@@ -352,3 +352,38 @@ def test_env_examples_document_ingest_concurrency():
     for path in (PROJECT_ROOT / ".env.example", PROJECT_ROOT / "docker" / ".env.example"):
         text = path.read_text(encoding="utf-8")
         assert "INGEST_CONCURRENCY=1" in text and "同時處理幾份文件" in text
+
+
+def test_ocr_concurrency_must_be_positive(monkeypatch):
+    monkeypatch.delenv("OCR_CONCURRENCY", raising=False)
+    assert Settings.from_env().ocr_concurrency == 2
+    monkeypatch.setenv("OCR_CONCURRENCY", "4")
+    assert Settings.from_env().ocr_concurrency == 4
+    for bad in ("0", "abc", "-1"):
+        monkeypatch.setenv("OCR_CONCURRENCY", bad)
+        with pytest.raises(ValueError, match="OCR_CONCURRENCY 必須是正整數"):
+            Settings.from_env()
+
+
+def test_ocr_timeout_defaults_to_600_and_must_be_positive(monkeypatch):
+    monkeypatch.delenv("OCR_TIMEOUT_SECONDS", raising=False)
+    assert Settings.from_env().ocr_timeout_seconds == 600
+    monkeypatch.setenv("OCR_TIMEOUT_SECONDS", "90.5")
+    assert Settings.from_env().ocr_timeout_seconds == 90.5
+    for bad in ("0", "abc", "-1", "nan", "inf"):
+        monkeypatch.setenv("OCR_TIMEOUT_SECONDS", bad)
+        with pytest.raises(ValueError, match="OCR_TIMEOUT_SECONDS 必須是正數"):
+            Settings.from_env()
+
+
+def test_env_examples_document_ocr_concurrency():
+    for path in (PROJECT_ROOT / ".env.example", PROJECT_ROOT / "docker" / ".env.example"):
+        text = path.read_text(encoding="utf-8")
+        assert "OCR_CONCURRENCY=2" in text and "OCR_TIMEOUT_SECONDS=600" in text
+        assert "每份文件同時送給 vLLM 的頁數" in text
+        assert "--max-num-seqs" in text
+
+
+def test_kb_services_pass_the_ocr_concurrency():
+    source = (PROJECT_ROOT / "app" / "kb" / "services.py").read_text(encoding="utf-8")
+    assert "LightOnOcrParser(build_ocr_engine(settings), settings.ocr_concurrency)" in source

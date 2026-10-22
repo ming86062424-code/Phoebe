@@ -88,7 +88,7 @@ def build_kb_services(
 
         parsers = [
             LiteParseParser(settings.liteparse_ocr_language),
-            LightOnOcrParser(build_ocr_engine(settings)),
+            LightOnOcrParser(build_ocr_engine(settings), settings.ocr_concurrency),
         ]
     if store is None:
         # connects lazily, so building the services never needs a reachable Milvus

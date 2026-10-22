@@ -13,6 +13,9 @@ trailing "+" on the label (`text+`) marks a block continuing the previous one.
 import logging
 import math
 import re
+from collections import deque
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -146,19 +149,26 @@ class LightOnOcrParser:
     id = "lightonocr"
     label = "LightOnOCR-3（GPU OCR，適合掃描檔與複雜版面）"
 
-    def __init__(self, engine: OcrEngine):
+    def __init__(self, engine: OcrEngine, concurrency: int = 1):
         self.engine = engine
+        # pages of one document sent to the engine at the same time
+        self.concurrency = max(1, concurrency)
 
     def availability(self) -> tuple[bool, str]:
         return self.engine.availability()
 
-    def _page(self, image, page: int, out_dir: Path) -> ParsedChunk:
+    @staticmethod
+    def _ocr_result(page: int, ocr: Callable[[], str]) -> str:
+        """The engine's output, with engine failures reported as this page's failure."""
         try:
-            raw = self.engine.ocr(image)
+            return ocr()
         except ParseError:
             raise
         except Exception as e:
             raise ParseError(f"第 {page} 頁 OCR 失敗：{e}") from e
+
+    @staticmethod
+    def _chunk(raw: str, image, page: int, out_dir: Path) -> ParsedChunk:
         text, refs = page_markdown(parse_grounding(raw), image, page, out_dir)
         return ParsedChunk(page, text, images=refs)
 
@@ -168,7 +178,9 @@ class LightOnOcrParser:
         if Path(path).suffix.lower() in IMAGE_EXTENSIONS:
             on_progress(0, 1)
             # an image file is one page, sized like a rendered page (never upscaled)
-            chunk = self._page(fit(open_image(path), MAX_EDGE), 1, out_dir)
+            image = fit(open_image(path), MAX_EDGE)
+            raw = self._ocr_result(1, lambda: self.engine.ocr(image))
+            chunk = self._chunk(raw, image, 1, out_dir)
             on_progress(1, 1)
             return [chunk]
 
@@ -180,12 +192,29 @@ class LightOnOcrParser:
                 pdf = pdfium.PdfDocument(path)
         except Exception as e:
             raise ParseError(f"LightOnOCR 初始化失敗：{e}") from e
+        # Pipeline: this thread renders pages one at a time and sends each to the pool; at
+        # most `concurrency` pages are in flight (so at most that many rendered images are
+        # alive). Results are taken oldest first, so cropping, saving and progress happen
+        # here, in page order. The pool belongs to this parse: documents never share it.
+        pool = ThreadPoolExecutor(
+            max_workers=self.concurrency, thread_name_prefix="lightonocr"
+        )
+        in_flight: deque[tuple[int, object, Future[str]]] = deque()
         try:
             with PDFIUM_LOCK:
                 total = len(pdf)
             on_progress(0, total)
             pages: list[ParsedChunk] = []
+
+            def finish_oldest() -> None:
+                page_no, image, future = in_flight.popleft()
+                raw = self._ocr_result(page_no, future.result)
+                pages.append(self._chunk(raw, image, page_no, out_dir))
+                on_progress(len(pages), total)
+
             for i in range(total):
+                if len(in_flight) >= self.concurrency:
+                    finish_oldest()
                 with PDFIUM_LOCK:
                     page = pdf[i]
                     try:
@@ -201,10 +230,18 @@ class LightOnOcrParser:
                         # free the native handle here, not in a finalizer on another thread
                         page.close()
                 image.thumbnail((MAX_EDGE, MAX_EDGE))
-                pages.append(self._page(image, i + 1, out_dir))
-                on_progress(i + 1, total)
+                in_flight.append((i + 1, image, pool.submit(self.engine.ocr, image)))
+                del image
+            while in_flight:
+                finish_oldest()
             return pages
         finally:
+            # On a failed page or a stop raised by on_progress: drop the pages not yet
+            # started and wait for the running ones, so no OCR outlives this call.
+            for _, _, future in in_flight:
+                future.cancel()
+            in_flight.clear()
+            pool.shutdown(wait=True, cancel_futures=True)
             with PDFIUM_LOCK:
                 pdf.close()
 

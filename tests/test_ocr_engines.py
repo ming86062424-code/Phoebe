@@ -96,3 +96,29 @@ def test_vllm_ocr_output_is_repaired():
         )
     )
     assert engine.ocr(Image.new("RGB", (8, 8))) == "$x$"
+
+
+def test_vllm_engine_uses_the_configured_timeout():
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, request.extensions["timeout"]["read"]))
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "x"}}]})
+
+    transport = httpx.MockTransport(handler)
+    VllmOcrEngine(BASE, "m", transport=transport).ocr(Image.new("RGB", (8, 8)))
+    VllmOcrEngine(BASE, "m", transport=transport, timeout=42).ocr(Image.new("RGB", (8, 8)))
+    VllmOcrEngine(BASE, "m", transport=transport, timeout=42).availability()
+    assert seen == [
+        ("/v1/chat/completions", 600),
+        ("/v1/chat/completions", 42),
+        ("/v1/models", 3),  # the availability check stays short
+    ]
+
+
+def test_build_ocr_engine_passes_the_ocr_timeout(monkeypatch):
+    monkeypatch.setenv("OCR_BACKEND", "vllm")
+    monkeypatch.setenv("OCR_TIMEOUT_SECONDS", "120")
+    assert build_ocr_engine(Settings.from_env()).timeout == 120
