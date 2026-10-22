@@ -10,12 +10,18 @@ UPDATABLE_DOC_FIELDS = {"status", "error", "progress_done", "progress_total", "c
 UNFINISHED_STATUSES = ("pending", "queued", "parsing", "indexing")
 
 
-def create_kb(conn: sqlite3.Connection, user_id: int, name: str, description: str) -> dict:
+def create_kb(
+    conn: sqlite3.Connection,
+    user_id: int,
+    name: str,
+    description: str,
+    parser: str = "liteparse",
+) -> dict:
     now = now_iso()
     cur = conn.execute(
-        "INSERT INTO knowledge_bases (user_id, name, description, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user_id, name, description, now, now),
+        "INSERT INTO knowledge_bases (user_id, name, description, parser, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, name, description, parser, now, now),
     )
     conn.commit()
     return get_kb(conn, user_id, cur.lastrowid)
@@ -23,7 +29,7 @@ def create_kb(conn: sqlite3.Connection, user_id: int, name: str, description: st
 
 def list_kbs(conn: sqlite3.Connection, user_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT k.id, k.name, k.description, k.created_at, k.updated_at, "
+        "SELECT k.id, k.name, k.description, k.parser, k.created_at, k.updated_at, "
         "COUNT(d.id) AS document_count "
         "FROM knowledge_bases k LEFT JOIN kb_documents d ON d.kb_id = k.id "
         "WHERE k.user_id = ? GROUP BY k.id ORDER BY k.updated_at DESC, k.id DESC",
@@ -34,7 +40,7 @@ def list_kbs(conn: sqlite3.Connection, user_id: int) -> list[dict]:
 
 def get_kb(conn: sqlite3.Connection, user_id: int, kb_id: int) -> dict | None:
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at FROM knowledge_bases "
+        "SELECT id, name, description, parser, created_at, updated_at FROM knowledge_bases "
         "WHERE id = ? AND user_id = ?",
         (kb_id, user_id),
     ).fetchone()
@@ -47,15 +53,19 @@ def update_kb(
     kb_id: int,
     name: str | None = None,
     description: str | None = None,
+    parser: str | None = None,
 ) -> dict | None:
+    """Change the given fields; the parser only applies to documents uploaded later."""
     kb = get_kb(conn, user_id, kb_id)
     if kb is None:
         return None
     conn.execute(
-        "UPDATE knowledge_bases SET name = ?, description = ?, updated_at = ? WHERE id = ?",
+        "UPDATE knowledge_bases SET name = ?, description = ?, parser = ?, updated_at = ? "
+        "WHERE id = ?",
         (
             kb["name"] if name is None else name,
             kb["description"] if description is None else description,
+            kb["parser"] if parser is None else parser,
             now_iso(),
             kb_id,
         ),

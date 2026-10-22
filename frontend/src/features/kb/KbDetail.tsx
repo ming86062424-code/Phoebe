@@ -83,6 +83,22 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
     onDocumentsChanged()
   }
 
+  // the choice being saved shows right away; kb.parser takes over once the save settles
+  const [pendingParser, setPendingParser] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const changeParser = async (parser: string) => {
+    setPendingParser(parser)
+    setError(null)
+    try {
+      onChanged(await api.updateKb(kb.id, { parser }))
+    } catch (err) {
+      setError(errorText(err, '解析器設定失敗'))
+    } finally {
+      setPendingParser(null)
+    }
+  }
+  const kbParser = parsers.find((p) => p.id === kb.parser) ?? null
+
   const rename = async (e: React.FormEvent) => {
     e.preventDefault()
     const trimmed = name.trim()
@@ -182,11 +198,39 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
       )}
 
       <section className={styles.card}>
+        <h2 className={styles.cardTitle}>知識庫設定</h2>
+        <label className={styles.setting}>
+          PDF 與圖片的解析器
+          <select
+            aria-label="知識庫的解析器"
+            value={pendingParser ?? kb.parser}
+            // files still waiting to upload would otherwise switch parser mid-batch
+            disabled={pendingParser !== null || uploading || parsers.length === 0}
+            onChange={(e) => void changeParser(e.target.value)}
+          >
+            {/* a parser no longer installed still shows what the setting is */}
+            {!kbParser && <option value={kb.parser}>{kb.parser}</option>}
+            {parsers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {p.available ? '' : '（目前無法使用）'}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className={styles.hint}>
+          只影響之後上傳的 PDF 與圖片；已上傳的文件維持原本的解析器（見下方文件列表的「解析器」欄）。txt、md
+          一律使用文字解析。
+        </p>
+      </section>
+
+      <section className={styles.card}>
         <h2 className={styles.cardTitle}>上傳文件</h2>
         <UploadPanel
-          parsers={parsers}
-          upload={(file, parser) => api.uploadDocument(kb.id, file, parser)}
+          parser={kbParser}
+          upload={(file) => api.uploadDocument(kb.id, file)}
           onUploaded={uploaded}
+          onBusyChange={setUploading}
         />
       </section>
 

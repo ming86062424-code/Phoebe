@@ -56,6 +56,7 @@ export interface KnowledgeBase {
   id: number
   name: string
   description: string
+  parser: string // for PDFs and images uploaded from now on
   document_count?: number
   created_at: string
   updated_at: string

@@ -1,21 +1,25 @@
 import json
 
+import pytest
+
 from app.kb.parsers.base import ParsedChunk, ParseError
 from tests.pdf_factory import make_pdf
 
 
-def _create_kb(client, name="手冊"):
-    r = client.post("/api/kbs", json={"name": name})
+def _create_kb(client, name="手冊", parser="fake"):
+    r = client.post("/api/kbs", json={"name": name, "parser": parser})
     assert r.status_code == 201
     return r.json()
 
 
-def _upload(client, kb_id, parser="fake", content=None, filename="a.pdf"):
+def _upload(client, kb_id, content=None, filename="a.pdf", parser=None):
+    """Upload a file; `parser` is a form field the server now ignores (the knowledge
+    base's setting decides)."""
     content = make_pdf(["hello"]) if content is None else content
     return client.post(
         f"/api/kbs/{kb_id}/documents",
         files={"file": (filename, content, "application/pdf")},
-        data={"parser": parser},
+        data={} if parser is None else {"parser": parser},
     )
 
 
@@ -58,9 +62,9 @@ def test_upload_parses_and_indexes(make_user, fake_parser, kb_services):
 
 def test_upload_with_real_liteparse(make_user):
     alice = make_user("alice")
-    kb = _create_kb(alice)
+    kb = _create_kb(alice, parser="liteparse")
     pdf = make_pdf(["Quarterly revenue grew", "Office moved to Taipei"])
-    doc = _upload(alice, kb["id"], parser="liteparse", content=pdf).json()
+    doc = _upload(alice, kb["id"], content=pdf).json()
     assert doc["status"] == "ready"
     hits = alice.get(f"/api/kbs/{kb['id']}/search", params={"q": "Taipei office"}).json()
     assert hits[0]["page"] == 2
@@ -71,7 +75,6 @@ def test_upload_validation(make_user, settings):
     kb = _create_kb(alice)
     assert _upload(alice, kb["id"], filename="a.docx").status_code == 422
     assert _upload(alice, kb["id"], content=b"not a pdf").status_code == 422
-    assert _upload(alice, kb["id"], parser="nope").status_code == 422
     assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
 
 
@@ -359,7 +362,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     creds = {"username": "eve", "password": "password123"}
     c.post("/api/auth/register", json=creds)
     c.post("/api/auth/login", json=creds)
-    kb = c.post("/api/kbs", json={"name": "k"}).json()
+    kb = c.post("/api/kbs", json={"name": "k", "parser": "fake"}).json()
     r = _upload(c, kb["id"])
     assert r.status_code == 422
     assert "worker" in r.json()["detail"]
@@ -481,20 +484,64 @@ def test_text_files_use_the_text_parser_whatever_was_requested(make_user, kb_ser
     kb = _create_kb(alice)
     md = "# 一\n\n甲 乙\n\n# 二\n\n丙 丁".encode("utf-8")
     fake_parser.available = False  # the requested parser is irrelevant for text files
-    doc = _upload(alice, kb["id"], parser="fake", filename="notes.md", content=md).json()
+    doc = _upload(alice, kb["id"], filename="notes.md", content=md).json()
     assert (doc["parser"], doc["status"], doc["chunk_count"]) == ("text", "ready", 2)
     assert fake_parser.parsed == []
     stored = kb_services.file_path(kb["id"], doc["id"], "notes.md")
     assert stored.name == f"{doc['id']}.md" and stored.read_bytes() == md
 
 
-def test_text_parser_cannot_be_requested_for_a_pdf(make_user):
+def test_text_parser_is_not_offered(make_user):
     alice = make_user("alice")
-    kb = _create_kb(alice)
-    r = _upload(alice, kb["id"], parser="text")
-    assert (r.status_code, r.json()["detail"]) == (422, "未知的解析器")
     ids = [p["id"] for p in alice.get("/api/parsers").json()]
     assert "text" not in ids
+
+
+# ---- the knowledge base's parser setting ----
+
+
+def test_new_knowledge_base_uses_liteparse_by_default(make_user):
+    alice = make_user("alice")
+    kb = alice.post("/api/kbs", json={"name": "預設"}).json()
+    assert kb["parser"] == "liteparse"
+    assert alice.get("/api/kbs").json()[0]["parser"] == "liteparse"
+
+
+def test_parser_can_be_chosen_at_creation_and_changed(make_user):
+    alice = make_user("alice")
+    kb = _create_kb(alice, parser="fake")
+    assert kb["parser"] == "fake"
+    r = alice.patch(f"/api/kbs/{kb['id']}", json={"parser": "liteparse"})
+    assert r.status_code == 200 and r.json()["parser"] == "liteparse"
+    assert alice.get("/api/kbs").json()[0]["parser"] == "liteparse"
+    # other fields are left alone
+    assert r.json()["name"] == "手冊"
+
+
+@pytest.mark.parametrize("parser", ["text", "nope", ""])
+def test_parser_setting_rejects_unknown_parsers(make_user, parser):
+    alice = make_user("alice")
+    kb = _create_kb(alice)
+    r = alice.patch(f"/api/kbs/{kb['id']}", json={"parser": parser})
+    assert (r.status_code, r.json()["detail"]) == (422, "未知的解析器")
+    assert alice.post("/api/kbs", json={"name": "x", "parser": parser}).status_code == 422
+
+
+def test_upload_uses_the_knowledge_base_parser_whatever_the_form_says(make_user, fake_parser):
+    alice = make_user("alice")
+    kb = _create_kb(alice, parser="fake")
+    doc = _upload(alice, kb["id"], parser="liteparse").json()
+    assert doc["parser"] == "fake" and len(fake_parser.parsed) == 1
+
+
+def test_changing_the_parser_only_affects_later_uploads(make_user):
+    alice = make_user("alice")
+    kb = _create_kb(alice, parser="fake")
+    first = _upload(alice, kb["id"]).json()
+    alice.patch(f"/api/kbs/{kb['id']}", json={"parser": "liteparse"})
+    second = _upload(alice, kb["id"], content=make_pdf(["Office moved to Taipei"])).json()
+    docs = {d["id"]: d["parser"] for d in alice.get(f"/api/kbs/{kb['id']}/documents").json()}
+    assert docs == {first["id"]: "fake", second["id"]: "liteparse"}
 
 
 def test_image_upload_is_checked_and_keeps_its_extension(make_user, kb_services, fake_parser):
