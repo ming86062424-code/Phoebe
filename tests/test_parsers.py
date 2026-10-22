@@ -1047,3 +1047,83 @@ def test_lightonocr_holds_few_rendered_pages(tmp_path, monkeypatch):
     )
     assert len(rendered) == 10
     assert max(alive) <= 3
+
+
+class FingerprintEngine:
+    """Answers by what the page image looks like, so the reply is page-specific even when
+    several documents are parsed at once. Learns the replies in a sequential pass."""
+
+    def __init__(self, delay=lambda: 0.0):
+        import hashlib
+        import threading
+
+        self._hash = lambda image: hashlib.sha1(image.tobytes()).hexdigest()
+        self.delay = delay
+        self.replies: dict[str, str] = {}
+        self.learning: str | None = None
+        self.count = 0
+        self.lock = threading.Lock()
+
+    def availability(self):
+        return True, ""
+
+    def ocr(self, image):
+        import time
+
+        key = self._hash(image)
+        with self.lock:
+            if self.learning is not None:
+                self.count += 1
+                self.replies[key] = (
+                    f"![text](0,0,1000,1000) {self.learning}頁{self.count}\n"
+                    f"![image](0,0,500,1000) 圖{self.learning}{self.count}"
+                )
+            reply = self.replies[key]
+        time.sleep(self.delay())
+        return reply
+
+    def release(self):
+        pass
+
+
+def test_lightonocr_two_documents_in_parallel_match_sequential(tmp_path):
+    import random
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    rng = random.Random(3)
+    engine = FingerprintEngine(delay=lambda: rng.uniform(0, 0.03))
+    docs = {
+        "a": make_pdf([f"alpha page {i}" for i in range(1, 5)]),
+        "b": make_pdf([f"beta page {i}" for i in range(1, 4)]),
+    }
+    paths = {}
+    for name, data in docs.items():
+        paths[name] = tmp_path / f"{name}.pdf"
+        paths[name].write_bytes(data)
+
+    def snapshot(pages):
+        return [(p.page, p.text, [ref.name for ref in p.images]) for p in pages]
+
+    sequential = {}
+    for name in docs:
+        out = tmp_path / f"seq_{name}"
+        out.mkdir()
+        engine.learning, engine.count = name, 0
+        parser = LightOnOcrParser(engine, concurrency=1)
+        sequential[name] = snapshot(parser.parse(str(paths[name]), out, lambda d, t: None))
+    engine.learning = None
+    assert [len(sequential[n]) for n in docs] == [4, 3]
+
+    parser = LightOnOcrParser(engine, concurrency=2)
+
+    def run(name):
+        out = tmp_path / f"par_{name}"
+        out.mkdir()
+        return snapshot(parser.parse(str(paths[name]), out, lambda d, t: None))
+
+    with ThreadPoolExecutor(2) as pool:
+        futures = {name: pool.submit(run, name) for name in docs}
+        parallel = {name: f.result(timeout=60) for name, f in futures.items()}
+    assert parallel == sequential

@@ -210,12 +210,19 @@ uv run --group eval pytest evals -v
 
 ## 部署
 
-以 Docker Compose 部署（Gunicorn web、獨立 ingest 服務、embedder、Milvus、vLLM），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
+以 Docker Compose 部署（Gunicorn web、獨立 ingest 服務、embedder、Milvus；vLLM 為選用），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
 
 ```
 cd docker
 cp .env.example .env   # Docker 專用設定，與根目錄 .env 無關
 docker compose up -d --build
+```
+
+vLLM（LightOnOCR）是選用的，不加 profile 不會啟動。要使用就帶上 `lightonocr` profile，停止時也要帶：
+
+```
+docker compose --profile lightonocr up -d --build
+docker compose --profile lightonocr down
 ```
 
 ## 資料位置

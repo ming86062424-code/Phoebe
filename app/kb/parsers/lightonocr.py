@@ -238,6 +238,8 @@ class LightOnOcrParser:
         finally:
             # On a failed page or a stop raised by on_progress: drop the pages not yet
             # started and wait for the running ones, so no OCR outlives this call.
+            # Stop and Ctrl-C therefore wait for pages already sent to vLLM (up to
+            # OCR_TIMEOUT_SECONDS); this is why ingest has a long stop_grace_period.
             for _, _, future in in_flight:
                 future.cancel()
             in_flight.clear()

@@ -170,7 +170,9 @@ services:
       vllm:
         condition: service_started
         required: false
-    stop_grace_period: 30s
+    # 收到 SIGTERM 後，處理中的文件要等已送進 vLLM 的 OCR 頁面跑完才會停；
+    # 一次 4 頁約 90 秒，30 秒會被 SIGKILL，文件得等過期重排。
+    stop_grace_period: 120s
     environment:
       OCR_BACKEND: vllm
       VLLM_BASE_URL: http://vllm:8000/v1

@@ -86,7 +86,7 @@ OCR_VLLM_MAX_NUM_SEQS=4
   - 0.8 的額度在模型權重和 CUDA graph 用掉之後，就沒剩空間給 KV cache 了。
   - 錯誤訊息建議調高使用率，但第 2 步已經證明 0.85 不行。
 - **解法**：
-  - 加上 `--enforce-eager`，不使用 CUDA graph，把那塊顯存留給 KV cache。代價是吞吐量比較低，但 OCR 一次只處理一頁，影響不大。
+  - 加上 `--enforce-eager`，不使用 CUDA graph，把那塊顯存留給 KV cache。代價是吞吐量比較低。LightOnOCR 預設一次送 4 頁（`OCR_CONCURRENCY=4`），這個代價就有影響：同時處理的頁越多，每頁越慢（數字見下方〈一次送多頁的速度實測〉）。
   - 加上 `--max-num-seqs`，把同時序列數從 256 降到 8，之後再降為 4（配合「一次送多頁」，見下方的速度實測）。降為 4 後重新量測，KV cache 仍是 1.28 GiB、99,243 tokens。
   - 兩者一起調整後，服務就能正常啟動。
 

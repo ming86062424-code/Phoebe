@@ -321,6 +321,8 @@ def test_compose_runs_the_ingest_service():
     assert "worker" not in services
     assert services["ingest"]["build"]["target"] == "ingest"
     assert services["ingest"]["image"] == "phoebe-ingest:local"
+    # in-flight OCR pages (4 at once, ~90 s) must finish before Docker SIGKILLs ingest
+    assert services["ingest"]["stop_grace_period"] == "120s"
 
 
 def test_vllm_is_opt_in_behind_the_lightonocr_profile():
