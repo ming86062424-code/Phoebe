@@ -629,3 +629,132 @@ def test_liteparse_pdf_pages_carry_their_embedded_images(tmp_path):
     assert "![圖片 1](img:img_1_1.png)" in chunk.text
     assert "img_p" not in chunk.text
     assert sorted(p.name for p in out.iterdir()) == ["img_1_1.png", "page_1.png"]
+
+
+# ---- thread safety of the shared native libraries ----
+
+
+def test_pdfium_calls_hold_the_lock(tmp_path, monkeypatch):
+    import pypdfium2
+
+    from app.kb.parsers.liteparse_parser import pdf_page_count
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+    from app.kb.parsers.pdfium_lock import PDFIUM_LOCK
+
+    real_document = pypdfium2.PdfDocument
+
+    def owned():
+        assert PDFIUM_LOCK._is_owned(), "pdfium called without PDFIUM_LOCK"
+
+    class Bitmap:
+        def __init__(self, bitmap):
+            self._bitmap = bitmap
+
+        def to_pil(self):
+            owned()
+            return self._bitmap.to_pil()
+
+    class Page:
+        def __init__(self, page):
+            self._page = page
+
+        def get_size(self):
+            owned()
+            return self._page.get_size()
+
+        def render(self, *args, **kwargs):
+            owned()
+            return Bitmap(self._page.render(*args, **kwargs))
+
+    class Document:
+        def __init__(self, path):
+            owned()
+            self._pdf = real_document(path)
+
+        def __len__(self):
+            owned()
+            return len(self._pdf)
+
+        def __getitem__(self, index):
+            owned()
+            return Page(self._pdf[index])
+
+        def close(self):
+            owned()
+            self._pdf.close()
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", Document)
+    path = tmp_path / "a.pdf"
+    path.write_bytes(make_pdf(["one", "two", "three"]))
+    assert pdf_page_count(str(path)) == 3
+    pages = LightOnOcrParser(FakeEngine()).parse(str(path), tmp_path, lambda d, t: None)
+    assert len(pages) == 3
+
+
+def test_liteparse_parallel_matches_sequential(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "a.pdf"
+    path.write_bytes(make_pdf([f"Page text number {n}" for n in range(1, 5)]))
+
+    def run(name):
+        out = tmp_path / name
+        out.mkdir()
+        pages = LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+        for n in range(1, 5):
+            assert (out / f"page_{n}.png").exists()
+        return [(p.page, p.text) for p in pages]
+
+    expected = run("sequential")
+    assert len(expected) == 4
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(run, [f"parallel_{i}" for i in range(6)]))
+    assert all(r == expected for r in results)
+
+
+def test_transformers_engine_runs_one_ocr_at_a_time(monkeypatch):
+    import contextlib
+    import sys
+    import threading
+    import time
+    import types
+    from concurrent.futures import ThreadPoolExecutor
+
+    import numpy as np
+
+    from app.kb.parsers.ocr_engines import TransformersOcrEngine
+
+    monkeypatch.setitem(
+        sys.modules, "torch", types.SimpleNamespace(inference_mode=contextlib.nullcontext)
+    )
+    state = {"active": 0, "max": 0}
+    guard = threading.Lock()
+
+    class FakeInputs(dict):
+        def to(self, device):
+            return self
+
+    class FakeProcessor:
+        def apply_chat_template(self, conversation, **kwargs):
+            return FakeInputs(input_ids=np.zeros((1, 3)))
+
+        def decode(self, tokens, skip_special_tokens):
+            return "x"
+
+    class FakeModel:
+        device = "cpu"
+
+        def generate(self, **kwargs):
+            with guard:
+                state["active"] += 1
+                state["max"] = max(state["max"], state["active"])
+            time.sleep(0.05)
+            with guard:
+                state["active"] -= 1
+            return np.zeros((1, 5))
+
+    engine = TransformersOcrEngine("model", "http://ollama")
+    engine._model, engine._processor = FakeModel(), FakeProcessor()
+    with ThreadPoolExecutor(4) as pool:
+        list(pool.map(lambda _: engine.ocr(object()), range(4)))
+    assert state["max"] == 1

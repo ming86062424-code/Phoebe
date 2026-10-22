@@ -3,6 +3,7 @@ import importlib.util
 import io
 import logging
 import re
+import threading
 from typing import Protocol
 
 import httpx
@@ -81,6 +82,8 @@ class TransformersOcrEngine:
         self.ollama_base_url = ollama_base_url
         self._model = None
         self._processor = None
+        # one model call at a time: generate() on a shared model is not thread-safe
+        self._lock = threading.Lock()
 
     def availability(self) -> tuple[bool, str]:
         missing = [m for m in ("torch", "transformers") if importlib.util.find_spec(m) is None]
@@ -110,6 +113,10 @@ class TransformersOcrEngine:
         self._processor = AutoProcessor.from_pretrained(self.model_id)
 
     def ocr(self, image) -> str:
+        with self._lock:
+            return self._ocr(image)
+
+    def _ocr(self, image) -> str:
         import torch
 
         try:
@@ -151,6 +158,10 @@ class TransformersOcrEngine:
         return fix_escaped_dollars(text)
 
     def release(self) -> None:
+        with self._lock:
+            self._release()
+
+    def _release(self) -> None:
         if self._model is None:
             return
         import gc

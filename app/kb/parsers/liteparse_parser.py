@@ -8,6 +8,7 @@ from pathlib import Path
 from app.kb.filetypes import IMAGE_EXTENSIONS
 from app.kb.parsers.base import ImageRef, ParsedChunk, ParseError, ProgressCallback
 from app.kb.parsers.images import MAX_PIXELS, check_pixels, fit, open_image, save_png, to_rgb
+from app.kb.parsers.pdfium_lock import PDFIUM_LOCK
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +90,16 @@ def pdf_page_count(path: str) -> int:
     import pypdfium2 as pdfium
 
     try:
-        pdf = pdfium.PdfDocument(path)
+        with PDFIUM_LOCK:
+            pdf = pdfium.PdfDocument(path)
     except Exception:
         return 0
     try:
-        return len(pdf)
+        with PDFIUM_LOCK:
+            return len(pdf)
     finally:
-        pdf.close()
+        with PDFIUM_LOCK:
+            pdf.close()
 
 
 def render_dpi(width_pt: float, height_pt: float) -> float:

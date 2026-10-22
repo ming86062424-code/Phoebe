@@ -20,6 +20,7 @@ from app.kb.filetypes import IMAGE_EXTENSIONS
 from app.kb.parsers.base import ImageRef, ParsedChunk, ParseError, ProgressCallback
 from app.kb.parsers.images import MAX_PIXELS, fit, open_image, save_png
 from app.kb.parsers.ocr_engines import OcrEngine
+from app.kb.parsers.pdfium_lock import PDFIUM_LOCK
 
 logger = logging.getLogger(__name__)
 
@@ -173,25 +174,31 @@ class LightOnOcrParser:
 
         import pypdfium2 as pdfium
 
+        # pdfium is not thread-safe: hold the lock only around its calls, never around OCR.
         try:
-            pdf = pdfium.PdfDocument(path)
+            with PDFIUM_LOCK:
+                pdf = pdfium.PdfDocument(path)
         except Exception as e:
             raise ParseError(f"LightOnOCR 初始化失敗：{e}") from e
         try:
-            total = len(pdf)
+            with PDFIUM_LOCK:
+                total = len(pdf)
             on_progress(0, total)
             pages: list[ParsedChunk] = []
             for i in range(total):
-                page = pdf[i]
-                # rendering as the model card does: 400 DPI, then a longest edge of 2048 px
-                scale = _render_scale(*page.get_size())
-                image = page.render(scale=scale).to_pil().convert("RGB")
+                with PDFIUM_LOCK:
+                    page = pdf[i]
+                    # rendering as the model card does: 400 DPI, then a longest edge of 2048 px
+                    scale = _render_scale(*page.get_size())
+                    # to_pil() stays inside the lock: the bitmap belongs to pdfium
+                    image = page.render(scale=scale).to_pil().convert("RGB")
                 image.thumbnail((MAX_EDGE, MAX_EDGE))
                 pages.append(self._page(image, i + 1, out_dir))
                 on_progress(i + 1, total)
             return pages
         finally:
-            pdf.close()
+            with PDFIUM_LOCK:
+                pdf.close()
 
     def release(self) -> None:
         self.engine.release()
