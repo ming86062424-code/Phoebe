@@ -39,6 +39,8 @@ interface Props {
   upload(file: File): Promise<unknown>
   /** Called after each file the server accepted (to refresh the document list). */
   onUploaded(): void
+  /** Told when files start or stop waiting/uploading. */
+  onBusyChange?(busy: boolean): void
 }
 
 /**
@@ -46,7 +48,7 @@ interface Props {
  * one after another, with its own status row. PDFs and images go through the knowledge
  * base's parser (set in the knowledge base settings, not here).
  */
-export default function UploadPanel({ parser, upload, onUploaded }: Props) {
+export default function UploadPanel({ parser, upload, onUploaded, onBusyChange }: Props) {
   const [items, setItems] = useState<Item[]>([])
   const [dragging, setDragging] = useState(false)
   const input = useRef<HTMLInputElement>(null)
@@ -104,6 +106,7 @@ export default function UploadPanel({ parser, upload, onUploaded }: Props) {
   }
 
   const busy = items.some((it) => it.status === 'waiting' || it.status === 'uploading')
+  useEffect(() => onBusyChange?.(busy), [busy, onBusyChange])
   const finished = items.some((it) => it.status === 'done' || it.status === 'failed')
 
   return (

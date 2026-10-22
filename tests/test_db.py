@@ -330,6 +330,7 @@ def test_upgrade_sets_each_knowledge_base_parser_from_its_documents(tmp_path):
     now = now_iso()
     layouts = {
         "ocr": ["lightonocr", "lightonocr", "text"],  # text files don't count
+        "failed ocr": ["liteparse", "lightonocr:failed"],  # failed documents don't count
         "lite": ["liteparse"],
         "mixed": ["liteparse", "lightonocr"],
         "text only": ["text"],
@@ -341,11 +342,12 @@ def test_upgrade_sets_each_knowledge_base_parser_from_its_documents(tmp_path):
             "VALUES (1, ?, '', ?, ?)",
             (name, now, now),
         ).lastrowid
-        for parser in parsers:
+        for entry in parsers:
+            parser, _, status = entry.partition(":")
             conn.execute(
                 "INSERT INTO kb_documents (kb_id, filename, parser, status, created_at, updated_at) "
-                "VALUES (?, 'a', ?, 'ready', ?, ?)",
-                (kb_id, parser, now, now),
+                "VALUES (?, 'a', ?, ?, ?, ?)",
+                (kb_id, parser, status or "ready", now, now),
             )
     conn.commit()
     # a database from before the setting existed
@@ -356,6 +358,7 @@ def test_upgrade_sets_each_knowledge_base_parser_from_its_documents(tmp_path):
     got = dict(conn.execute("SELECT name, parser FROM knowledge_bases").fetchall())
     assert got == {
         "ocr": "lightonocr",
+        "failed ocr": "liteparse",
         "lite": "liteparse",
         "mixed": "liteparse",
         "text only": "liteparse",

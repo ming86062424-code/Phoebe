@@ -83,21 +83,22 @@ MIGRATIONS = [
         "INTEGER REFERENCES knowledge_bases(id) ON DELETE SET NULL",
     ),
     ("messages", "sources", "TEXT"),
-    # the parser PDFs and images of the knowledge base go through (see _backfill_kb_parser)
+    # the parser PDFs and images of the knowledge base go through (see BACKFILL_KB_PARSER)
     ("knowledge_bases", "parser", "TEXT NOT NULL DEFAULT 'liteparse'"),
 ]
 
 # When the parser setting is added to an existing database, a knowledge base whose PDFs
 # and images all went through one parser keeps using it; mixed or empty ones get the
-# default. Text files always use the text parser, so they don't count.
+# default. Text files always use the text parser, and failed documents may name a parser
+# that never worked here, so neither counts.
 BACKFILL_KB_PARSER = """
 UPDATE knowledge_bases SET parser = (
     SELECT MIN(d.parser) FROM kb_documents d
-    WHERE d.kb_id = knowledge_bases.id AND d.parser != 'text'
+    WHERE d.kb_id = knowledge_bases.id AND d.parser != 'text' AND d.status != 'failed'
 )
 WHERE (
     SELECT COUNT(DISTINCT d.parser) FROM kb_documents d
-    WHERE d.kb_id = knowledge_bases.id AND d.parser != 'text'
+    WHERE d.kb_id = knowledge_bases.id AND d.parser != 'text' AND d.status != 'failed'
 ) = 1
 """
 

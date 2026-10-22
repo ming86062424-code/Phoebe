@@ -331,4 +331,40 @@ describe('KbPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('未知的解析器')
     expect(select).toHaveValue('liteparse')
   })
+
+  it('shows the parser being saved and locks the setting while files upload', async () => {
+    window.location.hash = '#/kb/1'
+    let finishSave!: () => void
+    let finishUpload!: () => void
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/kbs/1' && init?.method === 'PATCH')
+        return new Promise((resolve) => {
+          finishSave = () => resolve(jsonResponse({ ...kb, parser: 'lightonocr' }))
+        })
+      if (url === '/api/kbs/1/documents' && init?.method === 'POST')
+        return new Promise((resolve) => {
+          finishUpload = () => resolve(jsonResponse(doc({ id: 12 }), 201))
+        })
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/parsers')
+        return Promise.resolve(jsonResponse(parsers.map((p) => ({ ...p, available: true }))))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const select = await screen.findByRole('combobox', { name: '知識庫的解析器' })
+    await waitFor(() => expect(select).not.toBeDisabled())
+    await userEvent.selectOptions(select, 'lightonocr')
+    // the new choice shows while it is being saved, not the old one
+    expect(select).toHaveValue('lightonocr')
+    expect(select).toBeDisabled()
+    finishSave()
+    await waitFor(() => expect(select).not.toBeDisabled())
+    expect(select).toHaveValue('lightonocr')
+
+    await userEvent.upload(screen.getByLabelText('選擇檔案'), new File(['%PDF'], 'c.pdf'))
+    await waitFor(() => expect(select).toBeDisabled())
+    finishUpload()
+    await waitFor(() => expect(select).not.toBeDisabled())
+  })
 })

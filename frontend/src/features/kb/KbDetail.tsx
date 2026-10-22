@@ -83,16 +83,18 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
     onDocumentsChanged()
   }
 
-  const [savingParser, setSavingParser] = useState(false)
+  // the choice being saved shows right away; kb.parser takes over once the save settles
+  const [pendingParser, setPendingParser] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
   const changeParser = async (parser: string) => {
-    setSavingParser(true)
+    setPendingParser(parser)
     setError(null)
     try {
       onChanged(await api.updateKb(kb.id, { parser }))
     } catch (err) {
       setError(errorText(err, '解析器設定失敗'))
     } finally {
-      setSavingParser(false)
+      setPendingParser(null)
     }
   }
   const kbParser = parsers.find((p) => p.id === kb.parser) ?? null
@@ -201,8 +203,9 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
           PDF 與圖片的解析器
           <select
             aria-label="知識庫的解析器"
-            value={kb.parser}
-            disabled={savingParser || parsers.length === 0}
+            value={pendingParser ?? kb.parser}
+            // files still waiting to upload would otherwise switch parser mid-batch
+            disabled={pendingParser !== null || uploading || parsers.length === 0}
             onChange={(e) => void changeParser(e.target.value)}
           >
             {/* a parser no longer installed still shows what the setting is */}
@@ -227,6 +230,7 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
           parser={kbParser}
           upload={(file) => api.uploadDocument(kb.id, file)}
           onUploaded={uploaded}
+          onBusyChange={setUploading}
         />
       </section>
 
