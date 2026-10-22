@@ -95,3 +95,90 @@ def test_kb_vector_weight_env_must_be_zero_to_one(monkeypatch, value):
     monkeypatch.setenv("KB_VECTOR_WEIGHT", value)
     with pytest.raises(ValueError, match="KB_VECTOR_WEIGHT 必須是 0 到 1 之間的數字"):
         Settings.from_env()
+
+
+# ---- the knowledge base's own weight ----
+
+
+def test_knowledge_base_weight_follows_the_system_default_until_set(settings, kb_services):
+    c = _login(_app(settings, kb_services))
+    kb = c.post("/api/kbs", json={"name": "k"}).json()
+    assert kb["vector_weight"] is None  # follows KB_VECTOR_WEIGHT
+    assert c.get("/api/kbs").json()[0]["vector_weight"] is None
+
+
+def test_knowledge_base_weight_can_be_set_and_reset(settings, kb_services):
+    c = _login(_app(settings, kb_services))
+    kb = _kb(c)
+    r = c.patch(f"/api/kbs/{kb}", json={"vector_weight": 0.8})
+    assert r.status_code == 200 and r.json()["vector_weight"] == 0.8
+    # other fields stay
+    assert r.json()["name"] == "k" and r.json()["parser"] == "liteparse"
+    # a patch without the field leaves it alone
+    assert c.patch(f"/api/kbs/{kb}", json={"name": "新名"}).json()["vector_weight"] == 0.8
+    # null goes back to the system default
+    r = c.patch(f"/api/kbs/{kb}", json={"vector_weight": None})
+    assert r.status_code == 200 and r.json()["vector_weight"] is None
+
+
+@pytest.mark.parametrize("weight", [-0.1, 1.01, "abc"])
+def test_knowledge_base_weight_must_be_zero_to_one(settings, kb_services, weight):
+    c = _login(_app(settings, kb_services))
+    assert c.patch(f"/api/kbs/{_kb(c)}", json={"vector_weight": weight}).status_code == 422
+
+
+def test_search_and_chat_use_the_knowledge_base_weight(settings, kb_services, weights):
+    app = _app(settings, kb_services, weight=0.3)
+    fake = FakeChatClient()
+    app.dependency_overrides[chat_routes.get_chat_client] = lambda: fake
+    c = _login(app)
+    kb = _kb(c)
+    c.patch(f"/api/kbs/{kb}", json={"vector_weight": 0.9})
+    c.get(f"/api/kbs/{kb}/search", params={"q": "x"})
+    conv = c.post("/api/conversations").json()
+    c.patch(f"/api/conversations/{conv['id']}", json={"kb_id": kb})
+    assert c.post(f"/api/conversations/{conv['id']}/messages", json={"content": "嗨"}).status_code == 200
+    # the search test can still try another weight
+    c.get(f"/api/kbs/{kb}/search", params={"q": "x", "vector_weight": 0.2})
+    assert weights == [0.9, 0.9, 0.2]
+
+
+def test_other_knowledge_bases_keep_the_system_default(settings, kb_services, weights):
+    c = _login(_app(settings, kb_services, weight=0.3))
+    tuned, plain = _kb(c), _kb(c)
+    c.patch(f"/api/kbs/{tuned}", json={"vector_weight": 0.9})
+    c.get(f"/api/kbs/{plain}/search", params={"q": "x"})
+    assert weights == [0.3]
+
+
+def test_upgrade_adds_an_empty_weight_column(tmp_path):
+    from app.db import connect, init_db
+
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    conn.execute("ALTER TABLE knowledge_bases DROP COLUMN vector_weight")
+    conn.commit()
+    init_db(conn)
+    columns = {r["name"]: r for r in conn.execute("PRAGMA table_info(knowledge_bases)")}
+    assert "vector_weight" in columns and columns["vector_weight"]["notnull"] == 0
+
+
+def test_saving_one_field_does_not_undo_another(tmp_path):
+    """Two saves of different fields (e.g. from two tabs) must not overwrite each other."""
+    from app.db import connect, init_db, now_iso
+    from app.kb import store
+
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO users (username, password_hash, created_at) VALUES ('u', 'h', ?)", (now_iso(),)
+    )
+    kb = store.create_kb(conn, 1, "原名", "")
+    other = connect(str(tmp_path / "t.db"))  # a second request, with its own connection
+    store.update_kb(conn, 1, kb["id"], name="新名")
+    store.update_kb(other, 1, kb["id"], vector_weight=0.3)
+    got = store.get_kb(conn, 1, kb["id"])
+    assert (got["name"], got["vector_weight"]) == ("新名", 0.3)
+    assert store.update_kb(conn, 2, kb["id"], name="別人的") is None  # not the owner
+    other.close()
+    conn.close()

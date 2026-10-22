@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from starlette.datastructures import UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import current_user
 from app.config import Settings
@@ -94,6 +94,8 @@ class KbPatch(BaseModel):
     name: str | None = None
     description: str | None = None
     parser: str | None = None  # only documents uploaded afterwards use it
+    # hybrid search weight of the vector path; null follows KB_VECTOR_WEIGHT again
+    vector_weight: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("name")
     @classmethod
@@ -159,6 +161,9 @@ def update_kb(
         name=body.name,
         description=body.description,
         parser=body.parser,
+        vector_weight=(
+            body.vector_weight if "vector_weight" in body.model_fields_set else store.UNCHANGED
+        ),
     )
     if kb is None:
         raise HTTPException(status_code=404, detail="找不到知識庫")
@@ -371,7 +376,8 @@ def document_image(
 def search_settings(
     _user: dict = Depends(current_user), settings: Settings = Depends(get_settings)
 ):
-    """The hybrid search defaults the chat uses (the search test starts from them)."""
+    """The system defaults: KB_VECTOR_WEIGHT is the weight of knowledge bases that have
+    none of their own."""
     return {"vector_weight": settings.kb_vector_weight, "top_k": settings.kb_top_k}
 
 
@@ -379,15 +385,19 @@ def search_settings(
 async def search(
     kb_id: int,
     q: str = Query(min_length=1, max_length=1000),
-    # for trying weights in the search test; the chat always uses KB_VECTOR_WEIGHT
+    # for trying weights in the search test; the chat uses the knowledge base's weight
     vector_weight: float | None = Query(default=None, ge=0, le=1),
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
-    _require_kb(conn, user, kb_id)
-    weight = settings.kb_vector_weight if vector_weight is None else vector_weight
+    kb_row = _require_kb(conn, user, kb_id)
+    weight = (
+        store.vector_weight(kb_row, settings.kb_vector_weight)
+        if vector_weight is None
+        else vector_weight
+    )
     try:
         sources = await run_in_threadpool(
             kb.index.search, kb_id, q, settings.kb_top_k, weight

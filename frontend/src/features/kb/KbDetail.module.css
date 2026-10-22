@@ -132,6 +132,14 @@
   background: var(--color-surface);
 }
 
+.settingRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
 .hint {
   margin: var(--space-2) 0 0;
   color: var(--color-text-muted);

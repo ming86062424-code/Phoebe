@@ -8,7 +8,7 @@ import KbPage from './KbPage'
 
 const fetchMock = vi.fn()
 
-const kb = { id: 1, name: '員工手冊', description: '', parser: 'liteparse', document_count: 1, created_at: '', updated_at: '' }
+const kb = { id: 1, name: '員工手冊', description: '', parser: 'liteparse', vector_weight: null, document_count: 1, created_at: '', updated_at: '' }
 const parsers = [
   { id: 'liteparse', label: 'LiteParse（快速）', available: true, reason: '' },
   { id: 'lightonocr', label: 'LightOnOCR-3（GPU OCR）', available: false, reason: '未安裝 OCR 套件' },
@@ -194,7 +194,7 @@ describe('KbPage', () => {
     setup()
     const slider = await screen.findByRole('slider', { name: '向量權重' })
     await waitFor(() => expect(slider).toHaveValue('0.6'))
-    expect(screen.getByText('向量 0.60 ／ 關鍵字 0.40（聊天預設）')).toBeInTheDocument()
+    expect(screen.getByText('向量 0.60 ／ 關鍵字 0.40（知識庫目前的權重）')).toBeInTheDocument()
 
     fireEvent.change(slider, { target: { value: '0.3' } })
     expect(screen.getByText('向量 0.30 ／ 關鍵字 0.70')).toBeInTheDocument()
@@ -203,7 +203,7 @@ describe('KbPage', () => {
     await screen.findByText('沒有找到相關段落')
     expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=q&vector_weight=0.3')).toBe(true)
 
-    await userEvent.click(screen.getByRole('button', { name: '還原預設' }))
+    await userEvent.click(screen.getByRole('button', { name: '還原' }))
     expect(slider).toHaveValue('0.6')
   })
 
@@ -366,5 +366,59 @@ describe('KbPage', () => {
     await waitFor(() => expect(select).toBeDisabled())
     finishUpload()
     await waitFor(() => expect(select).not.toBeDisabled())
+  })
+
+  it("shows the knowledge base's own weight, which the chat uses", async () => {
+    window.location.hash = '#/kb/1'
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([{ ...kb, vector_weight: 0.8 }]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      if (url === '/api/search-settings') return Promise.resolve(jsonResponse({ vector_weight: 0.5, top_k: 5 }))
+      if (url.startsWith('/api/kbs/1/search?q=')) return Promise.resolve(jsonResponse([]))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    expect((await screen.findByText(/^混合查詢權重：/)).textContent).toBe('混合查詢權重：向量 0.80 ／ 關鍵字 0.20（自訂）')
+    const slider = screen.getByRole('slider', { name: '向量權重' })
+    expect(slider).toHaveValue('0.8')
+    await userEvent.type(screen.getByRole('textbox', { name: '檢索問題' }), 'q')
+    await userEvent.click(screen.getByRole('button', { name: '檢索' }))
+    await screen.findByText('沒有找到相關段落')
+    expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/kbs/1/search?q=q&vector_weight=0.8')).toBe(true)
+  })
+
+  it('saves a weight tried in the retrieval test, and goes back to the system default', async () => {
+    window.location.hash = '#/kb/1'
+    const patches: unknown[] = []
+    let current: number | null = null
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/kbs/1' && init?.method === 'PATCH') {
+        const body = JSON.parse(init.body as string)
+        patches.push(body)
+        current = body.vector_weight
+        return Promise.resolve(jsonResponse({ ...kb, vector_weight: current }))
+      }
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([kb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/parsers') return Promise.resolve(jsonResponse(parsers))
+      if (url === '/api/search-settings') return Promise.resolve(jsonResponse({ vector_weight: 0.5, top_k: 5 }))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    expect((await screen.findByText(/^混合查詢權重：/)).textContent).toBe('混合查詢權重：向量 0.50 ／ 關鍵字 0.50（系統預設）')
+    expect(screen.queryByRole('button', { name: '改回系統預設' })).toBeNull()
+
+    fireEvent.change(screen.getByRole('slider', { name: '向量權重' }), { target: { value: '0.3' } })
+    await userEvent.click(screen.getByRole('button', { name: '設為這個知識庫的權重' }))
+    await waitFor(() => expect(patches).toEqual([{ vector_weight: 0.3 }]))
+    await waitFor(() =>
+      expect(screen.getByText(/^混合查詢權重：/).textContent).toBe('混合查詢權重：向量 0.30 ／ 關鍵字 0.70（自訂）'),
+    )
+    expect(screen.getByText('向量 0.30 ／ 關鍵字 0.70（知識庫目前的權重）')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: '改回系統預設' }))
+    await waitFor(() => expect(patches).toEqual([{ vector_weight: 0.3 }, { vector_weight: null }]))
+    await waitFor(() => expect(screen.getByRole('slider', { name: '向量權重' })).toHaveValue('0.5'))
   })
 })

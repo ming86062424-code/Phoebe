@@ -57,6 +57,7 @@ export interface KnowledgeBase {
   name: string
   description: string
   parser: string // for PDFs and images uploaded from now on
+  vector_weight: number | null // hybrid search weight of the vector path; null: system default
   document_count?: number
   created_at: string
   updated_at: string
