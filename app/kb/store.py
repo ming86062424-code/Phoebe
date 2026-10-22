@@ -74,22 +74,21 @@ def update_kb(
     vector_weight: a number from 0 to 1, None to follow KB_VECTOR_WEIGHT again, or
     UNCHANGED (the default) to leave it as it is.
     """
-    kb = get_kb(conn, user_id, kb_id)
-    if kb is None:
-        return None
-    conn.execute(
-        "UPDATE knowledge_bases SET name = ?, description = ?, parser = ?, vector_weight = ?, "
-        "updated_at = ? WHERE id = ?",
-        (
-            kb["name"] if name is None else name,
-            kb["description"] if description is None else description,
-            kb["parser"] if parser is None else parser,
-            kb["vector_weight"] if vector_weight is UNCHANGED else vector_weight,
-            now_iso(),
-            kb_id,
-        ),
+    # only the fields given are written, so two saves of different fields (e.g. a rename
+    # and a weight change from two tabs) don't undo each other
+    changes: dict[str, object] = {"name": name, "description": description, "parser": parser}
+    changes = {k: v for k, v in changes.items() if v is not None}
+    if vector_weight is not UNCHANGED:
+        changes["vector_weight"] = vector_weight
+    changes["updated_at"] = now_iso()
+    assignments = ", ".join(f"{column} = ?" for column in changes)  # fixed column names
+    cur = conn.execute(
+        f"UPDATE knowledge_bases SET {assignments} WHERE id = ? AND user_id = ?",
+        (*changes.values(), kb_id, user_id),
     )
     conn.commit()
+    if cur.rowcount == 0:
+        return None
     return get_kb(conn, user_id, kb_id)
 
 

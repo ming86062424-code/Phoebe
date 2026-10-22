@@ -161,3 +161,24 @@ def test_upgrade_adds_an_empty_weight_column(tmp_path):
     init_db(conn)
     columns = {r["name"]: r for r in conn.execute("PRAGMA table_info(knowledge_bases)")}
     assert "vector_weight" in columns and columns["vector_weight"]["notnull"] == 0
+
+
+def test_saving_one_field_does_not_undo_another(tmp_path):
+    """Two saves of different fields (e.g. from two tabs) must not overwrite each other."""
+    from app.db import connect, init_db, now_iso
+    from app.kb import store
+
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO users (username, password_hash, created_at) VALUES ('u', 'h', ?)", (now_iso(),)
+    )
+    kb = store.create_kb(conn, 1, "原名", "")
+    other = connect(str(tmp_path / "t.db"))  # a second request, with its own connection
+    store.update_kb(conn, 1, kb["id"], name="新名")
+    store.update_kb(other, 1, kb["id"], vector_weight=0.3)
+    got = store.get_kb(conn, 1, kb["id"])
+    assert (got["name"], got["vector_weight"]) == ("新名", 0.3)
+    assert store.update_kb(conn, 2, kb["id"], name="別人的") is None  # not the owner
+    other.close()
+    conn.close()

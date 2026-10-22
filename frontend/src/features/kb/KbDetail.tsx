@@ -258,7 +258,9 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
             )}
           </div>
         )}
-        <p className={styles.hint}>AI 對話檢索這個知識庫時使用這個權重；可在下方的檢索測試試用後儲存。</p>
+        {kbWeight !== null && (
+          <p className={styles.hint}>AI 對話檢索這個知識庫時使用這個權重；可在下方的檢索測試試用後儲存。</p>
+        )}
       </section>
 
       <section className={styles.card}>
@@ -361,6 +363,8 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
               max={1}
               step={0.05}
               value={weight}
+              aria-valuetext={formatWeight(weight)}
+              disabled={savingWeight}
               onChange={(e) => setTrial(Number(e.target.value))}
             />
             <span className={styles.muted}>
@@ -377,7 +381,12 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
                 >
                   設為這個知識庫的權重
                 </button>
-                <button type="button" className={styles.secondary} onClick={() => setTrial(null)}>
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  disabled={savingWeight}
+                  onClick={() => setTrial(null)}
+                >
                   還原
                 </button>
               </>
