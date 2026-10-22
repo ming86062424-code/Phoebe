@@ -56,6 +56,7 @@ AUTOINCREMENT_TABLES = {
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     parser TEXT NOT NULL DEFAULT 'liteparse',
+    vector_weight REAL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )""",
@@ -85,6 +86,8 @@ MIGRATIONS = [
     ("messages", "sources", "TEXT"),
     # the parser PDFs and images of the knowledge base go through (see BACKFILL_KB_PARSER)
     ("knowledge_bases", "parser", "TEXT NOT NULL DEFAULT 'liteparse'"),
+    # hybrid search weight of the vector path; NULL follows KB_VECTOR_WEIGHT
+    ("knowledge_bases", "vector_weight", "REAL"),
 ]
 
 # When the parser setting is added to an existing database, a knowledge base whose PDFs

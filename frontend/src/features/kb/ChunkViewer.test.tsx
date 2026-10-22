@@ -6,7 +6,7 @@ import { jsonResponse } from '../chat/testUtils'
 import ChunkViewer from './ChunkViewer'
 
 const fetchMock = vi.fn()
-const kb = { id: 1, name: '員工手冊', description: '', parser: 'liteparse', document_count: 1, created_at: '', updated_at: '' }
+const kb = { id: 1, name: '員工手冊', description: '', parser: 'liteparse', vector_weight: null, document_count: 1, created_at: '', updated_at: '' }
 
 function doc(overrides: Partial<KbDocument> = {}): KbDocument {
   return {

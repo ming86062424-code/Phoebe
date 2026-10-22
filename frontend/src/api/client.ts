@@ -111,7 +111,10 @@ export const api = {
   listKbs: () => json<KnowledgeBase[]>('/api/kbs'),
   createKb: (name: string, description = '') =>
     json<KnowledgeBase>('/api/kbs', jsonInit('POST', { name, description })),
-  updateKb: (id: number, patch: { name?: string; description?: string; parser?: string }) =>
+  updateKb: (
+    id: number,
+    patch: { name?: string; description?: string; parser?: string; vector_weight?: number | null },
+  ) =>
     json<KnowledgeBase>(`/api/kbs/${id}`, jsonInit('PATCH', patch)),
   deleteKb: (id: number) => empty(`/api/kbs/${id}`, jsonInit('DELETE')),
   listDocuments: (kbId: number) => json<KbDocument[]>(`/api/kbs/${kbId}/documents`),

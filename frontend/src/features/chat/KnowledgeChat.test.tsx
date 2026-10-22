@@ -20,7 +20,7 @@ const source: Source = {
 }
 
 const kbs = [
-  { id: 7, name: '員工手冊', description: '', parser: 'liteparse', document_count: 1, created_at: '', updated_at: '' },
+  { id: 7, name: '員工手冊', description: '', parser: 'liteparse', vector_weight: null, document_count: 1, created_at: '', updated_at: '' },
 ]
 
 function setup() {

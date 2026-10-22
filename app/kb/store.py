@@ -10,6 +10,17 @@ UPDATABLE_DOC_FIELDS = {"status", "error", "progress_done", "progress_total", "c
 UNFINISHED_STATUSES = ("pending", "queued", "parsing", "indexing")
 
 
+# update_kb: leave the field as it is (None has a meaning of its own there)
+UNCHANGED = object()
+
+
+def vector_weight(kb: dict, default: float) -> float:
+    """The knowledge base's hybrid search weight, or `default` (KB_VECTOR_WEIGHT) when it
+    has none of its own."""
+    weight = kb.get("vector_weight")
+    return default if weight is None else weight
+
+
 def create_kb(
     conn: sqlite3.Connection,
     user_id: int,
@@ -29,7 +40,8 @@ def create_kb(
 
 def list_kbs(conn: sqlite3.Connection, user_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT k.id, k.name, k.description, k.parser, k.created_at, k.updated_at, "
+        "SELECT k.id, k.name, k.description, k.parser, k.vector_weight, k.created_at, "
+        "k.updated_at, "
         "COUNT(d.id) AS document_count "
         "FROM knowledge_bases k LEFT JOIN kb_documents d ON d.kb_id = k.id "
         "WHERE k.user_id = ? GROUP BY k.id ORDER BY k.updated_at DESC, k.id DESC",
@@ -40,7 +52,8 @@ def list_kbs(conn: sqlite3.Connection, user_id: int) -> list[dict]:
 
 def get_kb(conn: sqlite3.Connection, user_id: int, kb_id: int) -> dict | None:
     row = conn.execute(
-        "SELECT id, name, description, parser, created_at, updated_at FROM knowledge_bases "
+        "SELECT id, name, description, parser, vector_weight, created_at, updated_at "
+        "FROM knowledge_bases "
         "WHERE id = ? AND user_id = ?",
         (kb_id, user_id),
     ).fetchone()
@@ -54,18 +67,24 @@ def update_kb(
     name: str | None = None,
     description: str | None = None,
     parser: str | None = None,
+    vector_weight: float | None | object = UNCHANGED,
 ) -> dict | None:
-    """Change the given fields; the parser only applies to documents uploaded later."""
+    """Change the given fields; the parser only applies to documents uploaded later.
+
+    vector_weight: a number from 0 to 1, None to follow KB_VECTOR_WEIGHT again, or
+    UNCHANGED (the default) to leave it as it is.
+    """
     kb = get_kb(conn, user_id, kb_id)
     if kb is None:
         return None
     conn.execute(
-        "UPDATE knowledge_bases SET name = ?, description = ?, parser = ?, updated_at = ? "
-        "WHERE id = ?",
+        "UPDATE knowledge_bases SET name = ?, description = ?, parser = ?, vector_weight = ?, "
+        "updated_at = ? WHERE id = ?",
         (
             kb["name"] if name is None else name,
             kb["description"] if description is None else description,
             kb["parser"] if parser is None else parser,
+            kb["vector_weight"] if vector_weight is UNCHANGED else vector_weight,
             now_iso(),
             kb_id,
         ),

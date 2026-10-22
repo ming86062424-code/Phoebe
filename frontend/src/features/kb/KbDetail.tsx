@@ -10,6 +10,10 @@ import styles from './KbDetail.module.css'
 
 const POLL_MS = 2000
 
+function formatWeight(weight: number): string {
+  return `向量 ${weight.toFixed(2)} ／ 關鍵字 ${(1 - weight).toFixed(2)}`
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -39,10 +43,14 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Source[] | null>(null)
   const [searching, setSearching] = useState(false)
-  // hybrid weight for the search test: starts at the chat's default (null until loaded;
-  // without it the server's default is used)
-  const [defaultWeight, setDefaultWeight] = useState<number | null>(null)
-  const [weight, setWeight] = useState<number | null>(null)
+  // hybrid weight: the knowledge base's own (used by the chat), else the system default
+  // (KB_VECTOR_WEIGHT). Unknown (null) while the default can't be loaded: the server decides.
+  const [systemWeight, setSystemWeight] = useState<number | null>(null)
+  const kbWeight = kb.vector_weight ?? systemWeight
+  // a weight being tried in the search test (null: the knowledge base's weight)
+  const [trial, setTrial] = useState<number | null>(null)
+  const weight = trial ?? kbWeight
+  const [savingWeight, setSavingWeight] = useState(false)
 
   const loadDocs = useCallback(() => {
     return api.listDocuments(kb.id).then(setDocs, (e) => setError(errorText(e, '無法載入文件')))
@@ -55,10 +63,7 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
 
   useEffect(() => {
     api.searchSettings().then(
-      (s) => {
-        setDefaultWeight(s.vector_weight)
-        setWeight(s.vector_weight)
-      },
+      (s) => setSystemWeight(s.vector_weight),
       () => undefined,
     )
   }, [])
@@ -98,6 +103,19 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
     }
   }
   const kbParser = parsers.find((p) => p.id === kb.parser) ?? null
+
+  const saveWeight = async (vector_weight: number | null) => {
+    setSavingWeight(true)
+    setError(null)
+    try {
+      onChanged(await api.updateKb(kb.id, { vector_weight }))
+      setTrial(null)
+    } catch (err) {
+      setError(errorText(err, '權重設定失敗'))
+    } finally {
+      setSavingWeight(false)
+    }
+  }
 
   const rename = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -222,6 +240,25 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
           只影響之後上傳的 PDF 與圖片；已上傳的文件維持原本的解析器（見下方文件列表的「解析器」欄）。txt、md
           一律使用文字解析。
         </p>
+        {kbWeight !== null && (
+          <div className={styles.settingRow}>
+            <span>
+              混合查詢權重：{formatWeight(kbWeight)}
+              {kb.vector_weight === null ? '（系統預設）' : '（自訂）'}
+            </span>
+            {kb.vector_weight !== null && (
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={savingWeight}
+                onClick={() => void saveWeight(null)}
+              >
+                改回系統預設
+              </button>
+            )}
+          </div>
+        )}
+        <p className={styles.hint}>AI 對話檢索這個知識庫時使用這個權重；可在下方的檢索測試試用後儲存。</p>
       </section>
 
       <section className={styles.card}>
@@ -324,20 +361,26 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
               max={1}
               step={0.05}
               value={weight}
-              onChange={(e) => setWeight(Number(e.target.value))}
+              onChange={(e) => setTrial(Number(e.target.value))}
             />
             <span className={styles.muted}>
-              {`向量 ${weight.toFixed(2)} ／ 關鍵字 ${(1 - weight).toFixed(2)}`}
-              {weight === defaultWeight && '（聊天預設）'}
+              {formatWeight(weight)}
+              {weight === kbWeight && '（知識庫目前的權重）'}
             </span>
-            {weight !== defaultWeight && (
-              <button
-                type="button"
-                className={styles.secondary}
-                onClick={() => setWeight(defaultWeight)}
-              >
-                還原預設
-              </button>
+            {weight !== kbWeight && (
+              <>
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  disabled={savingWeight}
+                  onClick={() => void saveWeight(weight)}
+                >
+                  設為這個知識庫的權重
+                </button>
+                <button type="button" className={styles.secondary} onClick={() => setTrial(null)}>
+                  還原
+                </button>
+              </>
             )}
           </div>
         )}
