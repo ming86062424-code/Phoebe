@@ -89,16 +89,14 @@ def pdf_page_count(path: str) -> int:
     """The PDF's page count (0 when pdfium can't tell; LiteParse then reports the error)."""
     import pypdfium2 as pdfium
 
-    try:
-        with PDFIUM_LOCK:
+    with PDFIUM_LOCK:
+        try:
             pdf = pdfium.PdfDocument(path)
-    except Exception:
-        return 0
-    try:
-        with PDFIUM_LOCK:
+        except Exception:
+            return 0
+        try:
             return len(pdf)
-    finally:
-        with PDFIUM_LOCK:
+        finally:
             pdf.close()
 
 

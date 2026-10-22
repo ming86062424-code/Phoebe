@@ -646,9 +646,17 @@ def test_pdfium_calls_hold_the_lock(tmp_path, monkeypatch):
     def owned():
         assert PDFIUM_LOCK._is_owned(), "pdfium called without PDFIUM_LOCK"
 
+    closed = {"pages": 0, "bitmaps": 0, "opened_pages": 0, "opened_bitmaps": 0}
+
     class Bitmap:
         def __init__(self, bitmap):
             self._bitmap = bitmap
+            closed["opened_bitmaps"] += 1
+
+        def close(self):
+            owned()
+            closed["bitmaps"] += 1
+            self._bitmap.close()
 
         def to_pil(self):
             owned()
@@ -657,6 +665,12 @@ def test_pdfium_calls_hold_the_lock(tmp_path, monkeypatch):
     class Page:
         def __init__(self, page):
             self._page = page
+            closed["opened_pages"] += 1
+
+        def close(self):
+            owned()
+            closed["pages"] += 1
+            self._page.close()
 
         def get_size(self):
             owned()
@@ -689,6 +703,8 @@ def test_pdfium_calls_hold_the_lock(tmp_path, monkeypatch):
     assert pdf_page_count(str(path)) == 3
     pages = LightOnOcrParser(FakeEngine()).parse(str(path), tmp_path, lambda d, t: None)
     assert len(pages) == 3
+    assert closed["opened_pages"] == closed["pages"] == 3
+    assert closed["opened_bitmaps"] == closed["bitmaps"] == 3
 
 
 def test_liteparse_parallel_matches_sequential(tmp_path):
@@ -758,3 +774,51 @@ def test_transformers_engine_runs_one_ocr_at_a_time(monkeypatch):
     with ThreadPoolExecutor(4) as pool:
         list(pool.map(lambda _: engine.ocr(object()), range(4)))
     assert state["max"] == 1
+
+
+def test_liteparse_and_pdfium_run_together(tmp_path):
+    """LiteParse bundles its own pdfium (separate library), so it needs no PDFIUM_LOCK:
+    LiteParse parse+screenshot in two threads next to locked pypdfium2 renders in two others."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import pypdfium2
+
+    from app.kb.parsers.pdfium_lock import PDFIUM_LOCK
+
+    path = tmp_path / "big.pdf"
+    path.write_bytes(make_pdf([f"Stress page {n}" for n in range(1, 21)]))
+
+    def lite(i):
+        out = tmp_path / f"lite_{i}"
+        out.mkdir()
+        pages = LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+        assert all((out / f"page_{p.page}.png").exists() for p in pages)
+        return [(p.page, p.text) for p in pages]
+
+    def render(_):
+        sizes = []
+        for n in range(20):
+            with PDFIUM_LOCK:
+                pdf = pypdfium2.PdfDocument(str(path))
+                try:
+                    page = pdf[n]
+                    try:
+                        bitmap = page.render(scale=1)
+                        try:
+                            sizes.append(bitmap.to_pil().size)
+                        finally:
+                            bitmap.close()
+                    finally:
+                        page.close()
+                finally:
+                    pdf.close()
+        return sizes
+
+    expected = lite("seq")
+    assert len(expected) == 20
+    expected_sizes = render(0)
+    with ThreadPoolExecutor(4) as pool:
+        lites = [pool.submit(lite, i) for i in range(2)]
+        renders = [pool.submit(render, i) for i in range(10)]
+        assert all(f.result() == expected for f in lites)
+        assert all(f.result() == expected_sizes for f in renders)

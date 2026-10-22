@@ -188,10 +188,18 @@ class LightOnOcrParser:
             for i in range(total):
                 with PDFIUM_LOCK:
                     page = pdf[i]
-                    # rendering as the model card does: 400 DPI, then a longest edge of 2048 px
-                    scale = _render_scale(*page.get_size())
-                    # to_pil() stays inside the lock: the bitmap belongs to pdfium
-                    image = page.render(scale=scale).to_pil().convert("RGB")
+                    try:
+                        # rendering as the model card does: 400 DPI, then a longest edge of 2048 px
+                        scale = _render_scale(*page.get_size())
+                        bitmap = page.render(scale=scale)
+                        try:
+                            # to_pil() stays inside the lock: the bitmap belongs to pdfium
+                            image = bitmap.to_pil().convert("RGB")
+                        finally:
+                            bitmap.close()
+                    finally:
+                        # free the native handle here, not in a finalizer on another thread
+                        page.close()
                 image.thumbnail((MAX_EDGE, MAX_EDGE))
                 pages.append(self._page(image, i + 1, out_dir))
                 on_progress(i + 1, total)
