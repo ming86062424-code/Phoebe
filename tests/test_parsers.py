@@ -1,3 +1,5 @@
+import pytest
+
 from app.kb.parsers.liteparse_parser import LiteParseParser
 from tests.pdf_factory import make_pdf
 
@@ -629,3 +631,499 @@ def test_liteparse_pdf_pages_carry_their_embedded_images(tmp_path):
     assert "![圖片 1](img:img_1_1.png)" in chunk.text
     assert "img_p" not in chunk.text
     assert sorted(p.name for p in out.iterdir()) == ["img_1_1.png", "page_1.png"]
+
+
+# ---- thread safety of the shared native libraries ----
+
+
+def test_pdfium_calls_hold_the_lock(tmp_path, monkeypatch):
+    import pypdfium2
+
+    from app.kb.parsers.liteparse_parser import pdf_page_count
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+    from app.kb.parsers.pdfium_lock import PDFIUM_LOCK
+
+    real_document = pypdfium2.PdfDocument
+
+    def owned():
+        assert PDFIUM_LOCK._is_owned(), "pdfium called without PDFIUM_LOCK"
+
+    closed = {"pages": 0, "bitmaps": 0, "opened_pages": 0, "opened_bitmaps": 0}
+
+    class Bitmap:
+        def __init__(self, bitmap):
+            self._bitmap = bitmap
+            closed["opened_bitmaps"] += 1
+
+        def close(self):
+            owned()
+            closed["bitmaps"] += 1
+            self._bitmap.close()
+
+        def to_pil(self):
+            owned()
+            return self._bitmap.to_pil()
+
+    class Page:
+        def __init__(self, page):
+            self._page = page
+            closed["opened_pages"] += 1
+
+        def close(self):
+            owned()
+            closed["pages"] += 1
+            self._page.close()
+
+        def get_size(self):
+            owned()
+            return self._page.get_size()
+
+        def render(self, *args, **kwargs):
+            owned()
+            return Bitmap(self._page.render(*args, **kwargs))
+
+    class Document:
+        def __init__(self, path):
+            owned()
+            self._pdf = real_document(path)
+
+        def __len__(self):
+            owned()
+            return len(self._pdf)
+
+        def __getitem__(self, index):
+            owned()
+            return Page(self._pdf[index])
+
+        def close(self):
+            owned()
+            self._pdf.close()
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", Document)
+    path = tmp_path / "a.pdf"
+    path.write_bytes(make_pdf(["one", "two", "three"]))
+    assert pdf_page_count(str(path)) == 3
+    pages = LightOnOcrParser(FakeEngine()).parse(str(path), tmp_path, lambda d, t: None)
+    assert len(pages) == 3
+    assert closed["opened_pages"] == closed["pages"] == 3
+    assert closed["opened_bitmaps"] == closed["bitmaps"] == 3
+
+
+def test_liteparse_parallel_matches_sequential(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "a.pdf"
+    path.write_bytes(make_pdf([f"Page text number {n}" for n in range(1, 5)]))
+
+    def run(name):
+        out = tmp_path / name
+        out.mkdir()
+        pages = LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+        for n in range(1, 5):
+            assert (out / f"page_{n}.png").exists()
+        return [(p.page, p.text) for p in pages]
+
+    expected = run("sequential")
+    assert len(expected) == 4
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(run, [f"parallel_{i}" for i in range(6)]))
+    assert all(r == expected for r in results)
+
+
+def test_transformers_engine_runs_one_ocr_at_a_time(monkeypatch):
+    import contextlib
+    import sys
+    import threading
+    import time
+    import types
+    from concurrent.futures import ThreadPoolExecutor
+
+    import numpy as np
+
+    from app.kb.parsers.ocr_engines import TransformersOcrEngine
+
+    monkeypatch.setitem(
+        sys.modules, "torch", types.SimpleNamespace(inference_mode=contextlib.nullcontext)
+    )
+    state = {"active": 0, "max": 0}
+    guard = threading.Lock()
+
+    class FakeInputs(dict):
+        def to(self, device):
+            return self
+
+    class FakeProcessor:
+        def apply_chat_template(self, conversation, **kwargs):
+            return FakeInputs(input_ids=np.zeros((1, 3)))
+
+        def decode(self, tokens, skip_special_tokens):
+            return "x"
+
+    class FakeModel:
+        device = "cpu"
+
+        def generate(self, **kwargs):
+            with guard:
+                state["active"] += 1
+                state["max"] = max(state["max"], state["active"])
+            time.sleep(0.05)
+            with guard:
+                state["active"] -= 1
+            return np.zeros((1, 5))
+
+    engine = TransformersOcrEngine("model", "http://ollama")
+    engine._model, engine._processor = FakeModel(), FakeProcessor()
+    with ThreadPoolExecutor(4) as pool:
+        list(pool.map(lambda _: engine.ocr(object()), range(4)))
+    assert state["max"] == 1
+
+
+def test_liteparse_and_pdfium_run_together(tmp_path):
+    """LiteParse bundles its own pdfium (separate library), so it needs no PDFIUM_LOCK:
+    LiteParse parse+screenshot in two threads next to locked pypdfium2 renders in two others."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import pypdfium2
+
+    from app.kb.parsers.pdfium_lock import PDFIUM_LOCK
+
+    path = tmp_path / "big.pdf"
+    path.write_bytes(make_pdf([f"Stress page {n}" for n in range(1, 21)]))
+
+    def lite(i):
+        out = tmp_path / f"lite_{i}"
+        out.mkdir()
+        pages = LiteParseParser("eng").parse(str(path), out, lambda d, t: None)
+        assert all((out / f"page_{p.page}.png").exists() for p in pages)
+        return [(p.page, p.text) for p in pages]
+
+    def render(_):
+        sizes = []
+        for n in range(20):
+            with PDFIUM_LOCK:
+                pdf = pypdfium2.PdfDocument(str(path))
+                try:
+                    page = pdf[n]
+                    try:
+                        bitmap = page.render(scale=1)
+                        try:
+                            sizes.append(bitmap.to_pil().size)
+                        finally:
+                            bitmap.close()
+                    finally:
+                        page.close()
+                finally:
+                    pdf.close()
+        return sizes
+
+    expected = lite("seq")
+    assert len(expected) == 20
+    expected_sizes = render(0)
+    with ThreadPoolExecutor(4) as pool:
+        lites = [pool.submit(lite, i) for i in range(2)]
+        renders = [pool.submit(render, i) for i in range(10)]
+        assert all(f.result() == expected for f in lites)
+        assert all(f.result() == expected_sizes for f in renders)
+
+
+# ---- LightOnOCR: several pages in flight ----
+
+
+def _fake_pdfium(monkeypatch, pages: int, rendered: list | None = None):
+    """Replace pypdfium2.PdfDocument with a document whose page N renders to an image
+    N + 100 pixels wide, so an engine can tell which page it received."""
+    import pypdfium2
+    from PIL import Image
+
+    class Bitmap:
+        def __init__(self, n):
+            self.n = n
+
+        def to_pil(self):
+            if rendered is not None:
+                rendered.append(self.n)
+            return Image.new("RGB", (100 + self.n, 50), "white")
+
+        def close(self):
+            pass
+
+    class Page:
+        def __init__(self, n):
+            self.n = n
+
+        def get_size(self):
+            return (100, 100)
+
+        def render(self, **kwargs):
+            return Bitmap(self.n)
+
+        def close(self):
+            pass
+
+    class Document:
+        def __init__(self, path):
+            pass
+
+        def __len__(self):
+            return pages
+
+        def __getitem__(self, i):
+            return Page(i + 1)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", Document)
+
+
+class ConcurrentEngine:
+    """Records which pages it OCRs and how many calls overlap."""
+
+    def __init__(self, delay=lambda page: 0.05, fail_page=None):
+        import threading
+
+        self.delay = delay
+        self.fail_page = fail_page
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.started: list[int] = []
+
+    def availability(self):
+        return True, ""
+
+    def ocr(self, image):
+        import time
+
+        page = image.width - 100
+        with self.lock:
+            self.started.append(page)
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            time.sleep(self.delay(page))
+            if page == self.fail_page:
+                raise RuntimeError("boom")
+            return f"![text](0,0,1000,1000) 第{page}頁\n![image](0,0,500,1000) 圖{page}"
+        finally:
+            with self.lock:
+                self.in_flight -= 1
+
+    def release(self):
+        pass
+
+
+def _pdf(tmp_path):
+    path = tmp_path / "a.pdf"
+    path.write_bytes(b"%PDF-1.4 fake")
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    return str(path), out
+
+
+def test_lightonocr_keeps_at_most_concurrency_pages_in_flight(tmp_path, monkeypatch):
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    _fake_pdfium(monkeypatch, 6)
+    engine = ConcurrentEngine(delay=lambda page: 0.2)
+    path, out = _pdf(tmp_path)
+    pages = LightOnOcrParser(engine, concurrency=3).parse(path, out, lambda d, t: None)
+    assert len(pages) == 6
+    assert engine.max_in_flight == 3
+    assert engine.in_flight == 0
+
+
+def test_lightonocr_results_are_in_page_order(tmp_path, monkeypatch):
+    import random
+
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    _fake_pdfium(monkeypatch, 6)
+    rng = random.Random(7)
+    delays = {p: rng.uniform(0, 0.1) for p in range(1, 7)}
+    engine = ConcurrentEngine(delay=lambda page: delays[page])
+    path, out = _pdf(tmp_path)
+    pages = LightOnOcrParser(engine, concurrency=4).parse(path, out, lambda d, t: None)
+    assert [p.page for p in pages] == [1, 2, 3, 4, 5, 6]
+    for p in pages:
+        assert p.text == f"第{p.page}頁\n\n![圖片 1](img:img_{p.page}_1.png) 圖{p.page}"
+        assert [ref.name for ref in p.images] == [f"img_{p.page}_1.png"]
+        assert (out / f"img_{p.page}_1.png").exists()
+
+
+def test_lightonocr_progress_counts_every_page(tmp_path, monkeypatch):
+    import threading
+
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    _fake_pdfium(monkeypatch, 6)
+    engine = ConcurrentEngine(delay=lambda page: 0.1 if page % 2 else 0.01)
+    path, out = _pdf(tmp_path)
+    progress, threads = [], set()
+
+    def on_progress(done, total):
+        progress.append((done, total))
+        threads.add(threading.get_ident())
+
+    LightOnOcrParser(engine, concurrency=3).parse(path, out, on_progress)
+    assert progress[0] == (0, 6) and progress[-1] == (6, 6)
+    assert [d for d, _ in progress] == sorted(d for d, _ in progress)
+    assert threads == {threading.get_ident()}  # only the parsing thread reports
+
+
+def test_lightonocr_one_failed_page_fails_the_document(tmp_path, monkeypatch):
+    from app.kb.parsers.base import ParseError
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    _fake_pdfium(monkeypatch, 8)
+    # page 5 is still running when page 4's failure is seen: parse must wait for it
+    engine = ConcurrentEngine(delay=lambda page: 0.3 if page == 5 else 0.01, fail_page=4)
+    path, out = _pdf(tmp_path)
+    with pytest.raises(ParseError, match="第 4 頁 OCR 失敗：boom"):
+        LightOnOcrParser(engine, concurrency=2).parse(path, out, lambda d, t: None)
+    assert engine.in_flight == 0  # nothing left running after parse raised
+    # 1 and 2, then one new page per finished page: page 5 was the last one sent (it may
+    # be cancelled before it starts), and nothing is sent once the failure is seen
+    assert sorted(engine.started) in ([1, 2, 3, 4], [1, 2, 3, 4, 5])
+
+
+def test_lightonocr_engine_parse_error_is_kept(tmp_path, monkeypatch):
+    from app.kb.parsers.base import ParseError
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    class Engine(ConcurrentEngine):
+        def ocr(self, image):
+            raise ParseError("OCR 服務（vLLM）呼叫失敗：x")
+
+    _fake_pdfium(monkeypatch, 3)
+    path, out = _pdf(tmp_path)
+    with pytest.raises(ParseError, match="^OCR 服務（vLLM）呼叫失敗：x$"):
+        LightOnOcrParser(Engine(), concurrency=2).parse(path, out, lambda d, t: None)
+
+
+def test_stop_while_pages_are_in_flight_indexes_nothing(tmp_path, monkeypatch):
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    class Stopped(Exception):
+        pass
+
+    stop = Stopped()
+
+    def on_progress(done, total):
+        if done == 2:
+            raise stop
+
+    _fake_pdfium(monkeypatch, 8)
+    engine = ConcurrentEngine(delay=lambda page: 0.1)
+    path, out = _pdf(tmp_path)
+    with pytest.raises(Stopped) as raised:
+        LightOnOcrParser(engine, concurrency=2).parse(path, out, on_progress)
+    assert raised.value is stop
+    assert engine.in_flight == 0
+    # pages 1 and 2, plus page 3 sent after page 1 finished; nothing after the stop
+    assert sorted(engine.started) in ([1, 2], [1, 2, 3])
+
+
+def test_lightonocr_holds_few_rendered_pages(tmp_path, monkeypatch):
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    rendered: list[int] = []
+    done = [0]
+    alive: list[int] = []
+
+    class Engine(ConcurrentEngine):
+        def ocr(self, image):
+            # pages rendered but not yet post-processed and reported
+            alive.append(len(rendered) - done[0])
+            return super().ocr(image)
+
+    def on_progress(d, t):
+        done[0] = d
+
+    _fake_pdfium(monkeypatch, 10, rendered)
+    path, out = _pdf(tmp_path)
+    LightOnOcrParser(Engine(delay=lambda page: 0.02), concurrency=3).parse(
+        path, out, on_progress
+    )
+    assert len(rendered) == 10
+    assert max(alive) <= 3
+
+
+class FingerprintEngine:
+    """Answers by what the page image looks like, so the reply is page-specific even when
+    several documents are parsed at once. Learns the replies in a sequential pass."""
+
+    def __init__(self, delay=lambda: 0.0):
+        import hashlib
+        import threading
+
+        self._hash = lambda image: hashlib.sha1(image.tobytes()).hexdigest()
+        self.delay = delay
+        self.replies: dict[str, str] = {}
+        self.learning: str | None = None
+        self.count = 0
+        self.lock = threading.Lock()
+
+    def availability(self):
+        return True, ""
+
+    def ocr(self, image):
+        import time
+
+        key = self._hash(image)
+        with self.lock:
+            if self.learning is not None:
+                self.count += 1
+                self.replies[key] = (
+                    f"![text](0,0,1000,1000) {self.learning}頁{self.count}\n"
+                    f"![image](0,0,500,1000) 圖{self.learning}{self.count}"
+                )
+            reply = self.replies[key]
+        time.sleep(self.delay())
+        return reply
+
+    def release(self):
+        pass
+
+
+def test_lightonocr_two_documents_in_parallel_match_sequential(tmp_path):
+    import random
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.kb.parsers.lightonocr import LightOnOcrParser
+
+    rng = random.Random(3)
+    engine = FingerprintEngine(delay=lambda: rng.uniform(0, 0.03))
+    docs = {
+        "a": make_pdf([f"alpha page {i}" for i in range(1, 5)]),
+        "b": make_pdf([f"beta page {i}" for i in range(1, 4)]),
+    }
+    paths = {}
+    for name, data in docs.items():
+        paths[name] = tmp_path / f"{name}.pdf"
+        paths[name].write_bytes(data)
+
+    def snapshot(pages):
+        return [(p.page, p.text, [ref.name for ref in p.images]) for p in pages]
+
+    sequential = {}
+    for name in docs:
+        out = tmp_path / f"seq_{name}"
+        out.mkdir()
+        engine.learning, engine.count = name, 0
+        parser = LightOnOcrParser(engine, concurrency=1)
+        sequential[name] = snapshot(parser.parse(str(paths[name]), out, lambda d, t: None))
+    engine.learning = None
+    assert [len(sequential[n]) for n in docs] == [4, 3]
+
+    parser = LightOnOcrParser(engine, concurrency=2)
+
+    def run(name):
+        out = tmp_path / f"par_{name}"
+        out.mkdir()
+        return snapshot(parser.parse(str(paths[name]), out, lambda d, t: None))
+
+    with ThreadPoolExecutor(2) as pool:
+        futures = {name: pool.submit(run, name) for name in docs}
+        parallel = {name: f.result(timeout=60) for name, f in futures.items()}
+    assert parallel == sequential

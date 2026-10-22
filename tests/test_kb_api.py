@@ -237,7 +237,7 @@ def test_delete_document_succeeds_when_file_is_locked(make_user, kb_services, mo
     assert alice.get(f"/api/kbs/{kb['id']}/search", params={"q": "apple"}).json() == []
     assert path.exists()
     monkeypatch.undo()
-    kb_services.worker.cleanup()
+    kb_services.ingester.cleanup()
     assert not path.exists()
 
 
@@ -252,7 +252,7 @@ def test_delete_kb_succeeds_when_a_file_is_locked(make_user, kb_services, monkey
     assert alice.delete(f"/api/kbs/{kb['id']}").status_code == 204
     assert deleted == [kb["id"]]
     monkeypatch.undo()
-    kb_services.worker.cleanup()
+    kb_services.ingester.cleanup()
     assert not folder.exists()
 
 
@@ -287,17 +287,17 @@ def test_upload_does_blocking_work_off_the_event_loop(make_user, monkeypatch):
             asyncio.get_running_loop()
             calls.append("event loop")
         except RuntimeError:
-            calls.append("worker thread")
+            calls.append("background thread")
         return real(*args, **kwargs)
 
     monkeypatch.setattr(kb_store, "create_document", create_document)
     alice = make_user("alice")
     kb = _create_kb(alice)
     assert _upload(alice, kb["id"]).status_code == 201
-    assert calls == ["worker thread"]
+    assert calls == ["background thread"]
 
 
-def test_external_worker_mode_does_not_start_worker(settings, kb_services):
+def test_external_ingest_mode_does_not_start_ingester(settings, kb_services):
     from dataclasses import replace
 
     from fastapi.testclient import TestClient
@@ -305,9 +305,9 @@ def test_external_worker_mode_does_not_start_worker(settings, kb_services):
     from app.main import create_app
 
     started = []
-    kb_services.worker.start = lambda: started.append("start")
-    kb_services.worker.stop = lambda: started.append("stop")
-    with TestClient(create_app(replace(settings, kb_worker_mode="external"), kb_services)):
+    kb_services.ingester.start = lambda: started.append("start")
+    kb_services.ingester.stop = lambda: started.append("stop")
+    with TestClient(create_app(replace(settings, kb_ingest_mode="external"), kb_services)):
         pass
     assert started == []
     with TestClient(create_app(settings, kb_services)):
@@ -349,7 +349,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
         db_path=str(tmp_path / "e.db"),
         frontend_dist=str(tmp_path / "no-dist"),
         kb_dir=str(tmp_path / "kb"),
-        kb_worker_mode="external",
+        kb_ingest_mode="external",
     )
     fake_parser.available = False  # the web process itself could not use it
     services = build_kb_services(
@@ -365,7 +365,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
     kb = c.post("/api/kbs", json={"name": "k", "parser": "fake"}).json()
     r = _upload(c, kb["id"])
     assert r.status_code == 422
-    assert "worker" in r.json()["detail"]
+    assert "ingest" in r.json()["detail"]
     conn = connect(settings.db_path)
     init_db(conn)
     conn.execute(
@@ -393,7 +393,7 @@ def test_delete_document_succeeds_when_store_is_down(make_user, kb_services, mon
     kb = _create_kb(alice)
     doc = _upload(alice, kb["id"]).json()
     removed = []
-    monkeypatch.setattr(kb_services.worker, "remove_path", lambda p: removed.append(p))
+    monkeypatch.setattr(kb_services.ingester, "remove_path", lambda p: removed.append(p))
     _store_down(monkeypatch, kb_services, "delete_document")
     assert alice.delete(f"/api/kbs/{kb['id']}/documents/{doc['id']}").status_code == 204
     assert removed == [
@@ -407,7 +407,7 @@ def test_delete_kb_succeeds_when_store_is_down(make_user, kb_services, monkeypat
     alice = make_user("alice")
     kb = _create_kb(alice)
     removed = []
-    monkeypatch.setattr(kb_services.worker, "remove_path", lambda p: removed.append(p))
+    monkeypatch.setattr(kb_services.ingester, "remove_path", lambda p: removed.append(p))
     _store_down(monkeypatch, kb_services, "delete_kb")
     assert alice.delete(f"/api/kbs/{kb['id']}").status_code == 204
     assert removed == [kb_services.kb_dir / str(kb["id"])]

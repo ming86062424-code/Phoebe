@@ -48,7 +48,7 @@ class ReplyLock:
         task, loop = self._task, self._loop
         if task is None or loop is None:
             return
-        try:  # release() may run in a worker thread (background task)
+        try:  # release() may run in a background thread (background task)
             loop.call_soon_threadsafe(task.cancel)
         except RuntimeError:  # loop already closed
             pass
@@ -89,8 +89,8 @@ class ReplyLock:
 def claim_reply(db_path: str, conversation_id: int, ttl_seconds: int) -> ReplyLock:
     """Mark the conversation as replying; returns the lock (callable: idempotent release).
 
-    The lock lives in SQLite so it holds across worker processes. A lock not refreshed
-    (see ReplyLock.touch) for ttl_seconds is treated as left over from a crashed worker
+    The lock lives in SQLite so it holds across Gunicorn processes. A lock not refreshed
+    (see ReplyLock.touch) for ttl_seconds is treated as left over from a crashed Gunicorn process
     and replaced. Raises 409 when another reply for the same conversation is still running.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)).isoformat()

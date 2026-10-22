@@ -118,7 +118,7 @@ services:
     ports:
       - "${PHOEBE_PORT:-8000}:8000"
     environment:
-      KB_WORKER_MODE: external
+      KB_INGEST_MODE: external
       MILVUS_URI: http://milvus:19530
       EMBEDDER_URL: http://embedder:8000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
@@ -127,7 +127,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # SQLite（WAL，web 與 worker 同時讀寫）放在 Docker 管理的 volume：
+      # SQLite（WAL，web 與 ingest 同時讀寫）放在 Docker 管理的 volume：
       # Windows 主機目錄經過檔案共享層，檔案鎖與共用記憶體不可靠
       - phoebe-db:/db
       - ./volumes/kb:/data/kb
@@ -150,13 +150,13 @@ services:
       retries: 5
       start_period: 20s
 
-  worker:
+  ingest:
     <<: *env
     build:
       context: ..
       dockerfile: docker/Dockerfile
-      target: worker
-    image: phoebe-worker:local
+      target: ingest
+    image: phoebe-ingest:local
     restart: unless-stopped
     depends_on:
       web:
@@ -166,9 +166,13 @@ services:
       embedder:
         condition: service_healthy
       # 只等容器啟動：vLLM 還在下載模型或失敗時，LiteParse 仍可使用（OCR 解析器會顯示未啟動）
+      # vllm 只在 lightonocr profile 啟用時存在；沒啟用就略過（required: false）
       vllm:
         condition: service_started
-    stop_grace_period: 30s
+        required: false
+    # 收到 SIGTERM 後，處理中的文件要等已送進 vLLM 的 OCR 頁面跑完才會停；
+    # 一次 4 頁約 90 秒，30 秒會被 SIGKILL，文件得等過期重排。
+    stop_grace_period: 120s
     environment:
       OCR_BACKEND: vllm
       VLLM_BASE_URL: http://vllm:8000/v1
@@ -184,10 +188,12 @@ services:
       - ./volumes/kb:/data/kb
 
   # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
-  # 只想給本機快速測試用：docker compose up -d vllm（只對本機 127.0.0.1:8001 開放）
+  # 預設不啟動，需加 profile：docker compose --profile lightonocr up -d
+  # 只想給本機快速測試用：docker compose --profile lightonocr up -d vllm（只對本機 127.0.0.1:8001 開放）
   # 不載入 env_file：vllm 不需要應用程式設定，避免 vLLM 對未知的 VLLM_* 環境變數發出警告
   vllm:
     image: vllm/vllm-openai:v0.30.0
+    profiles: ["lightonocr"]
     restart: unless-stopped
     ports:
       # 無驗證的 GPU 端點，只對本機開放
@@ -213,7 +219,7 @@ services:
       # 6GB 顯卡：CUDA graph 的額外記憶體會讓 KV cache 配不到空間，改用 eager 並限制同時序列數
       - --enforce-eager
       - --max-num-seqs
-      - ${OCR_VLLM_MAX_NUM_SEQS:-8}
+      - ${OCR_VLLM_MAX_NUM_SEQS:-4}
     ipc: host
     volumes:
       # vLLM 映像以 root 執行，Hugging Face 預設快取在 /root/.cache/huggingface

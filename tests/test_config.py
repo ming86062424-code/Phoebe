@@ -38,7 +38,7 @@ def test_tests_ignore_developer_env_file():
 
 def test_new_settings_defaults(monkeypatch):
     for key in (
-        "KB_WORKER_MODE",
+        "KB_INGEST_MODE",
         "EMBEDDER_URL",
         "OCR_BACKEND",
         "VLLM_BASE_URL",
@@ -46,12 +46,12 @@ def test_new_settings_defaults(monkeypatch):
         "MILVUS_TOKEN",
         "MILVUS_COLLECTION",
         "REPLY_LOCK_TTL_SECONDS",
-        "KB_WORKER_POLL_SECONDS",
+        "KB_INGEST_POLL_SECONDS",
         "KB_STALE_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
     s = Settings.from_env()
-    assert s.kb_worker_mode == "embedded"
+    assert s.kb_ingest_mode == "embedded"
     assert s.embedder_url == "http://localhost:8002"
     assert s.ocr_backend == "transformers"
     assert s.vllm_base_url == "http://localhost:8001/v1"
@@ -59,26 +59,26 @@ def test_new_settings_defaults(monkeypatch):
     assert s.milvus_token == ""
     assert s.milvus_collection == "phoebe_chunks"
     assert s.reply_lock_ttl_seconds == 90
-    assert s.kb_worker_poll_seconds == 2.0
+    assert s.kb_ingest_poll_seconds == 2.0
     assert s.kb_stale_seconds == 120
     assert s.kb_heartbeat_seconds == 30
 
 
-def test_invalid_worker_mode_and_ocr_backend_raise(monkeypatch):
-    monkeypatch.setenv("KB_WORKER_MODE", "nope")
-    with pytest.raises(ValueError, match="KB_WORKER_MODE"):
+def test_invalid_ingest_mode_and_ocr_backend_raise(monkeypatch):
+    monkeypatch.setenv("KB_INGEST_MODE", "nope")
+    with pytest.raises(ValueError, match="KB_INGEST_MODE"):
         Settings.from_env()
-    monkeypatch.setenv("KB_WORKER_MODE", "external")
+    monkeypatch.setenv("KB_INGEST_MODE", "external")
     monkeypatch.setenv("OCR_BACKEND", "nope")
     with pytest.raises(ValueError, match="OCR_BACKEND"):
         Settings.from_env()
     monkeypatch.setenv("OCR_BACKEND", "vllm")
     s = Settings.from_env()
-    assert (s.kb_worker_mode, s.ocr_backend) == ("external", "vllm")
+    assert (s.kb_ingest_mode, s.ocr_backend) == ("external", "vllm")
 
 
 # Old settings that Settings.from_env still reads, only to fail with a hint
-RETIRED_KEYS = {"ADMIN_USERNAMES"}
+RETIRED_KEYS = {"ADMIN_USERNAMES", "KB_WORKER_MODE", "KB_WORKER_POLL_SECONDS"}
 
 
 def test_env_example_lists_every_setting():
@@ -87,7 +87,7 @@ def test_env_example_lists_every_setting():
     source = inspect.getsource(Settings.from_env)
     used = set(re.findall(r'(?:os\.environ\.get|_choice)\(\s*"([A-Z0-9_]+)"', source))
     used -= RETIRED_KEYS  # read only to reject them with a clear message
-    assert {"KB_WORKER_MODE", "OCR_BACKEND"} <= used
+    assert {"KB_INGEST_MODE", "OCR_BACKEND"} <= used
     assert used
     assert used <= keys
     assert not {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL", "OCR_VLLM_GPU_UTIL"} & keys
@@ -101,7 +101,7 @@ def test_docker_env_example_lists_compose_and_settings_keys():
     compose = yaml.safe_load(compose_text)
     interpolated = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose_text))
     fixed = set()
-    for name in ("web", "worker"):
+    for name in ("web", "ingest"):
         fixed |= set(compose["services"][name]["environment"])
     fixed |= {"FRONTEND_DIST"}  # not configurable in containers
 
@@ -144,7 +144,7 @@ def test_vllm_service_follows_official_flags():
         (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
     )
     vllm = compose["services"]["vllm"]
-    assert "profiles" not in vllm  # a default service
+    assert vllm["profiles"] == ["lightonocr"]  # opt-in service
     command = vllm["command"]
     assert vllm["image"] == "vllm/vllm-openai:v0.30.0"
     for flag in ("--trust-remote-code", "--no-enable-prefix-caching", "float16"):
@@ -156,7 +156,7 @@ def test_vllm_service_follows_official_flags():
     assert "${OCR_VLLM_MAX_MODEL_LEN:-18000}" in command
     assert "${OCR_VLLM_GPU_UTIL:-0.8}" in command
     assert "--enforce-eager" in command
-    assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-8}"
+    assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-4}"
     assert "env_file" not in vllm  # no app settings, so no "unknown VLLM_*" warnings
     health = vllm["healthcheck"]
     assert any("/health" in str(part) for part in health["test"])
@@ -165,20 +165,20 @@ def test_vllm_service_follows_official_flags():
     assert "./volumes/vllm-hf-cache:/root/.cache/huggingface" in vllm["volumes"]
 
 
-def test_worker_uses_vllm_and_has_no_gpu():
+def test_ingest_uses_vllm_and_has_no_gpu():
     import yaml
 
     compose = yaml.safe_load(
         (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
     )
-    worker = compose["services"]["worker"]
-    assert worker["environment"]["OCR_BACKEND"] == "vllm"
-    assert worker["environment"]["VLLM_BASE_URL"] == "http://vllm:8000/v1"
+    ingest = compose["services"]["ingest"]
+    assert ingest["environment"]["OCR_BACKEND"] == "vllm"
+    assert ingest["environment"]["VLLM_BASE_URL"] == "http://vllm:8000/v1"
     # LiteParse must keep working while vLLM is down or still downloading
-    assert worker["depends_on"]["vllm"]["condition"] == "service_started"
-    assert "deploy" not in worker
-    assert "HF_HOME" not in worker["environment"]
-    assert not any("hf-cache" in v for v in worker.get("volumes", []))
+    assert ingest["depends_on"]["vllm"]["condition"] == "service_started"
+    assert "deploy" not in ingest
+    assert "HF_HOME" not in ingest["environment"]
+    assert not any("hf-cache" in v for v in ingest.get("volumes", []))
 
 
 def _compose():
@@ -206,9 +206,9 @@ def test_milvus_stack_in_compose():
     assert any("9091/healthz" in str(p) for p in milvus["healthcheck"]["test"])
 
 
-def test_web_and_worker_wait_for_healthy_milvus():
+def test_web_and_ingest_wait_for_healthy_milvus():
     services = _compose()["services"]
-    for name in ("web", "worker"):
+    for name in ("web", "ingest"):
         svc = services[name]
         assert svc["depends_on"]["milvus"]["condition"] == "service_healthy"
         assert svc["environment"]["MILVUS_URI"] == "http://milvus:19530"
@@ -235,7 +235,7 @@ def test_service_data_lives_under_docker_volumes_except_sqlite():
         assert services[name]["volumes"] == [mount]
     # SQLite (WAL, shared by two containers) stays on a Docker-managed volume
     assert list(compose["volumes"]) == ["phoebe-db"]
-    for name in ("web", "worker"):
+    for name in ("web", "ingest"):
         svc = services[name]
         assert svc["volumes"] == ["phoebe-db:/db", "./volumes/kb:/data/kb"]
         assert svc["environment"]["DB_PATH"] == "/db/app.db"
@@ -297,3 +297,95 @@ def test_kb_max_images_defaults_to_four_and_must_be_a_non_negative_int(monkeypat
         monkeypatch.setenv("KB_MAX_IMAGES", bad)
         with pytest.raises(ValueError, match="KB_MAX_IMAGES"):
             Settings.from_env()
+
+
+@pytest.mark.parametrize(("old", "new"), [
+    ("KB_WORKER_MODE", "KB_INGEST_MODE"),
+    ("KB_WORKER_POLL_SECONDS", "KB_INGEST_POLL_SECONDS"),
+])
+def test_old_worker_settings_are_rejected(monkeypatch, old, new):
+    monkeypatch.setenv(old, "2")
+    with pytest.raises(ValueError, match=f"{old} 已改名為 {new}"):
+        Settings.from_env()
+
+
+def test_ingest_settings(monkeypatch):
+    monkeypatch.setenv("KB_INGEST_MODE", "external")
+    monkeypatch.setenv("KB_INGEST_POLL_SECONDS", "3")
+    s = Settings.from_env()
+    assert (s.kb_ingest_mode, s.kb_ingest_poll_seconds) == ("external", 3.0)
+
+
+def test_compose_runs_the_ingest_service():
+    services = _compose()["services"]
+    assert "worker" not in services
+    assert services["ingest"]["build"]["target"] == "ingest"
+    assert services["ingest"]["image"] == "phoebe-ingest:local"
+    # in-flight OCR pages (4 at once, ~90 s) must finish before Docker SIGKILLs ingest
+    assert services["ingest"]["stop_grace_period"] == "120s"
+
+
+def test_vllm_is_opt_in_behind_the_lightonocr_profile():
+    services = _compose()["services"]
+    assert services["vllm"]["profiles"] == ["lightonocr"]
+    dep = services["ingest"]["depends_on"]["vllm"]
+    assert dep == {"condition": "service_started", "required": False}
+    command = services["vllm"]["command"]
+    assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-4}"
+
+
+def test_docker_env_example_defaults_to_four_sequences():
+    text = (PROJECT_ROOT / "docker" / ".env.example").read_text(encoding="utf-8")
+    assert "OCR_VLLM_MAX_NUM_SEQS=4" in text
+
+
+def test_ingest_concurrency_defaults_to_one_and_must_be_positive(monkeypatch):
+    monkeypatch.delenv("INGEST_CONCURRENCY", raising=False)
+    assert Settings.from_env().ingest_concurrency == 1
+    monkeypatch.setenv("INGEST_CONCURRENCY", "3")
+    assert Settings.from_env().ingest_concurrency == 3
+    for bad in ("0", "abc", "-1"):
+        monkeypatch.setenv("INGEST_CONCURRENCY", bad)
+        with pytest.raises(ValueError, match="INGEST_CONCURRENCY 必須是正整數"):
+            Settings.from_env()
+
+
+def test_env_examples_document_ingest_concurrency():
+    for path in (PROJECT_ROOT / ".env.example", PROJECT_ROOT / "docker" / ".env.example"):
+        text = path.read_text(encoding="utf-8")
+        assert "INGEST_CONCURRENCY=1" in text and "同時處理幾份文件" in text
+
+
+def test_ocr_concurrency_must_be_positive(monkeypatch):
+    monkeypatch.delenv("OCR_CONCURRENCY", raising=False)
+    assert Settings.from_env().ocr_concurrency == 4
+    monkeypatch.setenv("OCR_CONCURRENCY", "2")
+    assert Settings.from_env().ocr_concurrency == 2
+    for bad in ("0", "abc", "-1"):
+        monkeypatch.setenv("OCR_CONCURRENCY", bad)
+        with pytest.raises(ValueError, match="OCR_CONCURRENCY 必須是正整數"):
+            Settings.from_env()
+
+
+def test_ocr_timeout_defaults_to_600_and_must_be_positive(monkeypatch):
+    monkeypatch.delenv("OCR_TIMEOUT_SECONDS", raising=False)
+    assert Settings.from_env().ocr_timeout_seconds == 600
+    monkeypatch.setenv("OCR_TIMEOUT_SECONDS", "90.5")
+    assert Settings.from_env().ocr_timeout_seconds == 90.5
+    for bad in ("0", "abc", "-1", "nan", "inf"):
+        monkeypatch.setenv("OCR_TIMEOUT_SECONDS", bad)
+        with pytest.raises(ValueError, match="OCR_TIMEOUT_SECONDS 必須是正數"):
+            Settings.from_env()
+
+
+def test_env_examples_document_ocr_concurrency():
+    for path in (PROJECT_ROOT / ".env.example", PROJECT_ROOT / "docker" / ".env.example"):
+        text = path.read_text(encoding="utf-8")
+        assert "OCR_CONCURRENCY=4" in text and "OCR_TIMEOUT_SECONDS=600" in text
+        assert "每份文件同時送給 vLLM 的頁數" in text
+        assert "--max-num-seqs" in text
+
+
+def test_kb_services_pass_the_ocr_concurrency():
+    source = (PROJECT_ROOT / "app" / "kb" / "services.py").read_text(encoding="utf-8")
+    assert "LightOnOcrParser(build_ocr_engine(settings), settings.ocr_concurrency)" in source

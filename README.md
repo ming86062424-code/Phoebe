@@ -119,7 +119,7 @@ uv run python -m app.kb.reprocess_all --dry-run   # 只列出每個知識庫會�
 uv run python -m app.kb.reprocess_all
 ```
 
-指令會把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），由 worker 依原解析器重新處理；正在處理中的文件會略過，待其完成後再執行一次即可。
+指令會把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），由 ingest 依原解析器重新處理；正在處理中的文件會略過，待其完成後再執行一次即可。
 
 ## 測試
 
@@ -189,14 +189,18 @@ uv run --group eval pytest evals -v
 | `MAX_UPLOAD_MB` | `50` | 單一上傳檔案上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |
 | `LITEPARSE_OCR_LANGUAGE` | `chi_tra+eng` | LiteParse 內建 Tesseract 的語言 |
-| `KB_WORKER_MODE` | `embedded` | 文件解析 worker：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.worker_main`） |
-| `KB_WORKER_POLL_SECONDS` | `2` | worker 輪詢間隔 |
+| `KB_INGEST_MODE` | `embedded` | 文件處理（ingest）：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.ingest_main`） |
+| `KB_INGEST_POLL_SECONDS` | `2` | ingest 輪詢間隔 |
+| `INGEST_CONCURRENCY` | `1` | ingest 同時處理幾份文件 |
+| `OCR_CONCURRENCY` | `4` | LightOnOCR 處理一份文件時，同時送給 vLLM 的頁數。`INGEST_CONCURRENCY` × `OCR_CONCURRENCY` 不要超過 vLLM 的 `--max-num-seqs`（預設 4） |
+| `OCR_TIMEOUT_SECONDS` | `600` | 每一頁 OCR 請求的逾時秒數 |
 | `KB_STALE_SECONDS` | `120` | 解析中逾時多久視為卡住並重新排入 |
 | `KB_HEARTBEAT_SECONDS` | `30` | 處理中的文件刷新 `updated_at` 的間隔 |
 | `REPLY_LOCK_TTL_SECONDS` | `600` | 對話回覆鎖逾時秒數 |
 | `OCR_BACKEND` | `transformers` | `transformers` 或 `vllm` |
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
-| `VLLM_GPU_UTIL` | `0.35` | vLLM 顯存比例（僅 Docker） |
+| `OCR_VLLM_GPU_UTIL` | `0.8` | vLLM 顯存比例（僅 Docker） |
+| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 同時處理的請求上限（僅 Docker） |
 | `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |
@@ -206,12 +210,19 @@ uv run --group eval pytest evals -v
 
 ## 部署
 
-以 Docker Compose 部署（Gunicorn web、獨立解析 worker、embedder、Milvus、vLLM），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
+以 Docker Compose 部署（Gunicorn web、獨立 ingest 服務、embedder、Milvus；vLLM 為選用），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
 
 ```
 cd docker
 cp .env.example .env   # Docker 專用設定，與根目錄 .env 無關
 docker compose up -d --build
+```
+
+vLLM（LightOnOCR）是選用的，不加 profile 不會啟動。要使用就帶上 `lightonocr` profile，停止時也要帶：
+
+```
+docker compose --profile lightonocr up -d --build
+docker compose --profile lightonocr down
 ```
 
 ## 資料位置

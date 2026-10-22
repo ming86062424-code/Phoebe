@@ -86,7 +86,7 @@ class MilvusChunkStore:
                     self._exists_cached = True
                     return
                 except Exception:
-                    # web and worker may start together: the other one created it first
+                    # web and ingest may start together: the other one created it first
                     if not client.has_collection(self._collection, timeout=TIMEOUT):
                         raise
             description = client.describe_collection(self._collection, timeout=TIMEOUT)
