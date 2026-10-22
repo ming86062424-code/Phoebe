@@ -46,14 +46,14 @@ COPY --chown=phoebe:phoebe app ./app
 COPY --chown=phoebe:phoebe docker/gunicorn.conf.py docker/gunicorn.conf.py
 COPY --chown=phoebe:phoebe --from=frontend /frontend/dist ./frontend/dist
 USER phoebe
-ENV KB_WORKER_MODE=external \
+ENV KB_INGEST_MODE=external \
     DB_PATH=/db/app.db \
     KB_DIR=/data/kb
 EXPOSE 8000
 CMD ["gunicorn", "-c", "docker/gunicorn.conf.py", "app.main:create_app()"]
 
-# ---- worker：只做文件解析與索引；OCR 交給 vllm 服務，不含 torch ----
-FROM base AS worker
+# ---- ingest：只做文件解析與索引；OCR 交給 vllm 服務，不含 torch ----
+FROM base AS ingest
 COPY --chown=phoebe:phoebe app ./app
 
 # LiteParse 的 Tesseract 語言檔：預設 chi_tra+eng（含直排 chi_tra_vert）內建於映像，不必在首次 OCR 時下載。
@@ -76,4 +76,4 @@ ADD --chown=phoebe:phoebe --chmod=644 \
 USER phoebe
 ENV DB_PATH=/db/app.db \
     KB_DIR=/data/kb
-CMD ["python", "-m", "app.kb.worker_main"]
+CMD ["python", "-m", "app.kb.ingest_main"]

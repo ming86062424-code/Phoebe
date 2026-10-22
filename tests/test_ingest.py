@@ -49,7 +49,7 @@ def env(tmp_path):
 def test_process_marks_ready_and_indexes(env):
     conn, kb, parser, services, add_doc = env
     doc = add_doc()
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert (got["status"], got["chunk_count"], got["progress_done"]) == ("ready", 2, 2)
     assert services.index.search(kb["id"], "cherry", 1)[0].page == 2
@@ -66,7 +66,7 @@ def test_store_down_marks_failed_with_clear_reason(env, monkeypatch):
 
     monkeypatch.setattr(services.index._store, "insert", boom)
     doc = add_doc()
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert got["status"] == "failed" and "無法連線到 Milvus" in got["error"]
 
@@ -75,7 +75,7 @@ def test_parse_error_marks_failed(env):
     conn, _, parser, services, add_doc = env
     parser.error = ParseError("壞掉了")
     doc = add_doc()
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert (got["status"], got["error"]) == ("failed", "壞掉了")
 
@@ -84,14 +84,14 @@ def test_no_text_marks_failed(env):
     conn, _, parser, services, add_doc = env
     parser.pages = [ParsedChunk(1, "")]
     doc = add_doc()
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     assert "LightOnOCR" in store.get_document(conn, doc["id"])["error"]
 
 
 def test_unknown_parser_marks_failed(env):
     conn, kb, _, services, _ = env
     doc = store.create_document(conn, kb["id"], "a.pdf", "nope", 1)
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     assert store.get_document(conn, doc["id"])["status"] == "failed"
 
 
@@ -101,24 +101,24 @@ def test_start_requeues_stale_documents(env):
     store.update_document(conn, doc["id"], status="indexing", progress_done=1)
     conn.execute("UPDATE kb_documents SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (doc["id"],))
     conn.commit()
-    services.worker.start()
+    services.ingester.start()
     assert store.get_document(conn, doc["id"])["status"] == "ready"
     assert len(parser.parsed) == 1
 
 
-def test_threaded_worker_processes_queue(env):
+def test_threaded_ingester_processes_queue(env):
     conn, _, _, services, add_doc = env
-    services.worker.threaded = True
-    services.worker.start()
+    services.ingester.threaded = True
+    services.ingester.start()
     try:
         doc = add_doc()
-        services.worker.enqueue(doc["id"])
+        services.ingester.enqueue(doc["id"])
         deadline = time.time() + 10
         while store.get_document(conn, doc["id"])["status"] != "ready" and time.time() < deadline:
             time.sleep(0.05)
         assert store.get_document(conn, doc["id"])["status"] == "ready"
     finally:
-        services.worker.stop()
+        services.ingester.stop()
 
 
 def test_document_replaced_mid_parse_is_not_indexed_as_the_new_one(env):
@@ -130,7 +130,7 @@ def test_document_replaced_mid_parse_is_not_indexed_as_the_new_one(env):
 
     def parse_then_replace(path, out_dir, on_progress):
         pages = original_parse(path, out_dir, on_progress)
-        other = connect(services.worker.db_path)
+        other = connect(services.ingester.db_path)
         other.execute("DELETE FROM kb_documents WHERE id = ?", (doc["id"],))
         other.execute(
             "INSERT INTO kb_documents (id, kb_id, filename, parser, status, created_at, updated_at) "
@@ -143,7 +143,7 @@ def test_document_replaced_mid_parse_is_not_indexed_as_the_new_one(env):
 
     parser.parse = parse_then_replace
     assert store.claim_next_document(conn) == doc["id"]
-    services.worker.process(doc["id"])
+    services.ingester.process(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert (got["filename"], got["status"]) == ("b.pdf", "queued")
     assert services.index.search(kb["id"], "apple", 5) == []
@@ -164,7 +164,7 @@ def test_deleting_a_document_stops_parsing_at_the_next_page(env):
 
     parser.parse = slow_parse
     assert store.claim_next_document(conn) == doc["id"]
-    services.worker.process(doc["id"])
+    services.ingester.process(doc["id"])
     assert pages_done == [1]
     assert services.index.search(kb["id"], "apple", 5) == []
 
@@ -173,7 +173,7 @@ def test_start_leaves_fresh_documents_alone(env):
     conn, _, parser, services, add_doc = env
     doc = add_doc()
     store.update_document(conn, doc["id"], status="parsing")
-    services.worker.start()
+    services.ingester.start()
     assert store.get_document(conn, doc["id"])["status"] == "parsing"
     assert parser.parsed == []
 
@@ -181,7 +181,7 @@ def test_start_leaves_fresh_documents_alone(env):
 def test_enqueue_unthreaded_processes_claimed_documents(env):
     conn, _, parser, services, add_doc = env
     first, second = add_doc(), add_doc()
-    services.worker.enqueue(first["id"])
+    services.ingester.enqueue(first["id"])
     assert [store.get_document(conn, d["id"])["status"] for d in (first, second)] == ["ready", "ready"]
     assert len(parser.parsed) == 2
 
@@ -190,21 +190,21 @@ def test_run_forever_stops_on_event(env):
     _, _, _, services, _ = env
     stop = threading.Event()
     stop.set()
-    services.worker.run_forever(stop)  # returns instead of blocking
+    services.ingester.run_forever(stop)  # returns instead of blocking
 
 
 def test_run_forever_processes_then_stops_promptly(env):
     conn, _, _, services, add_doc = env
-    services.worker.poll_seconds = 30
+    services.ingester.poll_seconds = 30
     doc = add_doc()
     stop = threading.Event()
-    t = threading.Thread(target=services.worker.run_forever, args=(stop,))
+    t = threading.Thread(target=services.ingester.run_forever, args=(stop,))
     t.start()
     deadline = time.time() + 10
     while store.get_document(conn, doc["id"])["status"] != "ready" and time.time() < deadline:
         time.sleep(0.05)
     stop.set()
-    services.worker.wake()
+    services.ingester.wake()
     t.join(timeout=5)
     assert not t.is_alive()
     assert store.get_document(conn, doc["id"])["status"] == "ready"
@@ -221,7 +221,7 @@ def test_cleanup_orphans_removes_files_without_documents(env):
     gone_kb = services.kb_dir / "777"
     gone_kb.mkdir()
     (gone_kb / "1.pdf").write_bytes(b"%PDF")
-    assert services.worker.cleanup_orphans() == 2
+    assert services.ingester.cleanup_orphans() == 2
     assert keep_path.exists() and tmp.exists()
     assert not orphan.exists() and not gone_kb.exists()
 
@@ -233,7 +233,7 @@ def _age(conn, doc_id, ts="2000-01-01T00:00:00+00:00"):
 
 def test_heartbeat_refreshes_updated_at_during_slow_parse(env):
     conn, _, parser, services, add_doc = env
-    services.worker.heartbeat_seconds = 0.05
+    services.ingester.heartbeat_seconds = 0.05
     doc = add_doc()
     seen = []
     original = parser.parse
@@ -246,34 +246,34 @@ def test_heartbeat_refreshes_updated_at_during_slow_parse(env):
 
     parser.parse = slow_parse
     assert store.claim_next_document(conn) == doc["id"]
-    services.worker.process(doc["id"])
+    services.ingester.process(doc["id"])
     assert seen[0] > "2001"
 
 
-def test_running_worker_requeues_stale_documents_periodically(env, monkeypatch):
-    import app.kb.worker as worker_mod
+def test_running_ingester_requeues_stale_documents_periodically(env, monkeypatch):
+    import app.kb.ingest as ingest_mod
 
     conn, _, parser, services, add_doc = env
-    monkeypatch.setattr(worker_mod, "CLEANUP_INTERVAL_SECONDS", 0)
-    services.worker.poll_seconds = 0.05
+    monkeypatch.setattr(ingest_mod, "CLEANUP_INTERVAL_SECONDS", 0)
+    services.ingester.poll_seconds = 0.05
     doc = add_doc()
     store.update_document(conn, doc["id"], status="parsing")
     _age(conn, doc["id"])
     stop = threading.Event()
-    t = threading.Thread(target=services.worker.run_forever, args=(stop,))
+    t = threading.Thread(target=services.ingester.run_forever, args=(stop,))
     t.start()
     deadline = time.time() + 10
     while store.get_document(conn, doc["id"])["status"] != "ready" and time.time() < deadline:
         time.sleep(0.05)
     stop.set()
-    services.worker.wake()
+    services.ingester.wake()
     t.join(timeout=5)
     assert store.get_document(conn, doc["id"])["status"] == "ready"
 
 
-def test_active_document_is_not_requeued_by_another_worker(env):
+def test_active_document_is_not_requeued_by_another_ingester(env):
     conn, _, parser, services, add_doc = env
-    services.worker.heartbeat_seconds = 0.05
+    services.ingester.heartbeat_seconds = 0.05
     doc = add_doc()
     original = parser.parse
     outcome = []
@@ -281,7 +281,7 @@ def test_active_document_is_not_requeued_by_another_worker(env):
     def slow_parse(path, out_dir, on_progress):
         _age(conn, doc["id"])
         time.sleep(0.4)
-        other = connect(services.worker.db_path)
+        other = connect(services.ingester.db_path)
         try:
             stale_before = (
                 datetime.now(timezone.utc) - timedelta(seconds=30)
@@ -293,7 +293,7 @@ def test_active_document_is_not_requeued_by_another_worker(env):
 
     parser.parse = slow_parse
     assert store.claim_next_document(conn) == doc["id"]
-    services.worker.process(doc["id"])
+    services.ingester.process(doc["id"])
     assert outcome == [[]]
     assert store.get_document(conn, doc["id"])["status"] == "ready"
 
@@ -314,7 +314,7 @@ def test_stop_event_ends_processing_after_current_page(env):
 
     parser.parse = parse
     assert store.claim_next_document(conn) == doc["id"]
-    services.worker.process(doc["id"], stop)
+    services.ingester.process(doc["id"], stop)
     assert pages == [1]
     assert store.get_document(conn, doc["id"])["status"] == "parsing"
 
@@ -324,7 +324,7 @@ def test_pending_document_is_not_claimed_nor_orphaned(env):
     doc = add_doc()
     store.update_document(conn, doc["id"], status="pending")
     assert store.claim_next_document(conn) is None
-    assert services.worker.cleanup_orphans() == 0
+    assert services.ingester.cleanup_orphans() == 0
     assert services.file_path(kb["id"], doc["id"]).exists()
 
 
@@ -333,21 +333,21 @@ def test_stop_keeps_thread_reference_when_join_times_out(env):
     release = threading.Event()
     t = threading.Thread(target=release.wait)
     t.start()
-    services.worker._thread = t
+    services.ingester._thread = t
     t.join = lambda timeout=None: None  # simulate a loop stuck in a long page
-    services.worker.stop()
-    assert services.worker._thread is t
+    services.ingester.stop()
+    assert services.ingester._thread is t
     release.set()
 
 
-# --- parser status published by the worker, read by the web process ---
+# --- parser status published by the ingester, read by the web process ---
 
 
 def _external_services(tmp_path, parser):
     settings = Settings(
         db_path=str(tmp_path / "x.db"),
         kb_dir=str(tmp_path / "kb"),
-        kb_worker_mode="external",
+        kb_ingest_mode="external",
     )
     conn = connect(settings.db_path)
     init_db(conn)
@@ -377,7 +377,7 @@ def test_external_availability_reads_parser_status(tmp_path):
 
 def test_external_availability_without_row_or_when_stale(tmp_path):
     _, conn, services = _external_services(tmp_path, FakeParser())
-    down = (False, "文件解析服務（worker）未啟動")
+    down = (False, "文件處理服務（ingest）未啟動")
     assert services.availability("fake") == down
     old = (datetime.now(timezone.utc) - timedelta(seconds=46)).isoformat()
     conn.execute(
@@ -395,14 +395,14 @@ def test_embedded_availability_checks_locally(env):
     assert services.availability("fake") == (False, "未安裝")
 
 
-def test_worker_publishes_parser_status(tmp_path):
+def test_ingester_publishes_parser_status(tmp_path):
     parser = FakeParser(available=False)
     _, conn, services = _external_services(tmp_path, parser)
-    services.worker.publish_parser_status()
+    services.ingester.publish_parser_status()
     row = conn.execute("SELECT * FROM parser_status WHERE parser_id = 'fake'").fetchone()
     assert (row["available"], row["reason"]) == (0, "未安裝")
     parser.available = True
-    services.worker.publish_parser_status()
+    services.ingester.publish_parser_status()
     row = conn.execute("SELECT * FROM parser_status WHERE parser_id = 'fake'").fetchone()
     assert (row["available"], row["reason"]) == (1, "")
     assert services.availability("fake") == (True, "")
@@ -411,8 +411,8 @@ def test_worker_publishes_parser_status(tmp_path):
 def test_publisher_thread_publishes_and_stops(tmp_path):
     parser = FakeParser()
     _, conn, services = _external_services(tmp_path, parser)
-    worker = services.worker
-    worker.start_status_publisher(interval=0.05)
+    ingester = services.ingester
+    ingester.start_status_publisher(interval=0.05)
     try:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -422,8 +422,8 @@ def test_publisher_thread_publishes_and_stops(tmp_path):
         else:
             raise AssertionError("status never published")
     finally:
-        worker.stop_status_publisher()
-    assert worker._status_thread is None
+        ingester.stop_status_publisher()
+    assert ingester._status_thread is None
 
 
 def test_cleanup_orphans_removes_old_upload_temp_files_only(env):
@@ -440,7 +440,7 @@ def test_cleanup_orphans_removes_old_upload_temp_files_only(env):
     past = time.time() - 2 * 3600
     os.utime(old, (past, past))
     os.utime(other, (past, past))
-    assert services.worker.cleanup_orphans() == 1
+    assert services.ingester.cleanup_orphans() == 1
     assert not old.exists()
     assert fresh.exists() and other.exists()
 
@@ -454,7 +454,7 @@ def test_stale_pending_documents_are_failed(env):
         store.update_document(conn, d["id"], status="pending")
     _age(conn, stale["id"])
     _age(conn, queued["id"])
-    services.worker.requeue_stale()
+    services.ingester.requeue_stale()
     got = store.get_document(conn, stale["id"])
     assert (got["status"], got["error"]) == ("failed", "上傳未完成，請重新上傳")
     assert store.get_document(conn, fresh["id"])["status"] == "pending"
@@ -476,7 +476,7 @@ def test_parse_gets_a_fresh_document_folder_and_images_are_indexed(env):
         return [ParsedChunk(1, "page text", page_image=ImageRef("page_1.png", 2, 2), kind="page_image")]
 
     parser.parse = parse
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     assert store.get_document(conn, doc["id"])["status"] == "ready"
     (row,) = services.index._store.rows.values()
     assert row.kind == "page_image" and row.page_image == ImageRef("page_1.png", 2, 2)
@@ -494,7 +494,7 @@ def test_cleanup_orphans_handles_new_file_types_and_document_folders(env):
     orphan_dir = folder / "9004"
     orphan_dir.mkdir()
     (orphan_dir / "page_1.png").write_bytes(b"x")
-    assert services.worker.cleanup_orphans() == 4
+    assert services.ingester.cleanup_orphans() == 4
     assert keep_dir.exists() and services.file_path(kb["id"], keep["id"]).exists()
     assert not any(f.exists() for f in orphans) and not orphan_dir.exists()
 
@@ -505,7 +505,7 @@ def test_empty_text_file_fails_with_a_text_message(env):
     path = services.file_path(kb["id"], doc["id"], "a.txt")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"  \n\n ")
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert (got["status"], got["error"]) == ("failed", "檔案中沒有任何文字")
 
@@ -517,7 +517,7 @@ def test_superseded_parse_removes_the_document_folder(env):
 
     def parse(path, out_dir, on_progress):
         (out_dir / "page_1.png").write_bytes(b"png")
-        other = connect(services.worker.db_path)
+        other = connect(services.ingester.db_path)
         other.execute("DELETE FROM kb_documents WHERE id = ?", (doc["id"],))
         other.commit()
         other.close()
@@ -526,7 +526,7 @@ def test_superseded_parse_removes_the_document_folder(env):
 
     parser.parse = parse
     assert store.claim_next_document(conn) == doc["id"]
-    services.worker.process(doc["id"])
+    services.ingester.process(doc["id"])
     assert not folder.exists()
     assert (services.kb_dir / str(kb["id"])).exists()  # the knowledge base still exists
 
@@ -538,7 +538,7 @@ def test_superseded_parse_removes_the_folder_of_a_deleted_kb(env):
 
     def parse(path, out_dir, on_progress):
         (out_dir / "page_1.png").write_bytes(b"png")
-        other = connect(services.worker.db_path)
+        other = connect(services.ingester.db_path)
         other.execute("DELETE FROM kb_documents WHERE kb_id = ?", (kb["id"],))
         other.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb["id"],))
         other.commit()
@@ -548,21 +548,21 @@ def test_superseded_parse_removes_the_folder_of_a_deleted_kb(env):
 
     parser.parse = parse
     assert store.claim_next_document(conn) == doc["id"]
-    services.worker.process(doc["id"])
+    services.ingester.process(doc["id"])
     assert not kb_folder.exists()
 
 
 def test_stale_folder_that_cannot_be_removed_fails_the_attempt(env, monkeypatch):
-    from app.kb import worker as worker_module
+    from app.kb import ingest as ingest_module
 
     conn, kb, parser, services, add_doc = env
     doc = add_doc()
     folder = services.doc_dir(kb["id"], doc["id"])
     folder.mkdir(parents=True)
     (folder / "page_1.png").write_bytes(b"old")
-    real = worker_module._remove
-    monkeypatch.setattr(worker_module, "_remove", lambda p: False if p == folder else real(p))
-    services.worker.enqueue(doc["id"])
+    real = ingest_module._remove
+    monkeypatch.setattr(ingest_module, "_remove", lambda p: False if p == folder else real(p))
+    services.ingester.enqueue(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert got["status"] == "failed" and "上次處理" in got["error"]
     assert parser.parsed == []
@@ -602,20 +602,20 @@ def test_document_waits_while_its_parser_is_unavailable(env):
     conn, _, parser, services, add_doc = env
     parser.available = False
     doc = add_doc()
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     got = store.get_document(conn, doc["id"])
     assert (got["status"], got["error"]) == ("queued", None)
     assert parser.parsed == []
 
     parser.available = True  # the OCR service finished loading
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     assert store.get_document(conn, doc["id"])["status"] == "ready"
 
 
 def test_unavailable_parser_does_not_hold_up_other_documents(tmp_path):
     conn, ocr, text, services, add_doc = _two_parser_env(tmp_path)
     waiting, other = add_doc("ocr"), add_doc("fake")  # the waiting one is older
-    services.worker.enqueue(other["id"])
+    services.ingester.enqueue(other["id"])
     assert store.get_document(conn, waiting["id"])["status"] == "queued"
     assert store.get_document(conn, other["id"])["status"] == "ready"
     assert ocr.parsed == [] and len(text.parsed) == 1
@@ -628,10 +628,10 @@ def test_availability_is_checked_only_for_parsers_with_queued_documents(tmp_path
     for p in (ocr, text):
         real = p.availability
         monkeypatch.setattr(p, "availability", lambda p=p, real=real: checked.append(p.id) or real())
-    services.worker.enqueue(0)  # nothing queued: no service is asked
+    services.ingester.enqueue(0)  # nothing queued: no service is asked
     assert checked == []
     add_doc("fake")
-    services.worker.enqueue(0)
+    services.ingester.enqueue(0)
     assert checked == ["fake"]
     conn.close()
 
@@ -644,12 +644,12 @@ def test_failing_availability_check_counts_as_unavailable(env, monkeypatch):
 
     monkeypatch.setattr(parser, "availability", broken)
     doc = add_doc()
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     assert store.get_document(conn, doc["id"])["status"] == "queued"
 
 
 def test_unknown_parser_is_still_claimed_and_failed(env):
     conn, kb, _, services, _ = env
     doc = store.create_document(conn, kb["id"], "a.pdf", "gone", 10)
-    services.worker.enqueue(doc["id"])
+    services.ingester.enqueue(doc["id"])
     assert store.get_document(conn, doc["id"])["status"] == "failed"

@@ -11,11 +11,11 @@ from app.kb.index import Embedder, KnowledgeIndex
 from app.kb.milvus_store import MilvusChunkStore
 from app.kb.parsers.base import Parser
 from app.kb.parsers.text_parser import TextParser
-from app.kb.worker import IngestWorker
+from app.kb.ingest import Ingester
 
 
-WORKER_DOWN_REASON = "文件解析服務（worker）未啟動"
-# the worker republishes every 15 s; older than this means it is gone
+INGEST_DOWN_REASON = "文件處理服務（ingest）未啟動"
+# the ingester republishes every 15 s; older than this means it is gone
 PARSER_STATUS_MAX_AGE_SECONDS = 45
 
 
@@ -27,7 +27,7 @@ class KbServices:
     db_path: str = ""
     external: bool = False
     text_parser: Parser = field(default_factory=TextParser)
-    worker: IngestWorker = field(init=False)
+    ingester: Ingester = field(init=False)
 
     def file_path(self, kb_id: int, doc_id: int, filename: str = "") -> Path:
         """The uploaded file, `<kb_dir>/<kb>/<doc>.<ext>` (ext from the filename)."""
@@ -40,12 +40,12 @@ class KbServices:
     def availability(self, parser_id: str) -> tuple[bool, str]:
         """Whether a parser can be used right now.
 
-        With an external worker the parsers' dependencies (torch, vLLM) live in the
-        worker's container, so the web process reads the status the worker publishes.
+        With an external ingest service the parsers' dependencies (torch, vLLM) live in the
+        ingest's container, so the web process reads the status the ingester publishes.
         """
         if not self.external:
             return self.parsers[parser_id].availability()
-        down = (False, WORKER_DOWN_REASON)
+        down = (False, INGEST_DOWN_REASON)
         try:
             conn = connect(self.db_path)
             try:
@@ -101,16 +101,16 @@ def build_kb_services(
         parsers={p.id: p for p in parsers},
         kb_dir=Path(settings.kb_dir),
         db_path=settings.db_path,
-        external=settings.kb_worker_mode == "external",
+        external=settings.kb_ingest_mode == "external",
     )
-    services.worker = IngestWorker(
+    services.ingester = Ingester(
         settings.db_path,
         index,
         {**services.parsers, services.text_parser.id: services.text_parser},
         lambda kb_id, doc_id, filename: str(services.file_path(kb_id, doc_id, filename)),
         doc_dir=services.doc_dir,
         threaded=threaded,
-        poll_seconds=settings.kb_worker_poll_seconds,
+        poll_seconds=settings.kb_ingest_poll_seconds,
         stale_seconds=settings.kb_stale_seconds,
         heartbeat_seconds=settings.kb_heartbeat_seconds,
         kb_dir=str(services.kb_dir),

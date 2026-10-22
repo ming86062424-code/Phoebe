@@ -119,7 +119,7 @@ uv run python -m app.kb.reprocess_all --dry-run   # 只列出每個知識庫會�
 uv run python -m app.kb.reprocess_all
 ```
 
-指令會把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），由 worker 依原解析器重新處理；正在處理中的文件會略過，待其完成後再執行一次即可。
+指令會把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），由 ingest 依原解析器重新處理；正在處理中的文件會略過，待其完成後再執行一次即可。
 
 ## 測試
 
@@ -189,8 +189,8 @@ uv run --group eval pytest evals -v
 | `MAX_UPLOAD_MB` | `50` | 單一上傳檔案上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |
 | `LITEPARSE_OCR_LANGUAGE` | `chi_tra+eng` | LiteParse 內建 Tesseract 的語言 |
-| `KB_WORKER_MODE` | `embedded` | 文件解析 worker：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.worker_main`） |
-| `KB_WORKER_POLL_SECONDS` | `2` | worker 輪詢間隔 |
+| `KB_INGEST_MODE` | `embedded` | 文件處理（ingest）：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.ingest_main`） |
+| `KB_INGEST_POLL_SECONDS` | `2` | ingest 輪詢間隔 |
 | `KB_STALE_SECONDS` | `120` | 解析中逾時多久視為卡住並重新排入 |
 | `KB_HEARTBEAT_SECONDS` | `30` | 處理中的文件刷新 `updated_at` 的間隔 |
 | `REPLY_LOCK_TTL_SECONDS` | `600` | 對話回覆鎖逾時秒數 |
@@ -206,7 +206,7 @@ uv run --group eval pytest evals -v
 
 ## 部署
 
-以 Docker Compose 部署（Gunicorn web、獨立解析 worker、embedder、Milvus、vLLM），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
+以 Docker Compose 部署（Gunicorn web、獨立 ingest 服務、embedder、Milvus、vLLM），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
 
 ```
 cd docker

@@ -118,7 +118,7 @@ services:
     ports:
       - "${PHOEBE_PORT:-8000}:8000"
     environment:
-      KB_WORKER_MODE: external
+      KB_INGEST_MODE: external
       MILVUS_URI: http://milvus:19530
       EMBEDDER_URL: http://embedder:8000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
@@ -127,7 +127,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # SQLite（WAL，web 與 worker 同時讀寫）放在 Docker 管理的 volume：
+      # SQLite（WAL，web 與 ingest 同時讀寫）放在 Docker 管理的 volume：
       # Windows 主機目錄經過檔案共享層，檔案鎖與共用記憶體不可靠
       - phoebe-db:/db
       - ./volumes/kb:/data/kb
@@ -150,13 +150,13 @@ services:
       retries: 5
       start_period: 20s
 
-  worker:
+  ingest:
     <<: *env
     build:
       context: ..
       dockerfile: docker/Dockerfile
-      target: worker
-    image: phoebe-worker:local
+      target: ingest
+    image: phoebe-ingest:local
     restart: unless-stopped
     depends_on:
       web:

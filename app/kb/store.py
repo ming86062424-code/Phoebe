@@ -168,7 +168,7 @@ def claim_next_document(
 
 
 def requeue_stale_documents(conn: sqlite3.Connection, stale_before: str) -> list[int]:
-    """Put documents whose worker went away (no update since stale_before) back in the queue."""
+    """Put documents whose ingester went away (no update since stale_before) back in the queue."""
     rows = conn.execute(
         "UPDATE kb_documents SET status = 'queued', progress_done = 0, updated_at = ? "
         "WHERE status IN ('parsing', 'indexing') AND updated_at < ? RETURNING id",
@@ -192,7 +192,7 @@ def fail_stale_pending_documents(
 
 
 def touch_document(conn: sqlite3.Connection, doc_id: int) -> None:
-    """Heartbeat: show that a worker is still busy with this document."""
+    """Heartbeat: show that the ingester is still busy with this document."""
     conn.execute(
         "UPDATE kb_documents SET updated_at = ? WHERE id = ? AND status IN ('parsing', 'indexing')",
         (now_iso(), doc_id),
@@ -225,9 +225,9 @@ def requeue_finished_documents(
 ) -> dict[int, int]:
     """Put every 'ready' or 'failed' document back in the queue; returns kb_id -> count.
 
-    Documents a worker may be handling (pending, parsing, indexing) are left alone, and
+    Documents an ingester may be handling (pending, parsing, indexing) are left alone, and
     queued ones are already in line. The status check is part of the UPDATE, so a document
-    that a worker claims in the meantime is not touched. error, chunk_count and progress
+    that an ingester claims in the meantime is not touched. error, chunk_count and progress
     are reset the same way a fresh upload starts.
     """
     if dry_run:

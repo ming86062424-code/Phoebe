@@ -179,13 +179,13 @@ def delete_kb(
 ):
     _require_kb(conn, user, kb_id)
     store.delete_kb(conn, user["id"], kb_id)
-    # the worker notices the deleted rows and stops; files still in use are removed later
+    # the ingester notices the deleted rows and stops; files still in use are removed later
     try:
         kb.index.delete_kb(kb_id)
     except Exception as e:
         # ids are never reused, so leftover chunks are never searched
         logger.warning("刪除知識庫 %s 的向量失敗：%s", kb_id, e, exc_info=True)
-    kb.worker.remove_path(kb.kb_dir / str(kb_id))
+    kb.ingester.remove_path(kb.kb_dir / str(kb_id))
     return Response(status_code=204)
 
 
@@ -241,7 +241,7 @@ async def upload_document(
             raise HTTPException(status_code=422, detail=reason or "此解析器目前無法使用")
 
     def save() -> dict:
-        # blocking file and database work, run in a worker thread
+        # blocking file and database work, run in a background thread
         folder = kb.kb_dir / str(kb_id)
         folder.mkdir(parents=True, exist_ok=True)
         tmp = folder / f"upload-{uuid.uuid4().hex}.tmp"
@@ -266,7 +266,7 @@ async def upload_document(
                 raise
         finally:
             tmp.unlink(missing_ok=True)
-        kb.worker.enqueue(doc["id"])
+        kb.ingester.enqueue(doc["id"])
         return store.get_document(conn, doc["id"])
 
     try:
@@ -287,13 +287,13 @@ def delete_document(
     doc = store.get_document(conn, doc_id)
     if doc is None or doc["kb_id"] != kb_id or not store.delete_document(conn, kb_id, doc_id):
         raise HTTPException(status_code=404, detail="找不到文件")
-    # the worker notices the deleted row and stops; a file still in use is removed later
+    # the ingester notices the deleted row and stops; a file still in use is removed later
     try:
         kb.index.delete_document(kb_id, doc_id)
     except Exception as e:
         logger.warning("刪除文件 %s 的向量失敗：%s", doc_id, e, exc_info=True)
-    kb.worker.remove_path(kb.file_path(kb_id, doc_id, doc["filename"]))
-    kb.worker.remove_path(kb.doc_dir(kb_id, doc_id))
+    kb.ingester.remove_path(kb.file_path(kb_id, doc_id, doc["filename"]))
+    kb.ingester.remove_path(kb.doc_dir(kb_id, doc_id))
     return Response(status_code=204)
 
 
@@ -332,7 +332,7 @@ def retry_document(
     if doc["status"] != "failed":
         raise HTTPException(status_code=409, detail="只有失敗的文件可以重試")
     store.update_document(conn, doc_id, status="queued", error=None, progress_done=0)
-    kb.worker.enqueue(doc_id)
+    kb.ingester.enqueue(doc_id)
     return store.get_document(conn, doc_id)
 
 

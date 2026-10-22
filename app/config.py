@@ -85,14 +85,14 @@ class Settings:
     max_upload_mb: int = 50
     ocr_model: str = "lightonai/LightOnOCR-3-0.8B"
     liteparse_ocr_language: str = "chi_tra+eng"
-    kb_worker_mode: str = "embedded"
+    kb_ingest_mode: str = "embedded"
     ocr_backend: str = "transformers"
     vllm_base_url: str = "http://localhost:8001/v1"
     milvus_uri: str = "http://localhost:19530"
     milvus_token: str = field(default="", repr=False)
     milvus_collection: str = "phoebe_chunks"
     reply_lock_ttl_seconds: int = 90
-    kb_worker_poll_seconds: float = 2.0
+    kb_ingest_poll_seconds: float = 2.0
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0
     admin_username: str = ""
@@ -132,8 +132,8 @@ class Settings:
             liteparse_ocr_language=os.environ.get(
                 "LITEPARSE_OCR_LANGUAGE", d.liteparse_ocr_language
             ),
-            kb_worker_mode=_choice(
-                "KB_WORKER_MODE", d.kb_worker_mode, ("embedded", "external")
+            kb_ingest_mode=_choice(
+                "KB_INGEST_MODE", d.kb_ingest_mode, ("embedded", "external")
             ),
             ocr_backend=_choice("OCR_BACKEND", d.ocr_backend, ("transformers", "vllm")),
             vllm_base_url=os.environ.get("VLLM_BASE_URL", d.vllm_base_url),
@@ -143,8 +143,8 @@ class Settings:
             reply_lock_ttl_seconds=int(
                 os.environ.get("REPLY_LOCK_TTL_SECONDS", d.reply_lock_ttl_seconds)
             ),
-            kb_worker_poll_seconds=float(
-                os.environ.get("KB_WORKER_POLL_SECONDS", d.kb_worker_poll_seconds)
+            kb_ingest_poll_seconds=float(
+                os.environ.get("KB_INGEST_POLL_SECONDS", d.kb_ingest_poll_seconds)
             ),
             kb_stale_seconds=int(os.environ.get("KB_STALE_SECONDS", d.kb_stale_seconds)),
             kb_heartbeat_seconds=float(
@@ -165,6 +165,12 @@ class Settings:
             raise ValueError(
                 "ADMIN_USERNAMES 已不再使用，請改設 ADMIN_USERNAME 與 ADMIN_PASSWORD"
             )
+        for old_name, new_name in (
+            ("KB_WORKER_MODE", "KB_INGEST_MODE"),
+            ("KB_WORKER_POLL_SECONDS", "KB_INGEST_POLL_SECONDS"),
+        ):
+            if os.environ.get(old_name, "").strip():
+                raise ValueError(f"{old_name} 已改名為 {new_name}")
         _check_admin(settings.admin_username, settings.admin_password)
         if settings.reply_lock_ttl_seconds <= REPLY_HEARTBEAT_SECONDS:
             raise ValueError(

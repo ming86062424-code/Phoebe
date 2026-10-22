@@ -45,7 +45,7 @@ def ensure_admin(conn: sqlite3.Connection, username: str, password: str) -> None
     """Create the .env admin account, or reset its password to the .env value.
 
     Changing the password signs out the account's existing sessions. Safe to run from
-    several processes at once (each Gunicorn worker runs it at startup).
+    several processes at once (each Gunicorn process runs it at startup).
     """
     try:
         create_user(conn, username, password)

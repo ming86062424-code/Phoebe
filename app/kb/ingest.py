@@ -14,11 +14,11 @@ from app.kb.parsers.base import Parser, ParseError
 
 logger = logging.getLogger(__name__)
 
-# how often an idle worker retries deleting files that were in use, and scans for orphans
+# how often an idle ingester retries deleting files that were in use, and scans for orphans
 CLEANUP_INTERVAL_SECONDS = 60
 # upload temp files older than this are leftovers from an interrupted upload
 UPLOAD_TMP_MAX_AGE_SECONDS = 3600
-# how often the worker republishes which parsers it can run (the web process reads it)
+# how often the ingester republishes which parsers it can run (the web process reads it)
 STATUS_PUBLISH_SECONDS = 15
 STALE_FOLDER_ERROR = "無法清除上次處理留下的圖片（檔案可能正被使用），請稍後重試"
 
@@ -36,18 +36,18 @@ def _remove(path: Path) -> bool:
 
 
 class _Stopped(Exception):
-    """The worker was asked to shut down; the document is left for another run."""
+    """The ingester was asked to shut down; the document is left for another run."""
 
 
 class _Superseded(Exception):
     """The document was deleted (and maybe its id reused) while being processed."""
 
 
-class IngestWorker:
+class Ingester:
     """Parses and indexes uploaded documents one at a time.
 
-    The queue is the kb_documents table: workers atomically claim 'queued' rows, so several
-    workers (or a standalone worker process) can share it. With threaded=False, enqueue()
+    The queue is the kb_documents table: ingesters atomically claim 'queued' rows, so several
+    ingesters (or a standalone ingest process) can share it. With threaded=False, enqueue()
     processes queued documents immediately (used by tests).
     """
 
@@ -85,7 +85,7 @@ class IngestWorker:
         self._waiting_for: tuple[str, ...] = ()  # parsers whose documents are held back
 
     def requeue_stale(self) -> None:
-        """Re-queue documents whose worker disappeared."""
+        """Re-queue documents whose ingester disappeared."""
         stale_before = (
             datetime.now(timezone.utc) - timedelta(seconds=self.stale_seconds)
         ).isoformat()
@@ -185,7 +185,7 @@ class IngestWorker:
         self._wake.set()
 
     def enqueue(self, doc_id: int) -> None:
-        """The document is already 'queued' in the database; make sure a worker looks at it."""
+        """The document is already 'queued' in the database; make sure the ingester looks at it."""
         if self.threaded:
             self.wake()
         else:
@@ -196,7 +196,7 @@ class IngestWorker:
 
         A document whose parser is unavailable (e.g. the vLLM OCR service is still loading
         after a restart) stays queued instead of failing, and is picked up once the parser
-        is back. Only the parsers of queued documents are checked, so an idle worker never
+        is back. Only the parsers of queued documents are checked, so an idle ingester never
         polls the OCR service. Unknown parsers are still claimed (and fail clearly).
         """
         conn = connect(self.db_path)
@@ -411,7 +411,7 @@ class IngestWorker:
                 return
             store.update_document(conn, doc_id, status="ready", chunk_count=chunks)
         except _Stopped:
-            logger.info("worker 停止中，文件 %s 留待下次處理", doc_id)
+            logger.info("ingest 停止中，文件 %s 留待下次處理", doc_id)
         except _Superseded:
             if indexed:
                 self.index.delete_document(doc["kb_id"], doc_id)
