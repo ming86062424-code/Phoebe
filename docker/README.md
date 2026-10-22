@@ -33,15 +33,21 @@ cp .env.example .env
 ## 啟動、停止、看 log
 
 ```
-docker compose up -d --build   # 啟動（首次啟動 vllm 要下載映像與模型，約需數 GB 磁碟與數分鐘；ingest 在 vllm 容器啟動後就會啟動；vLLM 載入完成前 LightOnOCR 顯示為無法使用，LiteParse 照常運作）
+docker compose up -d --build   # 啟動（不含 vLLM；LightOnOCR 顯示為無法使用，LiteParse 照常運作）
+docker compose --profile lightonocr up -d   # 連 vLLM 一起啟動（首次要下載映像與模型，約需數 GB 磁碟與數分鐘；載入完成前 LightOnOCR 仍顯示無法使用）
 docker compose ps
 docker compose logs -f web ingest
 docker compose down            # 停止並移除容器，資料（docker/volumes 與 phoebe-db）都會保留
+docker compose --profile lightonocr down   # 連 vLLM 一起停止
 ```
+
+注意：不加 `--profile lightonocr` 的 `docker compose down` 不會停止 vLLM，已啟動的 vllm 容器會繼續佔用 GPU。
 
 啟動後開啟 http://localhost:8000。`down -v` 會連資料一起刪除，請勿隨意使用。
 
-## OCR：vLLM（預設）
+## OCR：vLLM（選用，`lightonocr` profile）
+
+vllm 服務預設不啟動，需用 `docker compose --profile lightonocr up -d`。ingest 對 vllm 的依賴是 `required: false`，沒啟動 vLLM 時 ingest 照常啟動。
 
 LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，v0.11.2 尚不支援 Qwen3.5 架構）。GPU 專用於 OCR 模型：對話模型可以放在雲端或主機 Ollama，因此 `OCR_VLLM_GPU_UTIL` 預設 0.8，不再替 Ollama 保留顯存。ingest 固定使用 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`，不含 torch，也不需要 GPU。
 
@@ -53,7 +59,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 |---|---|---|
 | `OCR_VLLM_GPU_UTIL` | `0.8` | 0.85 失敗：可用顯存 4.98 GiB < 需要的 5.1 GiB（Windows 桌面約佔 1 GiB）；0.8 可以啟動 |
 | `--enforce-eager`（固定） | 開 | CUDA graph 的額外記憶體會讓 KV cache 配不到空間（「No available memory for the cache blocks」），改用 eager 模式 |
-| `OCR_VLLM_MAX_NUM_SEQS` | `8` | vLLM 預設 256 條序列 × 18000 tokens 在 6GB 配不到 KV cache；8 條時 KV cache 1.28 GiB（99,243 tokens，18000 長度下約 5.5 倍並行），GPU 總用量約 4.4/6 GiB |
+| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 預設 256 條序列 × 18000 tokens 在 6GB 配不到 KV cache；以下為 8 條時的實測（改為 4 條後將於 Task 6 重新量測）：KV cache 1.28 GiB（99,243 tokens，18000 長度下約 5.5 倍並行），GPU 總用量約 4.4/6 GiB |
 
 顯存更大的 GPU 可調高 `OCR_VLLM_GPU_UTIL` 與 `OCR_VLLM_MAX_NUM_SEQS`，並視需要移除 compose 中的 `--enforce-eager` 以啟用 CUDA graph（吞吐量較高）。Compose 變數刻意不用 `VLLM_` 開頭，否則 vLLM 會警告未知的環境變數（vllm 服務也不載入 `docker/.env`）。
 
@@ -64,7 +70,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 - 模型快取：`docker/volumes/vllm-hf-cache/` 掛在 `/root/.cache/huggingface`（vLLM 映像以 root 執行、未設 `HF_HOME` 時的預設位置）。
 - vllm 有 healthcheck（`GET /health`，`start_period` 600 秒涵蓋首次下載與載入模型）；ingest 只等它啟動（`service_started`）、不等健康：vLLM 還在下載模型或啟動失敗時，LiteParse 仍可使用，LightOnOCR 則顯示「OCR 服務（vLLM）未啟動」。
 - 頁面以 400 DPI 算繪並縮圖至最長邊 2048。請求只含頁面影像，`temperature=0.1`、`chat_template_kwargs={"enable_thinking": false}`、`max_tokens=4096`（官方建議不要用貪婪解碼，所以同一份 PDF 重跑結果可能有些微差異）。OCR 結果中被跳脫的數學分隔符號（反斜線加錢字號）會還原成一般的 `$`，單獨出現的金額（如 `NT` 加跳脫錢字號）不變。
-- 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
+- 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose --profile lightonocr up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
 - 沒有 GPU 或想用 transformers 時，只能在本機快速測試用 `uv sync --group ocr` 搭配 `OCR_BACKEND=transformers`；Docker 的 ingest 不含 torch。
 
 ## Embedding 服務（embedder）

@@ -144,7 +144,7 @@ def test_vllm_service_follows_official_flags():
         (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
     )
     vllm = compose["services"]["vllm"]
-    assert "profiles" not in vllm  # a default service
+    assert vllm["profiles"] == ["lightonocr"]  # opt-in service
     command = vllm["command"]
     assert vllm["image"] == "vllm/vllm-openai:v0.30.0"
     for flag in ("--trust-remote-code", "--no-enable-prefix-caching", "float16"):
@@ -156,7 +156,7 @@ def test_vllm_service_follows_official_flags():
     assert "${OCR_VLLM_MAX_MODEL_LEN:-18000}" in command
     assert "${OCR_VLLM_GPU_UTIL:-0.8}" in command
     assert "--enforce-eager" in command
-    assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-8}"
+    assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-4}"
     assert "env_file" not in vllm  # no app settings, so no "unknown VLLM_*" warnings
     health = vllm["healthcheck"]
     assert any("/health" in str(part) for part in health["test"])
@@ -321,3 +321,17 @@ def test_compose_runs_the_ingest_service():
     assert "worker" not in services
     assert services["ingest"]["build"]["target"] == "ingest"
     assert services["ingest"]["image"] == "phoebe-ingest:local"
+
+
+def test_vllm_is_opt_in_behind_the_lightonocr_profile():
+    services = _compose()["services"]
+    assert services["vllm"]["profiles"] == ["lightonocr"]
+    dep = services["ingest"]["depends_on"]["vllm"]
+    assert dep == {"condition": "service_started", "required": False}
+    command = services["vllm"]["command"]
+    assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-4}"
+
+
+def test_docker_env_example_defaults_to_four_sequences():
+    text = (PROJECT_ROOT / "docker" / ".env.example").read_text(encoding="utf-8")
+    assert "OCR_VLLM_MAX_NUM_SEQS=4" in text

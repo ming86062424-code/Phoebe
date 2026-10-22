@@ -41,7 +41,7 @@
 ### 啟動順序
 
 - web 等 milvus、embedder 健康檢查通過後才啟動
-- ingest 等 web、milvus、embedder 健康後才啟動。vllm 只要容器開始執行即可，不必等健康：vLLM 載入模型要幾分鐘，這段期間 LiteParse 照常可用
+- ingest 等 web、milvus、embedder 健康後才啟動。vllm（需啟用 `lightonocr` profile）只要容器開始執行即可；沒啟用時 ingest 照常啟動，LightOnOCR 顯示未啟動，不必等健康：vLLM 載入模型要幾分鐘，這段期間 LiteParse 照常可用
 - LightOnOCR 的文件如果在 vLLM 就緒前排入佇列，會留在「排隊中」，等 vLLM 好了再自動處理
 
 ## Docker 外的服務
@@ -90,5 +90,5 @@ SQLite 刻意放在 Docker 管理的 volume，而不是 `docker/volumes/`：web 
 
 | 情境 | 做法 |
 |---|---|
-| 只用 LiteParse，想把 GPU 讓給 Ollama | `docker compose stop vllm`；之後要 OCR 時再 `docker compose start vllm` |
+| 只用 LiteParse，想把 GPU 讓給 Ollama | vllm 預設不啟動；已啟動的話 `docker compose --profile lightonocr stop vllm`，之後要 OCR 時再 `docker compose --profile lightonocr up -d` |
 | 其他服務 | 都是必要的：少了 embedder 或 milvus，上傳和檢索都會失敗；etcd、minio 是 Milvus 的一部分 |
