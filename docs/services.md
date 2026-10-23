@@ -64,6 +64,8 @@ ingest 負責把上傳的文件變成可以檢索的 chunk。它是知識庫唯�
 | **LightOnOCR** | PDF、圖檔（知識庫設定為 LightOnOCR 時） | 辨識在 **vllm** 服務（GPU） | 把每頁轉成圖片送給 vLLM，收到結果後解析區塊、裁切圖片、組成 markdown |
 | **文字解析** | txt、md（一律使用，不看知識庫設定） | ingest 容器內 | 全部：依段落或標題切塊 |
 
+每個解析模組怎麼切 chunk、送什麼給 embedder，見 [parsers.md](parsers.md)。
+
 新增解析模組時的原則：如果它只是一個 Python 套件（像 LiteParse），直接放進 ingest；如果它需要常駐的大型模型或 GPU（像 LightOnOCR），就交給獨立的模型服務，由 ingest 透過 HTTP 呼叫，並用 compose profile 讓它可以選擇是否啟動。
 
 ### 同時處理
