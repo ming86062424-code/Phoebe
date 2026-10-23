@@ -13,6 +13,7 @@
 會用到 GPU 的服務：
 
 - **vLLM（LightOnOCR）**：只有啟用 `lightonocr` profile 時才會啟動。
+- **embedder 的 GPU 模式**：不用 LightOnOCR 時才使用，和 vLLM 二選一，見下方。
 - **主機上的 Ollama**：選用的本機聊天模型。顯存不夠時會自動把部分模型放到 CPU 執行，變慢但不會失敗。
 
 ## vLLM：顯存分成三塊
@@ -73,3 +74,64 @@ vLLM 有兩種設定方式：
 | 換了更大的顯卡 | 可以調大 KV cache 和同時頁數，並考慮拿掉 `--enforce-eager`，讓 CUDA graph 加速 |
 
 設定都在 `docker/.env`，說明見 `docker/.env.example`。
+
+## embedder：CPU 和 GPU 兩種模式
+
+6 GB 顯卡放不下 vLLM 和 GPU 上的 embedder，所以依用途切換：
+
+| 模式 | 什麼時候用 | vLLM | embedder | 指令（在 `docker/` 執行） |
+|---|---|---|---|---|
+| **LightOnOCR 模式**（預設） | 需要 LightOnOCR | GPU | CPU | `docker compose --profile lightonocr up -d` |
+| **GPU embedding 模式** | 只用 LiteParse | 不啟動 | GPU | 先 `docker compose --profile lightonocr stop vllm`，再 `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build` |
+
+- **切回 LightOnOCR 模式**：直接執行 `docker compose --profile lightonocr up -d`。embedder 會用 CPU 版的設定重建。
+- **不要同時帶 GPU 設定檔和 `--profile lightonocr`**：兩者加起來放不進 6 GB，vLLM 會在啟動檢查時失敗，或者 embedder 在處理時顯存不足。
+- GPU 模式下執行一般的 `docker compose up -d`（沒帶 GPU 設定檔），embedder 也會回到 CPU。想讓 GPU 模式一直生效，可以在 `docker/.env` 加上 `COMPOSE_FILE=docker-compose.yml;docker-compose.gpu.yml`（Windows 用分號，Linux／macOS 用冒號）。
+- **兩種模式的向量相同**：都是 float32，同一組輸入的 cosine 相似度為 1.0000000，最大差異小於 1e-6（2026-10-24 實測），所以切換不需要重建索引。
+
+### 怎麼做到的
+
+- **兩種映像**：同一個 Dockerfile，用 build 參數 `TORCH_VARIANT` 選 PyTorch 版本。
+
+  | | CPU 版 | GPU 版 |
+  |---|---|---|
+  | 映像 | `phoebe-embedder:local` | `phoebe-embedder:gpu` |
+  | PyTorch | CPU 版 | CUDA 12.6 版（支援 RTX 2060 這類 Turing 顯卡） |
+  | `docker images` 顯示的大小 | 2.07 GB | 3.93 GB |
+
+  依賴管理在 `embedder/pyproject.toml`：`cpu`、`cu126` 是兩個互斥的 dependency group，各自從 PyTorch 的 CPU 或 cu126 套件來源安裝。`cpu` 是預設的 group，在本機跑測試時裝的也是 CPU 版。
+- **裝置設定** `EMBED_DEVICE`（`cpu` 或 `cuda`）由 compose 決定，不從 `.env` 讀取。設為 `cuda` 但容器看不到 GPU 時，模型載入失敗並重啟，**不會偷偷改用 CPU**，`/health` 會回報目前用的裝置。
+- **精度**：兩種模式都用 float32。模型卡禁止 float16，RTX 2060 也不支援 bfloat16。
+
+### 顯存用量（RTX 2060，2026-10-24）
+
+| | 顯存 |
+|---|---|
+| 模型權重（不含音訊編碼器，float32） | 1.64 GiB |
+| 待機（含 CUDA 執行環境） | 約 1.5 GB |
+| 處理整頁圖時的高峰 | 約 2.2 GB |
+
+處理整頁圖時，embedder 在 GPU 上**一次只算 2 張圖**，每個請求結束後把 PyTorch 快取的顯存還回去：
+
+| 一次算幾張 | 8 張圖的時間 | 顯存高峰（PyTorch 保留量） |
+|---|---|---|
+| 8 | 2.73 秒 | 3.12 GiB |
+| 4 | 2.70 秒 | 2.39 GiB |
+| **2（採用）** | **2.90 秒** | **2.01 GiB** |
+| 1 | 3.17 秒 | 1.85 GiB |
+
+- 一開始沒有限制時，ingest 一次送來 8 頁，每頁的文字又長，整張卡的用量最高到 5,888 MiB（含桌面），只剩約 250 MiB。改成一次 2 張後最高 3,375 MiB，速度幾乎一樣。
+- 請求結束後釋放快取，閒置時顯存會降回約 2.6 GB（含桌面），讓 Ollama 等其他程式可以使用。
+
+### 效果（12 頁的草莓園 PDF，LiteParse）
+
+| | 解析 | 建立索引 | 總時間 |
+|---|---|---|---|
+| embedder 在 CPU | 約 75 秒 | 約 100 秒 | 約 176 秒 |
+| **embedder 在 GPU** | 約 57–64 秒 | **7 秒** | **64–71 秒** |
+
+主機記憶體也從約 2.3 GB 降到約 1.2–1.8 GB，因為模型改放在顯存。
+
+### 和 Ollama 共用
+
+GPU 模式下，embedder 閒置約佔 1.5 GB，處理時約 2.2 GB。主機上的 Ollama 聊天模型（例如 `gemma4:e4b`，6.6 GB）本來就放不進 6 GB 顯卡，會自動把部分模型放到 CPU 執行，embedder 開著時放到 CPU 的比例會更多。聊天建議使用 Gemini。

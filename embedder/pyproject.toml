@@ -7,8 +7,6 @@ dependencies = [
     "fastapi",
     "pillow",
     "sentence-transformers==6.1.0",
-    "torch==2.14.0",
-    "torchvision==0.29.0",
     "transformers==5.19.0",
     "uvicorn",
 ]
@@ -18,6 +16,16 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
 ]
+# PyTorch comes from exactly one of these groups (docs/gpu-memory.md):
+# cpu for the default image and local tests, cu126 for the GPU image (TORCH_VARIANT=cu126)
+cpu = [
+    "torch==2.14.0",
+    "torchvision==0.29.0",
+]
+cu126 = [
+    "torch==2.14.0",
+    "torchvision==0.29.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -26,12 +34,25 @@ pythonpath = ["."]
 [tool.uv]
 package = false
 exclude-newer = "2026-10-07T00:00:00Z"
+default-groups = ["dev", "cpu"]
+conflicts = [[{ group = "cpu" }, { group = "cu126" }]]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cpu" }
-torchvision = { index = "pytorch-cpu" }
+torch = [
+    { index = "pytorch-cpu", group = "cpu" },
+    { index = "pytorch-cu126", group = "cu126" },
+]
+torchvision = [
+    { index = "pytorch-cpu", group = "cpu" },
+    { index = "pytorch-cu126", group = "cu126" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true

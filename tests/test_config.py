@@ -417,3 +417,38 @@ def test_env_examples_document_ocr_concurrency():
 def test_kb_services_pass_the_ocr_concurrency():
     source = (PROJECT_ROOT / "app" / "kb" / "services.py").read_text(encoding="utf-8")
     assert "LightOnOcrParser(build_ocr_engine(settings), settings.ocr_concurrency)" in source
+
+
+def test_embedder_gpu_mode_is_an_override_file():
+    """docs/gpu-memory.md: CPU embedder by default; docker-compose.gpu.yml switches it to the
+    CUDA image and the GPU (only while vLLM is off)."""
+    import yaml
+
+    base = _compose()["services"]["embedder"]
+    assert base["environment"]["EMBED_DEVICE"] == "cpu"
+    assert base["image"] == "phoebe-embedder:local"
+    assert "deploy" not in base
+    gpu = yaml.safe_load(
+        (PROJECT_ROOT / "docker" / "docker-compose.gpu.yml").read_text(encoding="utf-8")
+    )
+    assert list(gpu["services"]) == ["embedder"]
+    embedder = gpu["services"]["embedder"]
+    assert embedder["build"]["args"] == {"TORCH_VARIANT": "cu126"}
+    assert embedder["image"] == "phoebe-embedder:gpu"
+    assert embedder["environment"] == {"EMBED_DEVICE": "cuda"}
+    devices = embedder["deploy"]["resources"]["reservations"]["devices"]
+    assert devices == [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}]
+
+
+def test_embedder_image_picks_one_torch_variant():
+    dockerfile = (PROJECT_ROOT / "docker" / "embedder.Dockerfile").read_text(encoding="utf-8")
+    assert "ARG TORCH_VARIANT=cpu" in dockerfile
+    assert '--no-default-groups --group "${TORCH_VARIANT}"' in dockerfile
+    import tomllib
+
+    project = tomllib.loads((PROJECT_ROOT / "embedder" / "pyproject.toml").read_text("utf-8"))
+    groups = project["dependency-groups"]
+    assert groups["cpu"] == groups["cu126"] == ["torch==2.14.0", "torchvision==0.29.0"]
+    assert not any(d.startswith(("torch", "torchvision")) for d in project["project"]["dependencies"])
+    assert project["tool"]["uv"]["default-groups"] == ["dev", "cpu"]
+    assert project["tool"]["uv"]["conflicts"] == [[{"group": "cpu"}, {"group": "cu126"}]]

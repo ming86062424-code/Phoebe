@@ -80,11 +80,17 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 ## Embedding 服務（embedder）
 
-獨立的 FastAPI 服務（`embedder/`，sentence-transformers 6.1.0、transformers 5.19.0（第一個支援 embedding_gemma2 的版本）、torch 2.14.0 與 torchvision 0.29.0 CPU wheel），以 `google/embeddinggemma-2` 同時產生文字與圖片的 768 維向量（L2 normalized；CPU float32，模型卡明言不可用 float16）。只載入文字與視覺部分：模型另有一個 304M 參數的音訊編碼器，我們用不到，載入時以 `audio_config=None` 略過，記憶體少約 1.2 GB，文字與圖片的向量和完整模型完全相同。只對本機 `127.0.0.1:8002` 開放（無驗證）；Docker 內以 `http://embedder:8000` 連線。
+獨立的 FastAPI 服務（`embedder/`，sentence-transformers 6.1.0、transformers 5.19.0（第一個支援 embedding_gemma2 的版本）、torch 2.14.0 與 torchvision 0.29.0），以 `google/embeddinggemma-2` 同時產生文字與圖片的 768 維向量（L2 normalized；float32，模型卡明言不可用 float16，RTX 2060 也不支援 bfloat16）。只載入文字與視覺部分：模型另有一個 304M 參數的音訊編碼器，我們用不到，載入時以 `audio_config=None` 略過，記憶體少約 1.2 GB，文字與圖片的向量和完整模型完全相同。只對本機 `127.0.0.1:8002` 開放（無驗證）；Docker 內以 `http://embedder:8000` 連線。
 
-- `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200，載入中回 503。
+- **CPU／GPU 兩種模式**：預設在 CPU 執行（映像 `phoebe-embedder:local`，CPU 版 PyTorch）。不用 LightOnOCR 時，可以把 GPU 給 embedder：
+  ```
+  docker compose --profile lightonocr stop vllm
+  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+  ```
+  `docker-compose.gpu.yml` 會改用 GPU 版映像 `phoebe-embedder:gpu`（CUDA 12.6 版 PyTorch，`TORCH_VARIANT=cu126`）並設定 `EMBED_DEVICE=cuda`。要用 LightOnOCR 時，執行 `docker compose --profile lightonocr up -d` 切回來，embedder 會回到 CPU。兩種模式的向量相同，切換不用重建索引。6 GB 顯卡放不下兩者，**不要同時帶 GPU 設定檔和 `--profile lightonocr`**。顯存用量與設計原因見 [docs/gpu-memory.md](../docs/gpu-memory.md)。
+- `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200（回應中的 `device` 是 `cpu` 或 `cuda`），載入中回 503。
 - 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）。
-- `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
+- `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。`EMBED_DEVICE`（由 compose 設定，不從 `.env` 讀取）只接受 `cpu`、`cuda`；設為 `cuda` 但容器看不到 GPU 時，模型載入失敗並重啟，不會偷偷改用 CPU。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
 - 首次啟動會下載約 1.5 GB 模型到 volume `phoebe_embedder-hf-cache`（healthcheck `start_period` 600 秒）。此 volume 與 vLLM 的模型快取分開，避免 root／非 root 寫入權限衝突。
 - 首次下載可能超過 healthcheck 的等待時間：`start_period` 600 秒，之後每 15 秒檢查一次、最多失敗 10 次（約再 150 秒）。`web`、`ingest` 依賴 `embedder` 健康，若在 `docker compose up -d` 期間因此放棄啟動，等 `docker compose ps` 顯示 embedder 為 healthy（`docker compose logs -f embedder` 可看下載進度）後，再執行一次 `docker compose up -d` 即可，已下載的模型快取不會重來。
 - 本機快速測試：`cd docker && docker compose up -d embedder`；單元測試：`cd embedder && uv run pytest -q`（用假模型，不下載模型）。
