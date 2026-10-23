@@ -88,7 +88,12 @@ describe('KbPage', () => {
     setup()
     expect(await screen.findByText('a.pdf')).toBeInTheDocument()
     expect(screen.getByText('完成')).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /LightOnOCR-3.*目前無法使用/ })).toBeInTheDocument()
+    // options show only the parser's name; its state is a badge next to the select
+    expect(screen.getByRole('option', { name: 'LightOnOCR-3（GPU OCR）' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /無法使用/ })).toBeNull()
+    const badge = screen.getByRole('status', { name: '解析器狀態' })
+    expect(badge).toHaveTextContent('可使用')
+    expect(badge).toHaveAttribute('data-state', 'ok')
 
     const file = new File(['%PDF-1.4'], 'new.pdf', { type: 'application/pdf' })
     await userEvent.upload(screen.getByLabelText('選擇檔案'), file)
@@ -286,6 +291,9 @@ describe('KbPage', () => {
     setup()
     const select = await screen.findByRole('combobox', { name: '知識庫的解析器' })
     await waitFor(() => expect(select).toHaveValue('lightonocr'))
+    const badge = screen.getByRole('status', { name: '解析器狀態' })
+    expect(badge).toHaveAttribute('data-state', 'unavailable')
+    expect(badge).toHaveTextContent('目前無法使用：未安裝 OCR 套件')
     expect(screen.getByText(/只影響之後上傳的 PDF 與圖片/)).toBeInTheDocument()
     expect(screen.getByText(/PDF 與圖片會用「LightOnOCR-3」解析/)).toBeInTheDocument()
   })

@@ -103,6 +103,8 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
     }
   }
   const kbParser = parsers.find((p) => p.id === kb.parser) ?? null
+  // the parser the select shows (the one being saved, if any)
+  const shownParser = parsers.find((p) => p.id === (pendingParser ?? kb.parser)) ?? null
 
   const saveWeight = async (vector_weight: number | null) => {
     setSavingWeight(true)
@@ -231,11 +233,24 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
             {parsers.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label}
-                {p.available ? '' : '（目前無法使用）'}
               </option>
             ))}
           </select>
         </label>
+        {shownParser && (
+          // native <option>s can't be colored, so the chosen parser's state is a badge
+          <span
+            role="status"
+            aria-label="解析器狀態"
+            className={styles.parserStatus}
+            data-state={shownParser.available ? 'ok' : 'unavailable'}
+          >
+            <span className={styles.statusDot} aria-hidden />
+            {shownParser.available
+              ? '可使用'
+              : `目前無法使用${shownParser.reason ? `：${shownParser.reason}` : ''}`}
+          </span>
+        )}
         <p className={styles.hint}>
           只影響之後上傳的 PDF 與圖片；已上傳的文件維持原本的解析器（見下方文件列表的「解析器」欄）。txt、md
           一律使用文字解析。
