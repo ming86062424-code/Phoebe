@@ -21,6 +21,49 @@ uv run uvicorn app.main:create_app --factory --reload
 
 前端需先建置才能由後端提供（見下方「前端」一節），再開啟 http://localhost:8000。
 
+## 本機開發模式（搭配 Docker 的模型服務）
+
+改程式時不必每次重建 Docker 映像：web 與 ingest 直接在本機執行（改了程式會自動重新載入），Milvus、embedder、vLLM 這些重的服務繼續用 Docker 裡的。
+
+**1. 啟動 Docker 裡的服務，並停掉 Docker 版的 web 與 ingest**（它們佔用 8000 埠，也會跟本機版搶工作）：
+
+```
+cd docker
+docker compose up -d milvus embedder                # 必要：向量資料庫與 embedding
+docker compose --profile lightonocr up -d vllm      # 選用：要測 LightOnOCR 時
+docker compose stop web ingest
+```
+
+**2. 根目錄的 `.env`**（本機版讀這個檔，與 `docker/.env` 無關）至少設定：
+
+```
+MILVUS_URI=http://localhost:19530
+EMBEDDER_URL=http://localhost:8002
+# 與 Docker 版分開：本機版有自己的 SQLite，知識庫編號會和 Docker 版重複，
+# 共用同一個 collection 會讓兩邊的 chunk 混在一起
+MILVUS_COLLECTION=phoebe_chunks_dev
+# 要測 LightOnOCR 時（需啟動上面的 vllm）
+OCR_BACKEND=vllm
+VLLM_BASE_URL=http://localhost:8001/v1
+```
+
+`KB_INGEST_MODE` 維持預設的 `embedded`：本機版的 ingest 跑在 web 程序裡，不用另外啟動。
+
+**3. 兩個終端機各跑一個指令：**
+
+```
+uv run uvicorn app.main:create_app --factory --reload
+cd frontend && npm run dev
+```
+
+開啟 http://localhost:5173。改後端程式，uvicorn 會自動重啟；改前端程式，畫面會立即更新。前端的 `/api` 請求會轉送到 8000 埠的後端。
+
+**注意**
+
+- 本機版的資料在專案根目錄的 `data/`（SQLite 與上傳檔），和 Docker 版的資料完全分開，需要另外註冊帳號。
+- LiteParse 在本機（Windows）也能直接使用，`uv sync` 會一併安裝。
+- 開發完要回到 Docker 版時：`cd docker && docker compose up -d`（要用 LightOnOCR 則加 `--profile lightonocr`）。
+
 ## 前端
 
 前端位於 `frontend/`（React + TypeScript + Vite）。
@@ -78,7 +121,7 @@ PDF 與圖檔的解析器是**知識庫層級的設定**（知識庫頁上方的
 >
 > 從沒有這個設定的舊版升級時，每個知識庫會依現有文件補上設定：PDF 與圖檔都用同一個解析器的，就沿用那個解析器；沒有這類文件或混用的，設為 LiteParse。
 
-解析器的差異：
+解析器的差異（實測的處理時間見 [docs/parser-benchmarks.md](docs/parser-benchmarks.md)）：
 
 | 解析器 | 適合 | 說明 |
 | --- | --- | --- |
