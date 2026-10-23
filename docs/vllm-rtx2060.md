@@ -1,5 +1,7 @@
 # 在 RTX 2060（6 GB）上執行 LightOnOCR（vLLM）
 
+> **2026-10-24 更新**：vLLM 改成直接指定 KV cache 大小（`OCR_VLLM_KV_CACHE_MEMORY=512M`），`OCR_VLLM_GPU_UTIL` 改為 0.7 且只當作啟動檢查，顯存用量從約 4.8 GB 降到約 2.8 GB，速度不變。下面是當時用比例 0.8 的排錯紀錄，現在的分配方式與原因見 [gpu-memory.md](gpu-memory.md)。
+
 這份文件記錄在這台開發機上，讓 LightOnOCR 的 vLLM 服務跑起來時遇到的問題，以及最後採用的設定。之後換顯卡、升級 vLLM 或重灌環境時可以拿來對照。
 
 ## 環境

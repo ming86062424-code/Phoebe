@@ -90,7 +90,8 @@ def test_env_example_lists_every_setting():
     assert {"KB_INGEST_MODE", "OCR_BACKEND"} <= used
     assert used
     assert used <= keys
-    assert not {"WEB_CONCURRENCY", "PHOEBE_PORT", "VLLM_GPU_UTIL", "OCR_VLLM_GPU_UTIL"} & keys
+    docker_only = {"WEB_CONCURRENCY", "PHOEBE_PORT", "OCR_VLLM_GPU_UTIL", "OCR_VLLM_KV_CACHE_MEMORY"}
+    assert not ({"VLLM_GPU_UTIL"} | docker_only) & keys
     assert not RETIRED_KEYS & keys
 
 
@@ -154,7 +155,9 @@ def test_vllm_service_follows_official_flags():
     assert json.loads(command[command.index("--limit-mm-per-prompt") + 1]) == {"image": 1}
     assert command[command.index("--mm-processor-cache-gb") + 1] == "0"
     assert "${OCR_VLLM_MAX_MODEL_LEN:-18000}" in command
-    assert "${OCR_VLLM_GPU_UTIL:-0.8}" in command
+    # the KV cache has a fixed size; the ratio is only vLLM's startup check (docs/gpu-memory.md)
+    assert command[command.index("--kv-cache-memory-bytes") + 1] == "${OCR_VLLM_KV_CACHE_MEMORY:-512M}"
+    assert command[command.index("--gpu-memory-utilization") + 1] == "${OCR_VLLM_GPU_UTIL:-0.7}"
     assert "--enforce-eager" in command
     assert command[command.index("--max-num-seqs") + 1] == "${OCR_VLLM_MAX_NUM_SEQS:-4}"
     assert "env_file" not in vllm  # no app settings, so no "unknown VLLM_*" warnings
