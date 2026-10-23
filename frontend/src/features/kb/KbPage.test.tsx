@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HashRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -296,6 +296,33 @@ describe('KbPage', () => {
     expect(badge).toHaveTextContent('目前無法使用：未安裝 OCR 套件')
     expect(screen.getByText(/只影響之後上傳的 PDF 與圖片/)).toBeInTheDocument()
     expect(screen.getByText(/PDF 與圖片會用「LightOnOCR-3」解析/)).toBeInTheDocument()
+  })
+
+  it('refreshes the parser badge while the page stays open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    window.location.hash = '#/kb/1'
+    const ocrKb = { ...kb, parser: 'lightonocr' }
+    let ocrReady = false
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/kbs') return Promise.resolve(jsonResponse([ocrKb]))
+      if (url === '/api/kbs/1/documents') return Promise.resolve(jsonResponse([doc()]))
+      if (url === '/api/parsers')
+        return Promise.resolve(jsonResponse(parsers.map((p) => ({ ...p, available: p.available || ocrReady }))))
+      return Promise.reject(new Error('unexpected ' + url))
+    })
+    setup()
+    const badge = await screen.findByRole('status', { name: '解析器狀態' })
+    await waitFor(() => expect(badge).toHaveAttribute('data-state', 'unavailable'))
+    // vLLM finishes loading: the next refresh turns the badge green
+    ocrReady = true
+    await act(() => vi.advanceTimersByTimeAsync(15000))
+    await waitFor(() => expect(badge).toHaveAttribute('data-state', 'ok'))
+    // a failed refresh keeps the last known state
+    fetchMock.mockImplementation((url: string) =>
+      url === '/api/parsers' ? Promise.reject(new Error('offline')) : Promise.resolve(jsonResponse([])),
+    )
+    await act(() => vi.advanceTimersByTimeAsync(15000))
+    expect(badge).toHaveAttribute('data-state', 'ok')
   })
 
   it('saves a new parser setting for the knowledge base', async () => {

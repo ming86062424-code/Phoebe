@@ -9,6 +9,9 @@ import { STATUS_TEXT } from './documentStatus'
 import styles from './KbDetail.module.css'
 
 const POLL_MS = 2000
+// ingest re-checks the parsers every 15 s (STATUS_PUBLISH_SECONDS); polling at the same
+// pace turns the badge green soon after vLLM finishes loading, without a page reload
+const PARSER_POLL_MS = 15000
 
 function formatWeight(weight: number): string {
   return `向量 ${weight.toFixed(2)} ／ 關鍵字 ${(1 - weight).toFixed(2)}`
@@ -60,6 +63,12 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChun
     void loadDocs()
     api.listParsers().then(setParsers, () => setParsers([]))
   }, [loadDocs])
+
+  useEffect(() => {
+    // a failed refresh keeps the last known state
+    const timer = setInterval(() => void api.listParsers().then(setParsers, () => undefined), PARSER_POLL_MS)
+    return () => clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     api.searchSettings().then(
