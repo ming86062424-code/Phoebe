@@ -162,7 +162,9 @@ def test_vllm_service_follows_official_flags():
     assert any("/health" in str(part) for part in health["test"])
     assert health["start_period"]
     assert vllm["ports"] == ["127.0.0.1:8001:8000"]
-    assert "./volumes/vllm-hf-cache:/root/.cache/huggingface" in vllm["volumes"]
+    # the model is the positional argument of `vllm serve` (--model is deprecated)
+    assert command[0] == "${OCR_MODEL:-lightonai/LightOnOCR-3-0.8B}"
+    assert "--model" not in command
 
 
 def test_ingest_uses_vllm_and_has_no_gpu():
@@ -221,20 +223,43 @@ def test_no_chroma_left_in_compose():
     assert "chroma-data" not in compose["volumes"]
 
 
-def test_service_data_lives_under_docker_volumes_except_sqlite():
+def test_databases_and_caches_use_docker_volumes_uploads_use_host_dir():
+    """docs/docker-storage.md: databases and caches on Docker-managed volumes (native
+    filesystem speed and file locks under Docker Desktop), uploads in docker/volumes/kb."""
     compose = _compose()
     services = compose["services"]
     expected = {
-        "etcd": "./volumes/etcd:/etcd",
-        "minio": "./volumes/minio:/minio_data",
-        "milvus": "./volumes/milvus:/var/lib/milvus",
-        "embedder": "./volumes/embedder-hf-cache:/hf-cache",
-        "vllm": "./volumes/vllm-hf-cache:/root/.cache/huggingface",
+        "etcd": ["etcd-data:/etcd"],
+        "minio": ["minio-data:/minio_data"],
+        "milvus": ["milvus-data:/var/lib/milvus"],
+        "embedder": ["embedder-hf-cache:/hf-cache"],
+        "vllm": [
+            "vllm-hf-cache:/root/.cache/huggingface",
+            "vllm-triton-cache:/root/.triton/cache",
+        ],
     }
-    for name, mount in expected.items():
-        assert services[name]["volumes"] == [mount]
-    # SQLite (WAL, shared by two containers) stays on a Docker-managed volume
-    assert list(compose["volumes"]) == ["phoebe-db"]
+    for name, mounts in expected.items():
+        assert services[name]["volumes"] == mounts
+    assert set(compose["volumes"]) == {
+        "phoebe-db",
+        "etcd-data",
+        "minio-data",
+        "milvus-data",
+        "embedder-hf-cache",
+        "vllm-hf-cache",
+        "vllm-triton-cache",
+    }
+    # the host-directory alternative stays in the file, commented out
+    text = (PROJECT_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+    for mount in (
+        "./volumes/etcd:/etcd",
+        "./volumes/minio:/minio_data",
+        "./volumes/milvus:/var/lib/milvus",
+        "./volumes/embedder-hf-cache:/hf-cache",
+        "./volumes/vllm-hf-cache:/root/.cache/huggingface",
+        "./volumes/vllm-triton-cache:/root/.triton/cache",
+    ):
+        assert f"# - {mount}" in text
     for name in ("web", "ingest"):
         svc = services[name]
         assert svc["volumes"] == ["phoebe-db:/db", "./volumes/kb:/data/kb"]

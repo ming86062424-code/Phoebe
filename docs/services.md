@@ -123,13 +123,14 @@ vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這�
 
 | 位置 | 內容 | 可以刪嗎 |
 |---|---|---|
-| `docker/volumes/kb/` | 上傳的原始檔、整頁圖、裁切圖 | 刪了就要重新上傳 |
-| `docker/volumes/milvus/`、`etcd/`、`minio/` | 向量資料庫 | 刪了可以用 `reprocess_all` 從原始檔重建 |
-| `docker/volumes/vllm-hf-cache/` | LightOnOCR 模型快取（約 2 GB） | 可以，下次啟動會重新下載 |
-| `docker/volumes/embedder-hf-cache/` | embeddinggemma-2 模型快取（約 1.5 GB） | 可以，下次啟動會重新下載 |
-| Docker volume `phoebe_phoebe-db` | SQLite：帳號、對話、知識庫與文件清單、系統設定 | **不可以**，所有帳號與對話都在這裡 |
+| 主機目錄 `docker/volumes/kb/` | 上傳的原始檔、整頁圖、裁切圖 | 刪了就要重新上傳 |
+| volume `phoebe_phoebe-db` | SQLite：帳號、對話、知識庫與文件清單、系統設定 | **不可以**，所有帳號與對話都在這裡 |
+| volume `phoebe_milvus-data`、`phoebe_etcd-data`、`phoebe_minio-data` | 向量資料庫 | 刪了可以用 `reprocess_all` 從原始檔重建（三個要一起刪） |
+| volume `phoebe_vllm-hf-cache` | LightOnOCR 模型快取（約 1.6 GB） | 可以，下次啟動會重新下載 |
+| volume `phoebe_vllm-triton-cache` | vLLM 的 Triton 編譯快取（約 180 MB） | 可以，下次啟動會重新編譯（多花幾分鐘） |
+| volume `phoebe_embedder-hf-cache` | embeddinggemma-2 模型快取（約 1.5 GB） | 可以，下次啟動會重新下載 |
 
-SQLite 刻意放在 Docker 管理的 volume，而不是 `docker/volumes/`：web 和 ingest 會同時讀寫它，Windows 目錄掛載的檔案鎖不可靠。備份方式見 [docker/README.md](../docker/README.md) 的「資料備份」。
+資料庫與快取放在 Docker 管理的 volume，上傳的檔案放在主機目錄，原因見 [docker-storage.md](docker-storage.md)。備份方式見 [docker/README.md](../docker/README.md) 的「資料備份」。
 
 ## 哪些服務可以不開
 

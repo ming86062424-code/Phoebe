@@ -4,13 +4,16 @@
 
 | 位置 | 內容 |
 |---|---|
-| `docker/volumes/kb/` | 上傳的檔案與解析出的圖片 |
-| `docker/volumes/milvus/`、`etcd/`、`minio/` | Milvus 向量資料庫 |
-| `docker/volumes/vllm-hf-cache/` | vLLM（LightOnOCR）的 Hugging Face 模型快取 |
-| `docker/volumes/embedder-hf-cache/` | embedder 的模型快取 |
-| named volume `phoebe-db`（實際名稱 `phoebe_phoebe-db`） | SQLite 資料庫 `app.db` |
+| 主機目錄 `docker/volumes/kb/` | 上傳的檔案與解析出的圖片 |
+| volume `phoebe_phoebe-db` | SQLite 資料庫 `app.db` |
+| volume `phoebe_milvus-data`、`phoebe_etcd-data`、`phoebe_minio-data` | Milvus 向量資料庫 |
+| volume `phoebe_embedder-hf-cache` | embedder 的模型快取 |
+| volume `phoebe_vllm-hf-cache` | vLLM（LightOnOCR）的 Hugging Face 模型快取 |
+| volume `phoebe_vllm-triton-cache` | vLLM 的 Triton 編譯快取 |
 
-`docker/volumes/` 在第一次啟動時自動建立，已被 git 忽略。SQLite 刻意不放在主機目錄：web 與 ingest 兩個容器同時以 WAL 模式讀寫，而 Windows 主機目錄經過 Docker Desktop 的檔案共享層，檔案鎖與共用記憶體不可靠（SQLite 官方不支援在網路檔案系統上使用 WAL）。named volume 存在 Docker 的 Linux 虛擬機內，沒有這個問題。
+資料庫與快取放在 Docker 管理的 volume，使用者會想直接查看的上傳檔案放在主機目錄 `docker/volumes/`（第一次啟動時自動建立，已被 git 忽略）。為什麼這樣分、想改回主機目錄怎麼做，見 [docs/docker-storage.md](../docs/docker-storage.md)。
+
+**從舊版升級（2026-10-24 以前，Milvus 與模型快取放在 `docker/volumes/` 下）**：新版改讀 Docker 管理的 volume，不搬移資料的話知識庫向量會是空的、模型會重新下載。搬移步驟見 [docs/docker-storage.md](../docs/docker-storage.md#從舊版主機目錄搬到-docker-管理的-volume)。
 
 ## 前置需求
 
@@ -37,7 +40,7 @@ docker compose up -d --build   # 啟動（不含 vLLM；LightOnOCR 顯示為無�
 docker compose --profile lightonocr up -d   # 連 vLLM 一起啟動（首次要下載映像與模型，約需數 GB 磁碟與數分鐘；載入完成前 LightOnOCR 仍顯示無法使用）
 docker compose ps
 docker compose logs -f web ingest
-docker compose down            # 停止並移除容器，資料（docker/volumes 與 phoebe-db）都會保留
+docker compose down            # 停止並移除容器，資料（docker/volumes 與各個 volume）都會保留
 docker compose --profile lightonocr down   # 連 vLLM 一起停止
 ```
 
@@ -67,7 +70,8 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 **升級提醒**：舊的 `docker/.env` 若有 `VLLM_GPU_UTIL`、`VLLM_MAX_MODEL_LEN`，請改名為 `OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`（舊名稱已不會被讀取），也可參考 `.env.example` 新增 `OCR_VLLM_MAX_NUM_SEQS`。
 
-- 模型快取：`docker/volumes/vllm-hf-cache/` 掛在 `/root/.cache/huggingface`（vLLM 映像以 root 執行、未設 `HF_HOME` 時的預設位置）。
+- 模型快取：volume `phoebe_vllm-hf-cache` 掛在 `/root/.cache/huggingface`（vLLM 映像以 root 執行、未設 `HF_HOME` 時的預設位置）。
+- Triton 編譯快取：volume `phoebe_vllm-triton-cache` 掛在 `/root/.triton/cache`。沒保存的話，每次重建容器都要重新編譯好幾分鐘，見 [docs/docker-storage.md](../docs/docker-storage.md#triton-編譯快取)。
 - vllm 有 healthcheck（`GET /health`，`start_period` 600 秒涵蓋首次下載與載入模型）；ingest 只等它啟動（`service_started`）、不等健康：vLLM 還在下載模型或啟動失敗時，LiteParse 仍可使用，LightOnOCR 則顯示「OCR 服務（vLLM）未啟動」。
 - 頁面以 400 DPI 算繪並縮圖至最長邊 2048。請求只含頁面影像，`temperature=0.1`、`chat_template_kwargs={"enable_thinking": false}`、`max_tokens=4096`（官方建議不要用貪婪解碼，所以同一份 PDF 重跑結果可能有些微差異）。OCR 結果中被跳脫的數學分隔符號（反斜線加錢字號）會還原成一般的 `$`，單獨出現的金額（如 `NT` 加跳脫錢字號）不變。
 - 本機快速測試（Windows 不能直接跑 vLLM）可只啟動 vllm：`cd docker && docker compose --profile lightonocr up -d vllm`，並在根目錄 `.env` 設 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://localhost:8001/v1`（vllm 只對本機 `127.0.0.1:8001` 開放，因為它沒有驗證）。
@@ -80,7 +84,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 - `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200，載入中回 503。
 - 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）。
 - `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
-- 首次啟動會下載約 1.5 GB 模型到 `docker/volumes/embedder-hf-cache/`（healthcheck `start_period` 600 秒）。此目錄與 vLLM 的模型快取分開，避免 root／非 root 寫入權限衝突。
+- 首次啟動會下載約 1.5 GB 模型到 volume `phoebe_embedder-hf-cache`（healthcheck `start_period` 600 秒）。此 volume 與 vLLM 的模型快取分開，避免 root／非 root 寫入權限衝突。
 - 首次下載可能超過 healthcheck 的等待時間：`start_period` 600 秒，之後每 15 秒檢查一次、最多失敗 10 次（約再 150 秒）。`web`、`ingest` 依賴 `embedder` 健康，若在 `docker compose up -d` 期間因此放棄啟動，等 `docker compose ps` 顯示 embedder 為 healthy（`docker compose logs -f embedder` 可看下載進度）後，再執行一次 `docker compose up -d` 即可，已下載的模型快取不會重來。
 - 本機快速測試：`cd docker && docker compose up -d embedder`；單元測試：`cd embedder && uv run pytest -q`（用假模型，不下載模型）。
 
@@ -157,16 +161,20 @@ GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 G
 
 先 `docker compose down`（確保 SQLite 與 Milvus 一致），再備份：
 
-- `docker/volumes/kb/`、`milvus/`、`etcd/`、`minio/`：直接複製資料夾即可（模型快取可不備份）
+- `docker/volumes/kb/`：直接複製資料夾即可
+- SQLite 與 Milvus（`phoebe_phoebe-db`、`phoebe_milvus-data`、`phoebe_etcd-data`、`phoebe_minio-data`）在 Docker 管理的 volume，用下面的指令打包（模型與 Triton 快取可不備份）
 - SQLite 在 named volume，以下指令把它打包到目前目錄（PowerShell；Git Bash 需在指令前加 `MSYS_NO_PATHCONV=1`）：
 
 ```
 docker run --rm -v phoebe_phoebe-db:/db -v "$PWD":/backup alpine tar czf /backup/phoebe-db.tgz -C /db .
+docker run --rm -v phoebe_milvus-data:/d -v "$PWD":/backup alpine tar czf /backup/milvus-data.tgz -C /d .
+docker run --rm -v phoebe_etcd-data:/d -v "$PWD":/backup alpine tar czf /backup/etcd-data.tgz -C /d .
+docker run --rm -v phoebe_minio-data:/d -v "$PWD":/backup alpine tar czf /backup/minio-data.tgz -C /d .
 ```
 
-還原時把資料夾放回 `docker/volumes/`，並把 `tar xzf` 解回空的 `phoebe_phoebe-db` volume。
+還原時把 `kb/` 資料夾放回 `docker/volumes/`，並用 `tar xzf` 把各個備份解回對應的空 volume（例如 `docker run --rm -v phoebe_milvus-data:/d -v "$PWD":/backup alpine tar xzf /backup/milvus-data.tgz -C /d`）。Milvus 的三個 volume 要一起備份、一起還原。
 
-**從舊版（全部用 named volume）改過來**：新版不會讀取舊的 `phoebe_phoebe-data`、`phoebe_milvus-data`、`phoebe_etcd-data`、`phoebe_minio-data`、`phoebe_hf-cache`、`phoebe_embedder-hf-cache`，會以空資料啟動。確定不需要舊資料後可刪除：`docker volume rm phoebe_phoebe-data phoebe_milvus-data phoebe_etcd-data phoebe_minio-data phoebe_hf-cache phoebe_embedder-hf-cache`。
+**更早的版本（2026-10-19 以前，全部用 named volume）**：那時的 `phoebe_phoebe-data`、`phoebe_hf-cache` 已不再使用，確定不需要後可刪除：`docker volume rm phoebe_phoebe-data phoebe_hf-cache`。其他同名的 volume（`phoebe_milvus-data` 等）**現在又在使用中，不要刪除**。
 
 ## 注意
 
