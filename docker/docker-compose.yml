@@ -18,7 +18,9 @@ services:
       - ETCD_QUOTA_BACKEND_BYTES=4294967296
       - ETCD_SNAPSHOT_COUNT=50000
     volumes:
-      - ./volumes/etcd:/etcd
+      # 資料庫類型的資料放在 Docker 管理的 volume（原因見 docs/docker-storage.md）
+      - etcd-data:/etcd
+      # - ./volumes/etcd:/etcd
     command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
@@ -33,7 +35,8 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
     volumes:
-      - ./volumes/minio:/minio_data
+      - minio-data:/minio_data
+      # - ./volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -54,7 +57,8 @@ services:
       MINIO_ADDRESS: minio:9000
       MQ_TYPE: woodpecker
     volumes:
-      - ./volumes/milvus:/var/lib/milvus
+      - milvus-data:/var/lib/milvus
+      # - ./volumes/milvus:/var/lib/milvus
     ports:
       - "127.0.0.1:19530:19530"
     depends_on:
@@ -88,7 +92,9 @@ services:
     ports:
       - "127.0.0.1:8002:8000"
     volumes:
-      - ./volumes/embedder-hf-cache:/hf-cache
+      # 模型快取放在 Docker 管理的 volume：載入模型不經過 Windows 檔案共享（9P），讀得比較快
+      - embedder-hf-cache:/hf-cache
+      # - ./volumes/embedder-hf-cache:/hf-cache
     healthcheck:
       test:
         - CMD
@@ -199,7 +205,7 @@ services:
       # 無驗證的 GPU 端點，只對本機開放
       - "127.0.0.1:8001:8000"
     command:
-      - --model
+      # 映像的進入點是 `vllm serve`，模型放在第一個位置參數（--model 已被標為淘汰）
       - ${OCR_MODEL:-lightonai/LightOnOCR-3-0.8B}
       - --trust-remote-code
       - --limit-mm-per-prompt
@@ -223,7 +229,11 @@ services:
     ipc: host
     volumes:
       # vLLM 映像以 root 執行，Hugging Face 預設快取在 /root/.cache/huggingface
-      - ./volumes/vllm-hf-cache:/root/.cache/huggingface
+      - vllm-hf-cache:/root/.cache/huggingface
+      # - ./volumes/vllm-hf-cache:/root/.cache/huggingface
+      # Triton 編譯好的 GPU 程式；沒保存的話，每次重建容器都要重新編譯好幾分鐘
+      - vllm-triton-cache:/root/.triton/cache
+      # - ./volumes/vllm-triton-cache:/root/.triton/cache
     healthcheck:
       test:
         - CMD
@@ -243,6 +253,15 @@ services:
               count: all
               capabilities: [gpu]
 
-# 除了 SQLite 之外，資料都放在 docker/volumes/ 下（主機目錄，已被 git 忽略）
+# 存放方式與原因見 docs/docker-storage.md：
+# - Docker 管理的 volume（實際名稱前面加 phoebe_）：SQLite、Milvus（含 etcd、minio）、模型快取、Triton 快取
+# - 主機目錄 docker/volumes/（已被 git 忽略）：上傳的檔案與解析出的圖片（kb）
+# 想改回主機目錄時，把各服務註解掉的 ./volumes/... 那一行換回來即可
 volumes:
   phoebe-db:
+  etcd-data:
+  minio-data:
+  milvus-data:
+  embedder-hf-cache:
+  vllm-hf-cache:
+  vllm-triton-cache:
