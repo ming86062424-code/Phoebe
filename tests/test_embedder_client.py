@@ -8,11 +8,15 @@ import httpx
 import pytest
 
 from app.kb.chunk_store import KnowledgeStoreError
-from app.kb.embedder_client import BATCH_SIZE, EmbedderClient
+from app.kb.embedder_client import BATCH_SIZE, RETRY_DELAYS_SECONDS, EmbedderClient
 
 
-def make_client(handler):
-    return EmbedderClient("http://embedder:8000", transport=httpx.MockTransport(handler))
+def make_client(handler, sleeps=None):
+    """Retry waits are recorded in `sleeps` (when given) instead of slept."""
+    record = sleeps if sleeps is not None else []
+    return EmbedderClient(
+        "http://embedder:8000", transport=httpx.MockTransport(handler), sleep=record.append
+    )
 
 
 def echo(requests):
@@ -118,6 +122,79 @@ def test_wrong_count_is_an_error():
     client = make_client(lambda r: httpx.Response(200, json={"embeddings": []}))
     with pytest.raises(KnowledgeStoreError, match="embedding 服務"):
         client.embed_queries(["a"])
+
+
+def test_indexing_retries_three_times_then_fails():
+    calls, sleeps = [], []
+
+    def handler(request):
+        calls.append(1)
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(KnowledgeStoreError) as err:
+        make_client(handler, sleeps).embed_documents("a.pdf", ["x"])
+    assert RETRY_DELAYS_SECONDS == (10.0, 30.0, 60.0)
+    assert len(calls) == 4  # the first try and 3 retries
+    assert sleeps == [10.0, 30.0, 60.0]
+    assert str(err.value) == "無法連線到 embedding 服務，已重試 3 次"
+
+
+@pytest.mark.parametrize(
+    "embed",
+    [
+        lambda c: c.embed_documents("a.pdf", ["x"]),
+        lambda c: c.embed_images([b"PNG"]),
+        lambda c: c.embed_image_texts([(b"PNG", "x")]),
+    ],
+)
+def test_indexing_recovers_when_the_embedder_comes_back(embed):
+    """The embedder was killed and restarts: unreachable, then loading, then ready."""
+    replies = iter(["down", "loading"])
+    sleeps = []
+
+    def handler(request):
+        state = next(replies, "ready")
+        if state == "down":
+            raise httpx.RemoteProtocolError("connection reset")
+        if state == "loading":
+            return httpx.Response(503, json={"detail": "model loading"})
+        return httpx.Response(200, json={"embeddings": [[1.0]]})
+
+    assert embed(make_client(handler, sleeps)) == [[1.0]]
+    assert sleeps == [10.0, 30.0]
+
+
+def test_loading_after_all_retries_says_so():
+    client = make_client(lambda r: httpx.Response(503, json={"detail": "model loading"}), [])
+    with pytest.raises(KnowledgeStoreError) as err:
+        client.embed_documents("a.pdf", ["x"])
+    assert str(err.value) == "無法連線到 embedding 服務（模型載入中），已重試 3 次"
+
+
+def test_queries_are_not_retried():
+    calls, sleeps = [], []
+
+    def handler(request):
+        calls.append(1)
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(KnowledgeStoreError):
+        make_client(handler, sleeps).embed_queries(["a"])
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_other_errors_are_not_retried():
+    calls, sleeps = [], []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(422, json={"detail": "bad"})
+
+    with pytest.raises(KnowledgeStoreError, match="422"):
+        make_client(handler, sleeps).embed_documents("a.pdf", ["x"])
+    assert len(calls) == 1
+    assert sleeps == []
 
 
 def test_default_timeout_is_120_seconds():
