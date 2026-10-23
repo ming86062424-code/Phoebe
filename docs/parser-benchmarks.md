@@ -75,3 +75,17 @@
 - **降低 embedder 的記憶體高峰**：每批送給 embedder 的整頁圖目前是 8 張（`app/kb/index.py` 的 `IMAGE_BATCH_SIZE`）。改小可以降低高峰，代價是 LiteParse 建立索引稍微變慢。
 - **測試時關掉 RAGFlow**，數據會比較乾淨。
 - **embedder 暫時連不上時的處理**：目前文件會直接標為失敗，要手動重試。可以考慮讓 ingest 把文件留在佇列，晚點再試。
+
+## 怎麼記錄硬體用量
+
+測試時另開一個終端機，在專案根目錄執行：
+
+```
+uv run python -m scripts.monitor_resources --only phoebe
+```
+
+- 每 2 秒記錄一次各容器的記憶體、CPU，以及 GPU 的顯存和使用率，寫到 `data/usage-<時間>.csv`（`data/` 已被 git 忽略）。
+- 測完按 Ctrl-C 停止，會列出每個容器和 GPU 的記憶體高峰，以及發生的時間。也可以用 `--duration 600` 讓它記錄 600 秒後自動停止。
+- `--only phoebe` 只記錄名稱包含 `phoebe` 的容器。「全部容器」那一列的總量仍然包含其他專案的容器（例如 RAGFlow），因為它們共用同一台 Docker 虛擬機的記憶體。
+- `--interval 1` 可以改成每 1 秒記錄一次。`docker stats` 本身每次約要 1–2 秒，間隔設得再小也不會更密。
+- CSV 可以用 Excel 開啟，依 `source` 篩選後畫折線圖，對照測試的時間點，就能看出高峰發生在哪個階段。
