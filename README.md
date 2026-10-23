@@ -242,7 +242,8 @@ uv run --group eval pytest evals -v
 | `REPLY_LOCK_TTL_SECONDS` | `600` | 對話回覆鎖逾時秒數 |
 | `OCR_BACKEND` | `transformers` | `transformers` 或 `vllm` |
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
-| `OCR_VLLM_GPU_UTIL` | `0.8` | vLLM 顯存比例（僅 Docker） |
+| `OCR_VLLM_KV_CACHE_MEMORY` | `512M` | vLLM 的 KV cache 大小（僅 Docker，見 [docs/gpu-memory.md](docs/gpu-memory.md)） |
+| `OCR_VLLM_GPU_UTIL` | `0.7` | vLLM 啟動時的顯存檢查比例，剩餘顯存不足就拒絕啟動（僅 Docker） |
 | `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 同時處理的請求上限（僅 Docker） |
 | `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |

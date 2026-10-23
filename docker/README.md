@@ -31,7 +31,7 @@ cd docker
 cp .env.example .env
 ```
 
-編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`），同時也當作容器的環境變數（vllm 除外，它不載入 `docker/.env`）。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_KV_CACHE_MEMORY`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`），同時也當作容器的環境變數（vllm 除外，它不載入 `docker/.env`）。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
@@ -52,7 +52,7 @@ docker compose --profile lightonocr down   # 連 vLLM 一起停止
 
 vllm 服務預設不啟動，需用 `docker compose --profile lightonocr up -d`。ingest 對 vllm 的依賴是 `required: false`，沒啟動 vLLM 時 ingest 照常啟動。
 
-LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，v0.11.2 尚不支援 Qwen3.5 架構）。GPU 專用於 OCR 模型：對話模型可以放在雲端或主機 Ollama，因此 `OCR_VLLM_GPU_UTIL` 預設 0.8，不再替 Ollama 保留顯存。ingest 固定使用 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`，不含 torch，也不需要 GPU。
+LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，v0.11.2 尚不支援 Qwen3.5 架構）。顯存用量由 KV cache 的大小決定（`OCR_VLLM_KV_CACHE_MEMORY`，預設 512M），RTX 2060 上 vLLM 約佔 2.8 GB，設計原因見 [docs/gpu-memory.md](../docs/gpu-memory.md)。ingest 固定使用 `OCR_BACKEND=vllm`、`VLLM_BASE_URL=http://vllm:8000/v1`，不含 torch，也不需要 GPU。
 
 啟動參數（0.8B 官方設定）：`--trust-remote-code`、`--limit-mm-per-prompt '{"image": 1}'`、`--default-chat-template-kwargs '{"enable_thinking": false}'`、`--mm-processor-cache-gb 0`、`--no-enable-prefix-caching`、`--max-model-len 18000`（`OCR_VLLM_MAX_MODEL_LEN`）。RTX 2060 是 Turing 架構，不支援 bfloat16，因此固定 `--dtype float16`。
 
@@ -60,11 +60,12 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 | 設定 | 預設 | 說明 |
 |---|---|---|
-| `OCR_VLLM_GPU_UTIL` | `0.8` | 0.85 失敗：可用顯存 4.98 GiB < 需要的 5.1 GiB（Windows 桌面約佔 1 GiB）；0.8 可以啟動 |
+| `OCR_VLLM_KV_CACHE_MEMORY` | `512M` | KV cache 約 3.9 萬個 token，足夠同時 OCR 4 頁；2026-10-24 前是用比例 0.8 讓 vLLM 自己算，KV cache 有 1.28 GiB，用不到那麼多 |
+| `OCR_VLLM_GPU_UTIL` | `0.7` | 只當作啟動檢查：剩餘顯存少於 0.7 × 6 GB 就拒絕啟動。不指定時預設 0.92，Windows 桌面約佔 1 GiB，6 GB 顯卡會啟動失敗 |
 | `--enforce-eager`（固定） | 開 | CUDA graph 的額外記憶體會讓 KV cache 配不到空間（「No available memory for the cache blocks」），改用 eager 模式 |
 | `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 預設 256 條序列 × 18000 tokens 在 6GB 配不到 KV cache；改為 4 條後實測：KV cache 1.28 GiB（99,243 tokens，18000 長度下約 5.5 倍並行），GPU 總用量約 4.4/6 GiB，與 8 條時相同 |
 
-顯存更大的 GPU 可調高 `OCR_VLLM_GPU_UTIL` 與 `OCR_VLLM_MAX_NUM_SEQS`，並視需要移除 compose 中的 `--enforce-eager` 以啟用 CUDA graph（吞吐量較高）。Compose 變數刻意不用 `VLLM_` 開頭，否則 vLLM 會警告未知的環境變數（vllm 服務也不載入 `docker/.env`）。
+顯存更大的 GPU 可調高 `OCR_VLLM_KV_CACHE_MEMORY` 與 `OCR_VLLM_MAX_NUM_SEQS`，並視需要移除 compose 中的 `--enforce-eager` 以啟用 CUDA graph（吞吐量較高）。Compose 變數刻意不用 `VLLM_` 開頭，否則 vLLM 會警告未知的環境變數（vllm 服務也不載入 `docker/.env`）。
 
 **驅動需求**：`vllm/vllm-openai:v0.30.0` 是 CUDA 13 映像，NVIDIA 驅動需 580 以上（實測 580.88）。
 
