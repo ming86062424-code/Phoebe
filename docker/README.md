@@ -79,7 +79,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 ## Embedding 服務（embedder）
 
-獨立的 FastAPI 服務（`embedder/`，sentence-transformers 6.1.0、transformers 5.19.0（第一個支援 embedding_gemma2 的版本）、torch 2.14.0 與 torchvision 0.29.0 CPU wheel），以 `google/embeddinggemma-2` 同時產生文字與圖片的 768 維向量（L2 normalized；CPU float32，模型卡明言不可用 float16）。只對本機 `127.0.0.1:8002` 開放（無驗證）；Docker 內以 `http://embedder:8000` 連線。
+獨立的 FastAPI 服務（`embedder/`，sentence-transformers 6.1.0、transformers 5.19.0（第一個支援 embedding_gemma2 的版本）、torch 2.14.0 與 torchvision 0.29.0 CPU wheel），以 `google/embeddinggemma-2` 同時產生文字與圖片的 768 維向量（L2 normalized；CPU float32，模型卡明言不可用 float16）。只載入文字與視覺部分：模型另有一個 304M 參數的音訊編碼器，我們用不到，載入時以 `audio_config=None` 略過，記憶體少約 1.2 GB，文字與圖片的向量和完整模型完全相同。只對本機 `127.0.0.1:8002` 開放（無驗證）；Docker 內以 `http://embedder:8000` 連線。
 
 - `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200，載入中回 503。
 - 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）。

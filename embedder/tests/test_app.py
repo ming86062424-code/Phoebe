@@ -291,3 +291,31 @@ def test_load_failure_exits_process_by_default(monkeypatch):
     with TestClient(app):
         app.state.loading_thread.join(5)
     assert called == [1]
+
+
+def test_real_loader_skips_the_audio_encoder(monkeypatch):
+    """The model is loaded in float32 on CPU without its audio encoder (audio_config=None)."""
+    import sys
+    import types
+
+    import app as app_module
+
+    seen = {}
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_id, **kwargs):
+            seen.update(kwargs, model_id=model_id)
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(float32="float32"))
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(SentenceTransformer=FakeSentenceTransformer),
+    )
+    app_module.load_sentence_transformer("google/embeddinggemma-2")
+    assert seen == {
+        "model_id": "google/embeddinggemma-2",
+        "device": "cpu",
+        "model_kwargs": {"torch_dtype": "float32"},
+        "config_kwargs": {"audio_config": None},
+    }
