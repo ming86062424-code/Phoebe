@@ -29,6 +29,12 @@ DEFAULT_MODEL_ID = "google/embeddinggemma-2"
 DEFAULT_IMAGE_TOKENS = 280
 MAX_ITEMS = 64
 VALID_IMAGE_TOKENS = (70, 140, 280, 560, 1120)
+# EMBED_DEVICE: "cuda" only with the GPU image (docker/docker-compose.gpu.yml); docs/gpu-memory.md
+DEFAULT_DEVICE = "cpu"
+VALID_DEVICES = ("cpu", "cuda")
+# Images per forward pass on the GPU. 8 page images at once peaked at ~4.7 GB of VRAM on the
+# RTX 2060 (6 GB); 2 at a time needs ~1 GiB less and is only ~6 % slower (2026-10-24).
+GPU_IMAGE_BATCH = 2
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # decoded
 MAX_IMAGE_B64_CHARS = (MAX_IMAGE_BYTES + 2) // 3 * 4
 MAX_IMAGE_PIXELS = 25_000_000
@@ -100,21 +106,34 @@ def _decode_image(data: str) -> Image.Image:
         raise _bad_image("invalid image_b64") from exc
 
 
-def load_sentence_transformer(model_id: str):
+def load_sentence_transformer(model_id: str, device: str = DEFAULT_DEVICE):
     # Imported lazily so tests (which inject a fake model) never import torch.
     import torch
     from sentence_transformers import SentenceTransformer
 
-    # float32 on CPU only: the model card forbids float16.
+    if device == "cuda" and not torch.cuda.is_available():
+        # never fall back to the CPU silently: the GPU mode was asked for
+        raise RuntimeError(
+            "EMBED_DEVICE=cuda but no CUDA GPU is visible "
+            "(GPU image phoebe-embedder:gpu and docker-compose.gpu.yml are needed)"
+        )
+    # float32 on both devices: the model card forbids float16, and the RTX 2060 has no bfloat16.
     # audio_config=None: transformers never builds the audio encoder (304M parameters, ~1.2 GB
     # in float32) and skips its weights; only text and images are embedded, and their vectors
     # are identical to the full model's (2026-10-24: max difference 0.0).
     return SentenceTransformer(
         model_id,
-        device="cpu",
+        device=device,
         model_kwargs={"torch_dtype": torch.float32},
         config_kwargs={"audio_config": None},
     )
+
+
+def free_gpu_cache() -> None:
+    """Give the VRAM PyTorch keeps cached after a request back to other programs (Ollama)."""
+    import torch
+
+    torch.cuda.empty_cache()
 
 
 def create_app(
@@ -123,6 +142,8 @@ def create_app(
     loader: Callable[[], object] | None = None,
     model_id: str | None = None,
     image_tokens: int | None = None,
+    device: str | None = None,
+    free_cache: Callable[[], None] | None = None,
     on_load_error: Callable[[], None] | None = None,
 ) -> FastAPI:
     """``model`` is injected (ready immediately); otherwise ``loader`` (default: the real model)
@@ -134,6 +155,11 @@ def create_app(
         raise ValueError(
             f"EMBED_IMAGE_TOKENS must be one of {VALID_IMAGE_TOKENS}, got {image_tokens!r}"
         )
+    device = device or os.environ.get("EMBED_DEVICE", DEFAULT_DEVICE)
+    if device not in VALID_DEVICES:
+        raise ValueError(f"EMBED_DEVICE must be one of {VALID_DEVICES}, got {device!r}")
+    if free_cache is None and device == "cuda":
+        free_cache = free_gpu_cache
     state = {"model": model, "error": None}
     lock = threading.Lock()  # one encode at a time; the model is not meant for concurrent calls
 
@@ -157,8 +183,8 @@ def create_app(
 
     def load():
         try:
-            state["model"] = (loader or (lambda: load_sentence_transformer(model_id)))()
-            log.info("model %s loaded", model_id)
+            state["model"] = (loader or (lambda: load_sentence_transformer(model_id, device)))()
+            log.info("model %s loaded on %s", model_id, device)
         except Exception as exc:  # keep serving 503 with the reason
             log.exception("model load failed")
             state["error"] = f"{type(exc).__name__}: {exc}"
@@ -170,7 +196,7 @@ def create_app(
         if state["model"] is None:
             detail = state["error"] or "model loading"
             raise HTTPException(status_code=503, detail=detail)
-        return {"status": "ok", "model": model_id}
+        return {"status": "ok", "model": model_id, "device": device}
 
     @app.post("/embed")
     def embed(req: EmbedRequest):
@@ -198,7 +224,9 @@ def create_app(
                     {"text": "<|image|> " + item.text, "image": _decode_image(item.image_b64)}
                 )
 
-        image_kwargs = {"processing_kwargs": {"image": {"max_soft_tokens": image_tokens}}}
+        image_kwargs: dict = {"processing_kwargs": {"image": {"max_soft_tokens": image_tokens}}}
+        if device == "cuda":
+            image_kwargs["batch_size"] = GPU_IMAGE_BATCH
         out: np.ndarray | None = None
         with lock:
             for idx, inputs, kwargs in (
@@ -211,6 +239,8 @@ def create_app(
                     if out is None:
                         out = np.zeros((len(req.items), vecs.shape[1]), dtype=np.float32)
                     out[idx] = vecs
+            if free_cache is not None:
+                free_cache()
         norms = np.linalg.norm(out, axis=1, keepdims=True)
         out = out / np.maximum(norms, 1e-12)
         return {"embeddings": out.tolist()}

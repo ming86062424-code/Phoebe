@@ -30,7 +30,7 @@
 |---|---|---|---|---|
 | **web** | `phoebe-web:local` | 主程式（Gunicorn + FastAPI）。提供網頁介面與所有 API；提問時負責檢索、組合參考資料與附圖，再呼叫聊天模型並串流回應 | `8000`（`PHOEBE_PORT`） | 否 |
 | **ingest** | `phoebe-ingest:local` | 背景處理上傳的文件：從佇列取出 → 解析 → 請 embedder 產生向量 → 寫入 Milvus。LiteParse 直接在這個容器裡執行 | 無 | 否 |
-| **embedder** | `phoebe-embedder:local` | 向量產生服務，用 sentence-transformers 在 CPU 以 float32 執行 `google/embeddinggemma-2`（768 維，不載入用不到的音訊編碼器）。問題、文字 chunk、整頁圖片的向量都由它產生 | 只限本機 `8002` | 否 |
+| **embedder** | `phoebe-embedder:local` | 向量產生服務，用 sentence-transformers 以 float32 執行 `google/embeddinggemma-2`（768 維，不載入用不到的音訊編碼器）。問題、文字 chunk、整頁圖片的向量都由它產生 | 只限本機 `8002` | 預設否；不用 LightOnOCR 時可改用 GPU（[gpu-memory.md](gpu-memory.md)） |
 | **vllm** | `vllm/vllm-openai:v0.30.0` | LightOnOCR 的 OCR 服務。ingest 選用 LightOnOCR 時，把每一頁的圖片送來辨識文字並標出圖片區塊（grounding） | 只限本機 `8001` | **是** |
 | **milvus** | `milvusdb/milvus:v2.6.25` | 向量資料庫。所有知識庫共用 `phoebe_chunks` 這個 collection，負責向量查詢（cosine）與關鍵字查詢（BM25，jieba 斷詞） | 只限本機 `19530` | 否 |
 | **etcd** | `quay.io/coreos/etcd:v3.5.25` | Milvus 的設定儲存（collection 結構等），只給 Milvus 使用 | 無 | 否 |
@@ -138,4 +138,5 @@ vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這�
 | 情境 | 做法 |
 |---|---|
 | 只用 LiteParse，想把 GPU 讓給 Ollama | vllm 預設不啟動；已啟動的話 `docker compose --profile lightonocr stop vllm`，之後要 OCR 時再 `docker compose --profile lightonocr up -d` |
+| 只用 LiteParse，想讓建立索引更快 | 不開 vllm，改用 GPU 版的 embedder：`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`（12 頁的建立索引從約 100 秒降到 7 秒），見 [gpu-memory.md](gpu-memory.md) |
 | 其他服務 | 都是必要的：少了 embedder 或 milvus，上傳和檢索都會失敗；etcd、minio 是 Milvus 的一部分 |

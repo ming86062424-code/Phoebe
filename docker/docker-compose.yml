@@ -86,6 +86,8 @@ services:
     environment:
       EMBED_MODEL_ID: ${EMBED_MODEL_ID:-google/embeddinggemma-2}
       EMBED_IMAGE_TOKENS: ${EMBED_IMAGE_TOKENS:-280}
+      # CPU 模式；GPU 模式由 docker-compose.gpu.yml 改成 cuda（docs/gpu-memory.md）
+      EMBED_DEVICE: cpu
       HF_HOME: /hf-cache
       # 選用：主機環境有設定時才傳入
       HF_TOKEN:

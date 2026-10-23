@@ -28,6 +28,7 @@
 
 - **LiteParse**：解析很快（CPU 上的 pdfium 與 Tesseract），但建立索引慢。它每頁的向量是由「**整頁圖＋文字**」產生的，embedder 在 CPU 上處理圖片很耗時。
 - **LightOnOCR**：時間幾乎都花在 GPU 辨識。向量只用文字，所以建立索引只要幾秒。
+- **LiteParse ＋ GPU 上的 embedder**（2026-10-24，不開 vLLM）：建立索引從約 100 秒降到 7 秒，總時間約 64–71 秒，見 [gpu-memory.md](gpu-memory.md)。
 - 資料來源：
   - LiteParse 的解析時間取自 10-23 單獨計時的那次。
   - LiteParse 的總時間 176 秒取自 10-22 關掉 vLLM 時成功的那次。
