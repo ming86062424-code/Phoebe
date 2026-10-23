@@ -62,6 +62,8 @@
 
 待機時的大約用量：vLLM 4.4 GB、embedder 4 GB（算整頁圖向量時會到 5 GB）、RAGFlow 3–5 GB、其他服務約 1.5 GB。
 
+2026-10-24 起 embedder 不再載入音訊編碼器（304M 參數），同樣的測試中常駐記憶體從 3.67 GB 降到 2.48 GB、高峰從 4.82 GB 降到 3.03 GB，向量完全相同。
+
 ## 調整時可以參考的方向
 
 - **提高 Docker 虛擬機的記憶體上限**：主機有 32 GB，可以在 `%USERPROFILE%\.wslconfig` 加上下面的設定，然後執行 `wsl --shutdown`，再重新啟動 Docker Desktop：

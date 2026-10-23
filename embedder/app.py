@@ -106,7 +106,15 @@ def load_sentence_transformer(model_id: str):
     from sentence_transformers import SentenceTransformer
 
     # float32 on CPU only: the model card forbids float16.
-    return SentenceTransformer(model_id, device="cpu", model_kwargs={"torch_dtype": torch.float32})
+    # audio_config=None: transformers never builds the audio encoder (304M parameters, ~1.2 GB
+    # in float32) and skips its weights; only text and images are embedded, and their vectors
+    # are identical to the full model's (2026-10-24: max difference 0.0).
+    return SentenceTransformer(
+        model_id,
+        device="cpu",
+        model_kwargs={"torch_dtype": torch.float32},
+        config_kwargs={"audio_config": None},
+    )
 
 
 def create_app(
