@@ -1,6 +1,6 @@
 # 解析器測試紀錄
 
-在這台開發機上測試知識庫解析器的紀錄，之後調整設定或換硬體時可以拿來對照。vLLM 本身的設定與排錯過程見 [vllm-rtx2060.md](vllm-rtx2060.md)，各服務的角色見 [services.md](services.md)。
+在這台開發機上測試知識庫解析器的紀錄，之後調整設定或換硬體時可以拿來對照。vLLM 本身的設定與排錯過程見 [vllm-rtx2060.md](vllm-rtx2060.md)，各服務的角色見 [services.md](services.md)，解析器的運作方式見 [parsers.md](parsers.md)。
 
 ## 測試環境
 

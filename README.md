@@ -106,7 +106,7 @@ cd frontend && npm run typecheck
 
 - **PDF**：每頁一個 chunk（整頁文字，加上該頁的圖片資訊）。
 - **txt／md**：txt 依段落合併、md 依標題分段，每個 chunk 至多 1500 字（需為 UTF-8，含 BOM 也可）；不需選解析器。
-- **圖檔**：一張圖一個 chunk，直接以圖片向量檢索。
+- **圖檔**：一張圖一個 chunk，視為單頁，依知識庫的解析器處理。
 
 ### Embedding 服務（embedder）
 
@@ -121,12 +121,12 @@ PDF 與圖檔的解析器是**知識庫層級的設定**（知識庫頁上方的
 >
 > 從沒有這個設定的舊版升級時，每個知識庫會依現有文件補上設定：PDF 與圖檔都用同一個解析器的，就沿用那個解析器；沒有這類文件或混用的，設為 LiteParse。
 
-解析器的差異（實測的處理時間見 [docs/parser-benchmarks.md](docs/parser-benchmarks.md)）：
+解析器的差異如下。每個解析器怎麼切 chunk、送什麼給 embedding 模型、回答時附哪些圖，詳見 [docs/parsers.md](docs/parsers.md)；實測的處理時間見 [docs/parser-benchmarks.md](docs/parser-benchmarks.md)。
 
 | 解析器 | 適合 | 說明 |
 | --- | --- | --- |
 | LiteParse | 文字型 PDF | 預設、速度快、不需 GPU；掃描頁會用內建 Tesseract（`chi_tra+eng`）辨識，但中文品質有限。每頁另存一張頁面圖（400 DPI 渲染後縮到最長邊 1536 px，`page_{n}.png`），向量由「整頁圖＋該頁文字」產生（**頁面圖向量**），圖表、照片與版面也能被檢索到 |
-| LightOnOCR-3-0.8B | 掃描檔、表格、複雜版面 | 在本機 GPU 執行，輸出 Markdown 與各區塊座標（grounding）；RTX 2060 上每頁約 1–2 分鐘。依座標把頁面中的圖片**裁切**成獨立的圖（`img_{頁}_{序}.png`，捨棄頁首、頁尾與頁碼）；向量由頁面的 Markdown 文字產生，裁切圖附在該頁的引用卡片上，也會一併附給聊天模型 |
+| LightOnOCR-3-0.8B | 掃描檔、表格、複雜版面 | 在本機 GPU 執行，輸出 Markdown 與各區塊座標（grounding）；RTX 2060 上每頁約 24 秒（一次送 4 頁）。依座標把頁面中的圖片**裁切**成獨立的圖（`img_{頁}_{序}.png`，捨棄頁首、頁尾與頁碼）；向量**只由**頁面的 Markdown 文字產生（裁切圖本身不轉成向量，只靠模型寫的圖片描述被檢索到），裁切圖附在該頁的引用卡片上，也會一併附給聊天模型 |
 
 兩者差別：LiteParse 以「整頁圖」進入向量（圖片內容本身可被文字問題檢索到），LightOnOCR 以「文字」進入向量、另存「裁切出的單張圖」供引用與附圖（能精準顯示單張圖表）。圖檔（png、jpg、jpeg、webp）可選擇任一解析器，視為單頁。
 
