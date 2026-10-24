@@ -212,6 +212,45 @@ def test_health_ok_with_injected_model(client):
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+    assert r.json()["device"] == "cpu"
+
+
+def test_device_comes_from_env(monkeypatch):
+    monkeypatch.setenv("EMBED_DEVICE", "cuda")
+    r = TestClient(create_app(model=FakeModel())).get("/health")
+    assert r.json()["device"] == "cuda"
+
+
+def test_gpu_encodes_images_two_at_a_time_and_frees_the_cache():
+    model, freed = FakeModel(), []
+    c = TestClient(create_app(model=model, device="cuda", free_cache=lambda: freed.append(1)))
+    r = c.post(
+        "/embed",
+        json={
+            "items": [
+                {"kind": "query", "text": "q"},
+                {"kind": "image_text", "image_b64": png_b64(), "text": "t"},
+            ]
+        },
+    )
+    assert r.status_code == 200
+    (_, text_kwargs), (_, image_kwargs) = model.calls
+    assert "batch_size" not in text_kwargs
+    assert image_kwargs["batch_size"] == 2
+    assert freed == [1]  # once per request
+
+
+def test_cpu_keeps_the_default_batch_and_frees_nothing(model):
+    c = TestClient(create_app(model=model))
+    c.post("/embed", json={"items": [{"kind": "image", "image_b64": png_b64()}]})
+    (_, kwargs), = model.calls
+    assert "batch_size" not in kwargs
+
+
+@pytest.mark.parametrize("bad", ["gpu", "CUDA", "mps"])
+def test_invalid_device_rejected(bad):
+    with pytest.raises(ValueError, match="EMBED_DEVICE"):
+        create_app(model=FakeModel(), device=bad)
 
 
 def _b64_png(img):
@@ -291,3 +330,73 @@ def test_load_failure_exits_process_by_default(monkeypatch):
     with TestClient(app):
         app.state.loading_thread.join(5)
     assert called == [1]
+
+
+def _fake_torch(monkeypatch, cuda: bool) -> dict:
+    """Fake torch and sentence_transformers modules; returns the SentenceTransformer kwargs."""
+    import sys
+    import types
+
+    seen = {}
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_id, **kwargs):
+            seen.update(kwargs, model_id=model_id)
+
+    torch = types.SimpleNamespace(
+        float32="float32", cuda=types.SimpleNamespace(is_available=lambda: cuda)
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(SentenceTransformer=FakeSentenceTransformer),
+    )
+    return seen
+
+
+def test_real_loader_skips_the_audio_encoder(monkeypatch):
+    """The model is loaded in float32 on CPU without its audio encoder (audio_config=None)."""
+    import app as app_module
+
+    seen = _fake_torch(monkeypatch, cuda=False)
+    app_module.load_sentence_transformer("google/embeddinggemma-2")
+    assert seen == {
+        "model_id": "google/embeddinggemma-2",
+        "device": "cpu",
+        "model_kwargs": {"torch_dtype": "float32"},
+        "config_kwargs": {"audio_config": None},
+    }
+
+
+def test_real_loader_uses_the_gpu_in_float32(monkeypatch):
+    import app as app_module
+
+    seen = _fake_torch(monkeypatch, cuda=True)
+    app_module.load_sentence_transformer("google/embeddinggemma-2", "cuda")
+    assert seen["device"] == "cuda"
+    assert seen["model_kwargs"] == {"torch_dtype": "float32"}
+
+
+def test_real_loader_refuses_cuda_without_a_gpu(monkeypatch):
+    """Never fall back to the CPU silently when the GPU mode was asked for."""
+    import app as app_module
+
+    seen = _fake_torch(monkeypatch, cuda=False)
+    with pytest.raises(RuntimeError, match="no CUDA GPU"):
+        app_module.load_sentence_transformer("google/embeddinggemma-2", "cuda")
+    assert seen == {}
+
+
+def test_default_loader_gets_the_device(monkeypatch):
+    import app as app_module
+
+    calls = []
+    monkeypatch.setattr(
+        app_module, "load_sentence_transformer", lambda m, d: calls.append((m, d)) or FakeModel()
+    )
+    app = create_app(device="cuda")
+    with TestClient(app) as c:
+        app.state.loading_thread.join(5)
+        assert c.get("/health").json()["device"] == "cuda"
+    assert calls == [("google/embeddinggemma-2", "cuda")]

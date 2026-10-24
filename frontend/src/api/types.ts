@@ -56,6 +56,8 @@ export interface KnowledgeBase {
   id: number
   name: string
   description: string
+  parser: string // for PDFs and images uploaded from now on
+  vector_weight: number | null // hybrid search weight of the vector path; null: system default
   document_count?: number
   created_at: string
   updated_at: string
@@ -76,6 +78,22 @@ export interface KbDocument {
   size_bytes: number
   created_at: string
   updated_at: string
+}
+
+// one stored chunk of a document, for the chunk viewer
+export interface DocumentChunk {
+  index: number // 1-based position in the document
+  page: number // 0 for text files
+  kind: 'text' | 'page_image'
+  text: string
+  chars: number
+  images: SourceImage[]
+  page_image: SourceImage | null
+}
+
+export interface DocumentChunks {
+  document: KbDocument
+  chunks: DocumentChunk[]
 }
 
 export interface ParserInfo {

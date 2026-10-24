@@ -21,6 +21,49 @@ uv run uvicorn app.main:create_app --factory --reload
 
 前端需先建置才能由後端提供（見下方「前端」一節），再開啟 http://localhost:8000。
 
+## 本機開發模式（搭配 Docker 的模型服務）
+
+改程式時不必每次重建 Docker 映像：web 與 ingest 直接在本機執行（改了程式會自動重新載入），Milvus、embedder、vLLM 這些重的服務繼續用 Docker 裡的。
+
+**1. 啟動 Docker 裡的服務，並停掉 Docker 版的 web 與 ingest**（它們佔用 8000 埠，也會跟本機版搶工作）：
+
+```
+cd docker
+docker compose up -d milvus embedder                # 必要：向量資料庫與 embedding
+docker compose --profile lightonocr up -d vllm      # 選用：要測 LightOnOCR 時
+docker compose stop web ingest
+```
+
+**2. 根目錄的 `.env`**（本機版讀這個檔，與 `docker/.env` 無關）至少設定：
+
+```
+MILVUS_URI=http://localhost:19530
+EMBEDDER_URL=http://localhost:8002
+# 與 Docker 版分開：本機版有自己的 SQLite，知識庫編號會和 Docker 版重複，
+# 共用同一個 collection 會讓兩邊的 chunk 混在一起
+MILVUS_COLLECTION=phoebe_chunks_dev
+# 要測 LightOnOCR 時（需啟動上面的 vllm）
+OCR_BACKEND=vllm
+VLLM_BASE_URL=http://localhost:8001/v1
+```
+
+`KB_INGEST_MODE` 維持預設的 `embedded`：本機版的 ingest 跑在 web 程序裡，不用另外啟動。
+
+**3. 兩個終端機各跑一個指令：**
+
+```
+uv run uvicorn app.main:create_app --factory --reload
+cd frontend && npm run dev
+```
+
+開啟 http://localhost:5173。改後端程式，uvicorn 會自動重啟；改前端程式，畫面會立即更新。前端的 `/api` 請求會轉送到 8000 埠的後端。
+
+**注意**
+
+- 本機版的資料在專案根目錄的 `data/`（SQLite 與上傳檔），和 Docker 版的資料完全分開，需要另外註冊帳號。
+- LiteParse 在本機（Windows）也能直接使用，`uv sync` 會一併安裝。
+- 開發完要回到 Docker 版時：`cd docker && docker compose up -d`（要用 LightOnOCR 則加 `--profile lightonocr`）。
+
 ## 前端
 
 前端位於 `frontend/`（React + TypeScript + Vite）。
@@ -63,7 +106,7 @@ cd frontend && npm run typecheck
 
 - **PDF**：每頁一個 chunk（整頁文字，加上該頁的圖片資訊）。
 - **txt／md**：txt 依段落合併、md 依標題分段，每個 chunk 至多 1500 字（需為 UTF-8，含 BOM 也可）；不需選解析器。
-- **圖檔**：一張圖一個 chunk，直接以圖片向量檢索。
+- **圖檔**：一張圖一個 chunk，視為單頁，依知識庫的解析器處理。
 
 ### Embedding 服務（embedder）
 
@@ -72,12 +115,18 @@ cd frontend && npm run typecheck
 - 首次啟動會從 Hugging Face 下載模型（約 1–2 GB），第一次啟動會等很久；載入完成前 `GET /health` 回 503，檢索與解析會顯示「無法連線到 embedding 服務」。
 - 本機啟動：`cd docker && docker compose up -d embedder`。細節與疑難排解見 [docker/README.md](docker/README.md)。
 
-上傳 PDF 時可選擇解析器：
+PDF 與圖檔的解析器是**知識庫層級的設定**（知識庫頁上方的「知識庫設定」，新建的知識庫預設 LiteParse），之後上傳的 PDF 與圖檔一律使用這個設定；txt、md 一律用文字解析，不受影響。
+
+> **注意：改了解析器只影響之後上傳的檔案。** 已經上傳的文件會維持原本的解析器，不會自動重新處理，所以同一個知識庫裡可能同時有用不同解析器處理的文件（文件列表的「解析器」欄會顯示每份文件實際用的解析器）。想讓舊文件也改用新解析器，請刪除後重新上傳。
+>
+> 從沒有這個設定的舊版升級時，每個知識庫會依現有文件補上設定：PDF 與圖檔都用同一個解析器的，就沿用那個解析器；沒有這類文件或混用的，設為 LiteParse。
+
+解析器的差異如下。每個解析器怎麼切 chunk、送什麼給 embedding 模型、回答時附哪些圖，詳見 [docs/parsers.md](docs/parsers.md)；實測的處理時間見 [docs/parser-benchmarks.md](docs/parser-benchmarks.md)。
 
 | 解析器 | 適合 | 說明 |
 | --- | --- | --- |
 | LiteParse | 文字型 PDF | 預設、速度快、不需 GPU；掃描頁會用內建 Tesseract（`chi_tra+eng`）辨識，但中文品質有限。每頁另存一張頁面圖（400 DPI 渲染後縮到最長邊 1536 px，`page_{n}.png`），向量由「整頁圖＋該頁文字」產生（**頁面圖向量**），圖表、照片與版面也能被檢索到 |
-| LightOnOCR-3-0.8B | 掃描檔、表格、複雜版面 | 在本機 GPU 執行，輸出 Markdown 與各區塊座標（grounding）；RTX 2060 上每頁約 1–2 分鐘。依座標把頁面中的圖片**裁切**成獨立的圖（`img_{頁}_{序}.png`，捨棄頁首、頁尾與頁碼）；向量由頁面的 Markdown 文字產生，裁切圖附在該頁的引用卡片上，也會一併附給聊天模型 |
+| LightOnOCR-3-0.8B | 掃描檔、表格、複雜版面 | 在本機 GPU 執行，輸出 Markdown 與各區塊座標（grounding）；RTX 2060 上每頁約 24 秒（一次送 4 頁）。依座標把頁面中的圖片**裁切**成獨立的圖（`img_{頁}_{序}.png`，捨棄頁首、頁尾與頁碼）；向量**只由**頁面的 Markdown 文字產生（裁切圖本身不轉成向量，只靠模型寫的圖片描述被檢索到），裁切圖附在該頁的引用卡片上，也會一併附給聊天模型 |
 
 兩者差別：LiteParse 以「整頁圖」進入向量（圖片內容本身可被文字問題檢索到），LightOnOCR 以「文字」進入向量、另存「裁切出的單張圖」供引用與附圖（能精準顯示單張圖表）。圖檔（png、jpg、jpeg、webp）可選擇任一解析器，視為單頁。
 
@@ -113,7 +162,7 @@ uv run python -m app.kb.reprocess_all --dry-run   # 只列出每個知識庫會�
 uv run python -m app.kb.reprocess_all
 ```
 
-指令會把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），由 worker 依原解析器重新處理；正在處理中的文件會略過，待其完成後再執行一次即可。
+指令會把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），由 ingest 依原解析器重新處理；正在處理中的文件會略過，待其完成後再執行一次即可。
 
 ## 測試
 
@@ -178,19 +227,24 @@ uv run --group eval pytest evals -v
 | `EMBEDDER_URL` | `http://localhost:8002` | Embedding 服務（`embedder`）位址；Docker 內固定為 `http://embedder:8000`；更換模型後需重建知識庫 |
 | `KB_DIR` | `<專案根目錄>/data/kb` | 上傳檔案與解析出的圖片存放位置 |
 | `KB_TOP_K` | `5` | 每次回答檢索的段落數 |
-| `KB_VECTOR_WEIGHT` | `0.5` | 混合查詢中向量的權重（0–1），關鍵字權重為 1 減去它。分數依 Milvus WeightedRanker 的方式正規化後加權相加。知識庫頁的檢索測試可以臨時調整權重來比較結果 |
+| `KB_VECTOR_WEIGHT` | `0.5` | 混合查詢中向量的預設權重（0–1），關鍵字權重為 1 減去它，分數依 Milvus WeightedRanker 的方式正規化後加權相加。每個知識庫可以在「知識庫設定」自訂自己的權重（AI 對話使用它），沒有自訂的知識庫用這個預設值；知識庫頁的檢索測試可以試用不同權重，再按「設為這個知識庫的權重」儲存 |
 | `KB_MAX_IMAGES` | `4` | 回答時附給模型的參考圖片上限（依參考資料順序，頁面圖優先；最長邊超過 1536 px 會先縮小）；`0` 不附圖。模型不支援圖片時會自動改為不帶圖重試一次 |
 | `MAX_UPLOAD_MB` | `50` | 單一上傳檔案上限 |
 | `OCR_MODEL` | `lightonai/LightOnOCR-3-0.8B` | LightOnOCR 模型（Hugging Face） |
 | `LITEPARSE_OCR_LANGUAGE` | `chi_tra+eng` | LiteParse 內建 Tesseract 的語言 |
-| `KB_WORKER_MODE` | `embedded` | 文件解析 worker：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.worker_main`） |
-| `KB_WORKER_POLL_SECONDS` | `2` | worker 輪詢間隔 |
+| `KB_INGEST_MODE` | `embedded` | 文件處理（ingest）：`embedded`（內嵌於 web）或 `external`（獨立 `python -m app.kb.ingest_main`） |
+| `KB_INGEST_POLL_SECONDS` | `2` | ingest 輪詢間隔 |
+| `INGEST_CONCURRENCY` | `1` | ingest 同時處理幾份文件 |
+| `OCR_CONCURRENCY` | `4` | LightOnOCR 處理一份文件時，同時送給 vLLM 的頁數。`INGEST_CONCURRENCY` × `OCR_CONCURRENCY` 不要超過 vLLM 的 `--max-num-seqs`（預設 4） |
+| `OCR_TIMEOUT_SECONDS` | `600` | 每一頁 OCR 請求的逾時秒數 |
 | `KB_STALE_SECONDS` | `120` | 解析中逾時多久視為卡住並重新排入 |
 | `KB_HEARTBEAT_SECONDS` | `30` | 處理中的文件刷新 `updated_at` 的間隔 |
 | `REPLY_LOCK_TTL_SECONDS` | `600` | 對話回覆鎖逾時秒數 |
 | `OCR_BACKEND` | `transformers` | `transformers` 或 `vllm` |
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
-| `VLLM_GPU_UTIL` | `0.35` | vLLM 顯存比例（僅 Docker） |
+| `OCR_VLLM_KV_CACHE_MEMORY` | `512M` | vLLM 的 KV cache 大小（僅 Docker，見 [docs/gpu-memory.md](docs/gpu-memory.md)） |
+| `OCR_VLLM_GPU_UTIL` | `0.7` | vLLM 啟動時的顯存檢查比例，剩餘顯存不足就拒絕啟動（僅 Docker） |
+| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 同時處理的請求上限（僅 Docker） |
 | `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |
@@ -200,12 +254,19 @@ uv run --group eval pytest evals -v
 
 ## 部署
 
-以 Docker Compose 部署（Gunicorn web、獨立解析 worker、embedder、Milvus、vLLM），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
+以 Docker Compose 部署（Gunicorn web、獨立 ingest 服務、embedder、Milvus；vLLM 為選用），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
 
 ```
 cd docker
 cp .env.example .env   # Docker 專用設定，與根目錄 .env 無關
 docker compose up -d --build
+```
+
+vLLM（LightOnOCR）是選用的，不加 profile 不會啟動。要使用就帶上 `lightonocr` profile，停止時也要帶：
+
+```
+docker compose --profile lightonocr up -d --build
+docker compose --profile lightonocr down
 ```
 
 ## 資料位置

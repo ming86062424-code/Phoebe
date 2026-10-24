@@ -33,19 +33,22 @@ const STATUS_TEXT: Record<Exclude<Status, 'failed'>, string> = {
 }
 
 interface Props {
-  parsers: ParserInfo[]
+  /** The knowledge base's parser for PDFs and images (null while unknown). */
+  parser: ParserInfo | null
   /** Sends one file; rejects with the server's message on failure. */
-  upload(file: File, parser: string): Promise<unknown>
+  upload(file: File): Promise<unknown>
   /** Called after each file the server accepted (to refresh the document list). */
   onUploaded(): void
+  /** Told when files start or stop waiting/uploading. */
+  onBusyChange?(busy: boolean): void
 }
 
 /**
  * Drop files on the zone, or click it to pick several: each file uploads right away,
- * one after another, with its own status row. The parser is chosen beforehand.
+ * one after another, with its own status row. PDFs and images go through the knowledge
+ * base's parser (set in the knowledge base settings, not here).
  */
-export default function UploadPanel({ parsers, upload, onUploaded }: Props) {
-  const [parser, setParser] = useState('liteparse')
+export default function UploadPanel({ parser, upload, onUploaded, onBusyChange }: Props) {
   const [items, setItems] = useState<Item[]>([])
   const [dragging, setDragging] = useState(false)
   const input = useRef<HTMLInputElement>(null)
@@ -68,12 +71,10 @@ export default function UploadPanel({ parsers, upload, onUploaded }: Props) {
   const update = (id: number, patch: Partial<Item>) =>
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
 
-  const selected = parsers.find((p) => p.id === parser)
+  const label = parser?.label.split('（')[0] ?? ''
 
   const start = (files: File[]) => {
-    const chosen = parser
-    const usable = selected?.available !== false
-    const label = selected?.label.split('（')[0] ?? chosen
+    const usable = parser?.available !== false
     for (const file of files) {
       const id = nextId.current++
       let error: string | undefined
@@ -87,7 +88,7 @@ export default function UploadPanel({ parsers, upload, onUploaded }: Props) {
       queue.current = queue.current.then(async () => {
         update(id, { status: 'uploading' })
         try {
-          await upload(file, chosen)
+          await upload(file)
           update(id, { status: 'done' })
           onUploaded()
         } catch (err) {
@@ -105,31 +106,22 @@ export default function UploadPanel({ parsers, upload, onUploaded }: Props) {
   }
 
   const busy = items.some((it) => it.status === 'waiting' || it.status === 'uploading')
+  useEffect(() => onBusyChange?.(busy), [busy, onBusyChange])
   const finished = items.some((it) => it.status === 'done' || it.status === 'failed')
 
   return (
     <div className={styles.panel}>
-      <div className={styles.parserRow}>
-        <label className={styles.parserLabel}>
-          PDF 與圖片的解析器
-          <select aria-label="解析器" value={parser} onChange={(e) => setParser(e.target.value)}>
-            {parsers.map((p) => (
-              <option key={p.id} value={p.id} disabled={!p.available}>
-                {p.label}
-                {p.available ? '' : '（不可用）'}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className={styles.hint}>txt、md 會自動使用文字解析</span>
-      </div>
-      {parsers
-        .filter((p) => !p.available && p.reason)
-        .map((p) => (
-          <p key={p.id} className={styles.hint}>
-            {p.label.split('（')[0]}：{p.reason}
-          </p>
-        ))}
+      {parser && (
+        <p className={styles.hint}>
+          PDF 與圖片會用「{label}」解析（在上方的知識庫設定中更改）
+          {!parser.available && parser.reason && (
+            <span className={styles.failed}>
+              <br />
+              {label}：{parser.reason}
+            </span>
+          )}
+        </p>
+      )}
 
       <div
         role="button"

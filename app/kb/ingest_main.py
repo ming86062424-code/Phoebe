@@ -1,4 +1,4 @@
-"""Standalone ingest worker: python -m app.kb.worker_main"""
+"""Standalone ingest service: python -m app.kb.ingest_main"""
 
 import logging
 import signal
@@ -20,27 +20,27 @@ def main() -> None:
     finally:
         conn.close()
     services = build_kb_services(settings)
-    worker = services.worker
+    ingester = services.ingester
     stop = threading.Event()
 
     def request_stop(signum, frame) -> None:
         logger.info("收到停止訊號，結束中")
         stop.set()
-        worker.wake()
+        ingester.wake()
 
     signal.signal(signal.SIGINT, request_stop)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, request_stop)
 
     # The loop runs on the main thread, so don't call start() (it would spawn a second one).
-    worker.requeue_stale()
-    worker.start_status_publisher()
-    logger.info("解析 worker 已啟動")
+    ingester.requeue_stale()
+    ingester.start_status_publisher()
+    logger.info("ingest 已啟動，同時處理 %d 份文件", settings.ingest_concurrency)
     try:
-        worker.run_forever(stop)
+        ingester.run_forever(stop)
     finally:
-        worker.stop_status_publisher()
-    logger.info("解析 worker 已停止")
+        ingester.stop_status_publisher()
+    logger.info("ingest 已停止")
 
 
 if __name__ == "__main__":

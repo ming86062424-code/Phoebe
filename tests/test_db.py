@@ -308,3 +308,64 @@ def test_init_db_twice_is_noop(tmp_path):
     init_db(conn)
     after = conn.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall()
     assert [tuple(r) for r in before] == [tuple(r) for r in after]
+
+
+def test_new_knowledge_bases_default_to_liteparse(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    _seed_message(conn)
+    now = now_iso()
+    conn.execute(
+        "INSERT INTO knowledge_bases (user_id, name, description, created_at, updated_at) "
+        "VALUES (1, 'k', '', ?, ?)",
+        (now, now),
+    )
+    assert conn.execute("SELECT parser FROM knowledge_bases").fetchone()[0] == "liteparse"
+
+
+def test_upgrade_sets_each_knowledge_base_parser_from_its_documents(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    init_db(conn)
+    _seed_message(conn)
+    now = now_iso()
+    layouts = {
+        "ocr": ["lightonocr", "lightonocr", "text"],  # text files don't count
+        "failed ocr": ["liteparse", "lightonocr:failed"],  # failed documents don't count
+        "lite": ["liteparse"],
+        "mixed": ["liteparse", "lightonocr"],
+        "text only": ["text"],
+        "empty": [],
+    }
+    for name, parsers in layouts.items():
+        kb_id = conn.execute(
+            "INSERT INTO knowledge_bases (user_id, name, description, created_at, updated_at) "
+            "VALUES (1, ?, '', ?, ?)",
+            (name, now, now),
+        ).lastrowid
+        for entry in parsers:
+            parser, _, status = entry.partition(":")
+            conn.execute(
+                "INSERT INTO kb_documents (kb_id, filename, parser, status, created_at, updated_at) "
+                "VALUES (?, 'a', ?, ?, ?, ?)",
+                (kb_id, parser, status or "ready", now, now),
+            )
+    conn.commit()
+    # a database from before the setting existed
+    conn.execute("ALTER TABLE knowledge_bases DROP COLUMN parser")
+    conn.commit()
+
+    init_db(conn)
+    got = dict(conn.execute("SELECT name, parser FROM knowledge_bases").fetchall())
+    assert got == {
+        "ocr": "lightonocr",
+        "failed ocr": "liteparse",
+        "lite": "liteparse",
+        "mixed": "liteparse",
+        "text only": "liteparse",
+        "empty": "liteparse",
+    }
+    # running it again keeps what is there (a later change by the user is not undone)
+    conn.execute("UPDATE knowledge_bases SET parser = 'liteparse' WHERE name = 'ocr'")
+    conn.commit()
+    init_db(conn)
+    assert conn.execute("SELECT parser FROM knowledge_bases WHERE name = 'ocr'").fetchone()[0] == "liteparse"

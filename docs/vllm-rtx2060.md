@@ -1,5 +1,7 @@
 # 在 RTX 2060（6 GB）上執行 LightOnOCR（vLLM）
 
+> **2026-10-24 更新**：vLLM 改成直接指定 KV cache 大小（`OCR_VLLM_KV_CACHE_MEMORY=512M`），`OCR_VLLM_GPU_UTIL` 改為 0.7 且只當作啟動檢查，顯存用量從約 4.8 GB 降到約 2.8 GB，速度不變。下面是當時用比例 0.8 的排錯紀錄，現在的分配方式與原因見 [gpu-memory.md](gpu-memory.md)。
+
 這份文件記錄在這台開發機上，讓 LightOnOCR 的 vLLM 服務跑起來時遇到的問題，以及最後採用的設定。之後換顯卡、升級 vLLM 或重灌環境時可以拿來對照。
 
 ## 環境
@@ -36,7 +38,7 @@ command:
   - ${OCR_VLLM_MAX_MODEL_LEN:-18000}
   - --enforce-eager                          # 不用 CUDA graph，把顯存留給 KV cache
   - --max-num-seqs
-  - ${OCR_VLLM_MAX_NUM_SEQS:-8}              # 預設 256 條序列配不到 KV cache
+  - ${OCR_VLLM_MAX_NUM_SEQS:-4}              # 預設 256 條序列配不到 KV cache
 ```
 
 前五個參數（`--trust-remote-code` 到 `--no-enable-prefix-caching`）是 LightOnOCR 官方的 0.8B 設定。`--dtype` 以下都是為了 6 GB 的 Turing 顯卡而調整的。
@@ -46,7 +48,7 @@ command:
 ```
 OCR_VLLM_GPU_UTIL=0.8
 OCR_VLLM_MAX_MODEL_LEN=18000
-OCR_VLLM_MAX_NUM_SEQS=8
+OCR_VLLM_MAX_NUM_SEQS=4
 ```
 
 用這組設定，GPU 總用量約 4.4 / 6 GiB。KV cache 有 1.28 GiB，可容納 99,243 個 token；以 18000 的長度計算，大約可以同時處理 5.5 條序列。
@@ -86,14 +88,33 @@ OCR_VLLM_MAX_NUM_SEQS=8
   - 0.8 的額度在模型權重和 CUDA graph 用掉之後，就沒剩空間給 KV cache 了。
   - 錯誤訊息建議調高使用率，但第 2 步已經證明 0.85 不行。
 - **解法**：
-  - 加上 `--enforce-eager`，不使用 CUDA graph，把那塊顯存留給 KV cache。代價是吞吐量比較低，但 OCR 一次只處理一頁，影響不大。
-  - 加上 `--max-num-seqs 8`，把同時序列數從 256 降到 8。
+  - 加上 `--enforce-eager`，不使用 CUDA graph，把那塊顯存留給 KV cache。代價是吞吐量比較低。LightOnOCR 預設一次送 4 頁（`OCR_CONCURRENCY=4`），這個代價就有影響：同時處理的頁越多，每頁越慢（數字見下方〈一次送多頁的速度實測〉）。
+  - 加上 `--max-num-seqs`，把同時序列數從 256 降到 8，之後再降為 4（配合「一次送多頁」，見下方的速度實測）。降為 4 後重新量測，KV cache 仍是 1.28 GiB、99,243 tokens。
   - 兩者一起調整後，服務就能正常啟動。
 
 ### 4. 不支援 bfloat16
 
 - **原因**：RTX 2060 是 Turing 架構（compute capability 7.5）。bfloat16 要 Ampere（8.0）以上才有硬體支援。
 - **解法**：固定 `--dtype float16`。
+
+## 一次送多頁的速度實測（2026-10-23）
+
+LightOnOCR 一份文件可以同時送好幾頁給 vLLM（`OCR_CONCURRENCY`），讓 vLLM 用批次處理（continuous batching）同時算。
+
+測試條件：
+- `test_data/草莓園入園方案.pdf`，12 頁，解析器 LightOnOCR
+- `--max-num-seqs 4`，`INGEST_CONCURRENCY=1`
+- 同一台機器上另有 RAGFlow（約 5 GB 記憶體）在執行
+
+| `OCR_CONCURRENCY` | 總時間 | 每頁平均 | 加速 | 記憶體高峰（ingest／vLLM／embedder） |
+|---|---|---|---|---|
+| 1（舊的做法，一次一頁） | 630 秒 | 52.5 秒 | 1× | 223 MB／4.8 GB／4.1 GB |
+| 2 | 365 秒 | 30.4 秒 | 1.73× | 342 MB／4.6 GB／4.0 GB |
+| **4** | **279 秒** | **23.3 秒** | **2.26×** | 377 MB／4.7 GB／4.0 GB |
+
+- 一次 4 頁最快，記憶體只在 ingest 多用約 150 MB，因此 **`OCR_CONCURRENCY` 預設為 4**。
+- 加速不是線性的：RTX 2060 的運算量有限，又關掉了 CUDA graph（`--enforce-eager`），同時處理的頁越多，每頁越慢，但總時間仍明顯縮短。
+- `INGEST_CONCURRENCY` × `OCR_CONCURRENCY` 是 vLLM 同時收到的請求數。目前 1 × 4 剛好等於 `--max-num-seqs` 的 4；若把 `INGEST_CONCURRENCY` 調高，超過的請求會在 vLLM 內排隊，總處理量不會再增加，只是讓多份文件輪流前進。
 
 ## 和主機 Ollama 共用 GPU
 
@@ -103,12 +124,12 @@ OCR_VLLM_MAX_NUM_SEQS=8
 
 因此這台的配置是 **GPU 專給 OCR，聊天用雲端 Gemini**（`LLM_PROVIDER=gemini`）。如果要用本機 Ollama 聊天，有兩種做法：
 
-- 處理完文件後停掉 vllm：`docker compose stop vllm`。之後需要 OCR 時再執行 `docker compose start vllm`。
-- 只使用 LiteParse 解析，不需要 GPU，vllm 可以不開。
+- 處理完文件後停掉 vllm：`docker compose --profile lightonocr stop vllm`。之後需要 OCR 時再執行 `docker compose --profile lightonocr start vllm`。
+- 只使用 LiteParse 解析，不需要 GPU，vllm 不必啟動（它預設就不會啟動）。
 
 ## 換成更大顯存的 GPU 時
 
 - 可以調高 `OCR_VLLM_GPU_UTIL` 和 `OCR_VLLM_MAX_NUM_SEQS`。
 - 可以拿掉 compose 裡的 `--enforce-eager`，啟用 CUDA graph，吞吐量較高。
 - Ampere（RTX 30 系列）以上的顯卡支援 bfloat16，可以把 `--dtype` 改回官方建議的 `bfloat16`。
-- 改完後執行 `docker compose up -d vllm`，再用 `docker compose logs -f vllm` 確認有出現 KV cache 大小的訊息，沒有出現上面那些錯誤。
+- 改完後執行 `docker compose --profile lightonocr up -d vllm`，再用 `docker compose logs -f vllm` 確認有出現 KV cache 大小的訊息，沒有出現上面那些錯誤。

@@ -27,12 +27,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        embedded = settings.kb_worker_mode == "embedded"
+        embedded = settings.kb_ingest_mode == "embedded"
         if embedded:
-            kb_services.worker.start()
+            kb_services.ingester.start()
         yield
         if embedded:
-            kb_services.worker.stop()
+            kb_services.ingester.stop()
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings

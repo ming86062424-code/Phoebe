@@ -55,6 +55,8 @@ AUTOINCREMENT_TABLES = {
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    parser TEXT NOT NULL DEFAULT 'liteparse',
+    vector_weight REAL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )""",
@@ -82,7 +84,26 @@ MIGRATIONS = [
         "INTEGER REFERENCES knowledge_bases(id) ON DELETE SET NULL",
     ),
     ("messages", "sources", "TEXT"),
+    # the parser PDFs and images of the knowledge base go through (see BACKFILL_KB_PARSER)
+    ("knowledge_bases", "parser", "TEXT NOT NULL DEFAULT 'liteparse'"),
+    # hybrid search weight of the vector path; NULL follows KB_VECTOR_WEIGHT
+    ("knowledge_bases", "vector_weight", "REAL"),
 ]
+
+# When the parser setting is added to an existing database, a knowledge base whose PDFs
+# and images all went through one parser keeps using it; mixed or empty ones get the
+# default. Text files always use the text parser, and failed documents may name a parser
+# that never worked here, so neither counts.
+BACKFILL_KB_PARSER = """
+UPDATE knowledge_bases SET parser = (
+    SELECT MIN(d.parser) FROM kb_documents d
+    WHERE d.kb_id = knowledge_bases.id AND d.parser != 'text' AND d.status != 'failed'
+)
+WHERE (
+    SELECT COUNT(DISTINCT d.parser) FROM kb_documents d
+    WHERE d.kb_id = knowledge_bases.id AND d.parser != 'text' AND d.status != 'failed'
+) = 1
+"""
 
 
 def _enable_wal(conn: sqlite3.Connection) -> None:
@@ -171,6 +192,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # checked before anything is created or rebuilt: only an existing table that
+            # lacks the column gets its values from its documents
+            kb_columns = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge_bases)")}
+            backfill_parser = bool(kb_columns) and "parser" not in kb_columns
             for stmt in SCHEMA.split(";"):
                 if stmt.strip():
                     conn.execute(stmt)
@@ -185,6 +210,8 @@ def init_db(conn: sqlite3.Connection) -> None:
                     except sqlite3.OperationalError as exc:
                         if "duplicate column" not in str(exc).lower():
                             raise
+            if backfill_parser:
+                conn.execute(BACKFILL_KB_PARSER)
             conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:

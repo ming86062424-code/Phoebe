@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from starlette.datastructures import UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import current_user
 from app.config import Settings
@@ -77,6 +77,7 @@ def _clean_description(v: str) -> str:
 class KbIn(BaseModel):
     name: str
     description: str = ""
+    parser: str = "liteparse"  # for the PDFs and images uploaded to it
 
     @field_validator("name")
     @classmethod
@@ -92,6 +93,9 @@ class KbIn(BaseModel):
 class KbPatch(BaseModel):
     name: str | None = None
     description: str | None = None
+    parser: str | None = None  # only documents uploaded afterwards use it
+    # hybrid search weight of the vector path; null follows KB_VECTOR_WEIGHT again
+    vector_weight: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("name")
     @classmethod
@@ -102,6 +106,13 @@ class KbPatch(BaseModel):
     @classmethod
     def validate_description(cls, v: str | None) -> str | None:
         return None if v is None else _clean_description(v)
+
+
+def _check_parser(kb: KbServices, parser: str | None) -> None:
+    """A knowledge base's parser must be one users can pick for PDFs and images (not the
+    text parser). It may be unavailable right now: uploads say so until it is back."""
+    if parser is not None and parser not in kb.parsers:
+        raise HTTPException(status_code=422, detail="未知的解析器")
 
 
 def _require_kb(conn: sqlite3.Connection, user: dict, kb_id: int) -> dict:
@@ -125,9 +136,13 @@ def list_kbs(user: dict = Depends(current_user), conn: sqlite3.Connection = Depe
 
 @router.post("/kbs", status_code=201)
 def create_kb(
-    body: KbIn, user: dict = Depends(current_user), conn: sqlite3.Connection = Depends(get_db)
+    body: KbIn,
+    user: dict = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+    kb: KbServices = Depends(get_kb_services),
 ):
-    return store.create_kb(conn, user["id"], body.name, body.description)
+    _check_parser(kb, body.parser)
+    return store.create_kb(conn, user["id"], body.name, body.description, body.parser)
 
 
 @router.patch("/kbs/{kb_id}")
@@ -136,8 +151,20 @@ def update_kb(
     body: KbPatch,
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
+    services: KbServices = Depends(get_kb_services),
 ):
-    kb = store.update_kb(conn, user["id"], kb_id, name=body.name, description=body.description)
+    _check_parser(services, body.parser)
+    kb = store.update_kb(
+        conn,
+        user["id"],
+        kb_id,
+        name=body.name,
+        description=body.description,
+        parser=body.parser,
+        vector_weight=(
+            body.vector_weight if "vector_weight" in body.model_fields_set else store.UNCHANGED
+        ),
+    )
     if kb is None:
         raise HTTPException(status_code=404, detail="找不到知識庫")
     return kb
@@ -152,13 +179,13 @@ def delete_kb(
 ):
     _require_kb(conn, user, kb_id)
     store.delete_kb(conn, user["id"], kb_id)
-    # the worker notices the deleted rows and stops; files still in use are removed later
+    # the ingester notices the deleted rows and stops; files still in use are removed later
     try:
         kb.index.delete_kb(kb_id)
     except Exception as e:
         # ids are never reused, so leftover chunks are never searched
         logger.warning("刪除知識庫 %s 的向量失敗：%s", kb_id, e, exc_info=True)
-    kb.worker.remove_path(kb.kb_dir / str(kb_id))
+    kb.ingester.remove_path(kb.kb_dir / str(kb_id))
     return Response(status_code=204)
 
 
@@ -179,12 +206,12 @@ async def upload_document(
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
-    """multipart form: file and parser (default liteparse).
+    """multipart form: file.
 
-    PDFs and images use the chosen parser; .txt and .md always use the text parser, so
-    the parser field is ignored for them (and "text" can't be chosen for anything else).
+    PDFs and images use the knowledge base's parser setting; .txt and .md always use the
+    text parser. A `parser` form field from older clients is ignored.
     """
-    _require_kb(conn, user, kb_id)
+    kb_row = _require_kb(conn, user, kb_id)
     limit = settings.max_upload_mb * 1024 * 1024
     too_big = HTTPException(status_code=413, detail=f"檔案超過 {settings.max_upload_mb}MB 上限")
     # The form is parsed here rather than by FastAPI so an oversized upload is
@@ -194,7 +221,6 @@ async def upload_document(
         raise too_big
     form = await request.form()
     file = form.get("file")
-    parser = form.get("parser", "liteparse")
     if not isinstance(file, UploadFile):
         raise HTTPException(status_code=422, detail="請選擇要上傳的檔案")
     filename = _short_filename((file.filename or "").strip())
@@ -204,15 +230,18 @@ async def upload_document(
     if suffix in TEXT_EXTENSIONS:
         chosen = kb.text_parser
     else:
-        chosen = kb.parsers.get(parser) if isinstance(parser, str) else None
-        if chosen is None:
-            raise HTTPException(status_code=422, detail="未知的解析器")
+        chosen = kb.parsers.get(kb_row["parser"])
+        if chosen is None:  # e.g. the parser was removed from this installation
+            raise HTTPException(
+                status_code=422,
+                detail=f"知識庫設定的解析器 {kb_row['parser']} 已不存在，請到知識庫設定更換",
+            )
         available, reason = await run_in_threadpool(kb.availability, chosen.id)
         if not available:
             raise HTTPException(status_code=422, detail=reason or "此解析器目前無法使用")
 
     def save() -> dict:
-        # blocking file and database work, run in a worker thread
+        # blocking file and database work, run in a background thread
         folder = kb.kb_dir / str(kb_id)
         folder.mkdir(parents=True, exist_ok=True)
         tmp = folder / f"upload-{uuid.uuid4().hex}.tmp"
@@ -237,7 +266,7 @@ async def upload_document(
                 raise
         finally:
             tmp.unlink(missing_ok=True)
-        kb.worker.enqueue(doc["id"])
+        kb.ingester.enqueue(doc["id"])
         return store.get_document(conn, doc["id"])
 
     try:
@@ -258,14 +287,34 @@ def delete_document(
     doc = store.get_document(conn, doc_id)
     if doc is None or doc["kb_id"] != kb_id or not store.delete_document(conn, kb_id, doc_id):
         raise HTTPException(status_code=404, detail="找不到文件")
-    # the worker notices the deleted row and stops; a file still in use is removed later
+    # the ingester notices the deleted row and stops; a file still in use is removed later
     try:
         kb.index.delete_document(kb_id, doc_id)
     except Exception as e:
         logger.warning("刪除文件 %s 的向量失敗：%s", doc_id, e, exc_info=True)
-    kb.worker.remove_path(kb.file_path(kb_id, doc_id, doc["filename"]))
-    kb.worker.remove_path(kb.doc_dir(kb_id, doc_id))
+    kb.ingester.remove_path(kb.file_path(kb_id, doc_id, doc["filename"]))
+    kb.ingester.remove_path(kb.doc_dir(kb_id, doc_id))
     return Response(status_code=204)
+
+
+@router.get("/kbs/{kb_id}/documents/{doc_id}/chunks")
+async def document_chunks(
+    kb_id: int,
+    doc_id: int,
+    user: dict = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+    kb: KbServices = Depends(get_kb_services),
+):
+    """How the document was split: its stored chunks, in order (empty until indexed)."""
+    _require_kb(conn, user, kb_id)
+    doc = store.get_document(conn, doc_id)
+    if doc is None or doc["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail="找不到文件")
+    try:
+        chunks = await run_in_threadpool(kb.index.list_chunks, kb_id, doc_id)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"無法讀取切塊：{e}") from e
+    return {"document": doc, "chunks": [c.to_dict() for c in chunks]}
 
 
 @router.post("/kbs/{kb_id}/documents/{doc_id}/retry")
@@ -283,7 +332,7 @@ def retry_document(
     if doc["status"] != "failed":
         raise HTTPException(status_code=409, detail="只有失敗的文件可以重試")
     store.update_document(conn, doc_id, status="queued", error=None, progress_done=0)
-    kb.worker.enqueue(doc_id)
+    kb.ingester.enqueue(doc_id)
     return store.get_document(conn, doc_id)
 
 
@@ -327,7 +376,8 @@ def document_image(
 def search_settings(
     _user: dict = Depends(current_user), settings: Settings = Depends(get_settings)
 ):
-    """The hybrid search defaults the chat uses (the search test starts from them)."""
+    """The system defaults: KB_VECTOR_WEIGHT is the weight of knowledge bases that have
+    none of their own."""
     return {"vector_weight": settings.kb_vector_weight, "top_k": settings.kb_top_k}
 
 
@@ -335,15 +385,19 @@ def search_settings(
 async def search(
     kb_id: int,
     q: str = Query(min_length=1, max_length=1000),
-    # for trying weights in the search test; the chat always uses KB_VECTOR_WEIGHT
+    # for trying weights in the search test; the chat uses the knowledge base's weight
     vector_weight: float | None = Query(default=None, ge=0, le=1),
     user: dict = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
-    _require_kb(conn, user, kb_id)
-    weight = settings.kb_vector_weight if vector_weight is None else vector_weight
+    kb_row = _require_kb(conn, user, kb_id)
+    weight = (
+        store.vector_weight(kb_row, settings.kb_vector_weight)
+        if vector_weight is None
+        else vector_weight
+    )
     try:
         sources = await run_in_threadpool(
             kb.index.search, kb_id, q, settings.kb_top_k, weight

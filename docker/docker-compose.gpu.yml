@@ -1,0 +1,21 @@
+# embedder 的 GPU 模式：不用 LightOnOCR 時，把 GPU 給 embedder（LiteParse 建立索引快很多）。
+#   cd docker
+#   docker compose --profile lightonocr stop vllm      # 先關掉 vLLM，兩者放不進 6 GB 顯卡
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# 切回 LightOnOCR 模式（embedder 回到 CPU）：docker compose --profile lightonocr up -d
+# 不要同時加 --profile lightonocr。設計與顯存用量見 docs/gpu-memory.md
+services:
+  embedder:
+    build:
+      args:
+        TORCH_VARIANT: cu126
+    image: phoebe-embedder:gpu
+    environment:
+      EMBED_DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

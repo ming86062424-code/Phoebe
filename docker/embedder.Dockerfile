@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
-# Embedding 服務（sentence-transformers、CPU float32）。build context 為專案根目錄：
+# Embedding 服務（sentence-transformers、float32）。build context 為專案根目錄：
 #   cd docker && docker compose build embedder
+# TORCH_VARIANT 選 PyTorch：cpu（預設，phoebe-embedder:local）或 cu126（GPU 版，
+# phoebe-embedder:gpu，由 docker-compose.gpu.yml 指定）。見 docs/gpu-memory.md
 FROM python:3.12.12-slim
+ARG TORCH_VARIANT=cpu
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /uvx /bin/
 
 # torch CPU 需要 OpenMP 執行庫
@@ -26,7 +29,7 @@ RUN useradd --uid 1000 --create-home --home-dir /home/embedder embedder \
 WORKDIR /app
 COPY embedder/pyproject.toml embedder/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    UV_CACHE_DIR=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
+    UV_CACHE_DIR=/root/.cache/uv uv sync --frozen --no-install-project         --no-default-groups --group "${TORCH_VARIANT}"
 COPY --chown=embedder:embedder embedder/app.py ./app.py
 
 USER embedder

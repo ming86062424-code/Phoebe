@@ -1,5 +1,6 @@
 import math
 import re
+import threading
 
 from app.kb.chunk_store import ChunkRecord, Hit, KnowledgeStoreError
 
@@ -22,11 +23,15 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 class InMemoryChunkStore:
-    """ChunkStore for unit tests: cosine for dense, token overlap for keyword."""
+    """ChunkStore for unit tests: cosine for dense, token overlap for keyword.
+
+    Writes hold a lock, as several ingest threads may index at once.
+    """
 
     def __init__(self):
         self.rows: dict[str, ChunkRecord] = {}
         self.dim: int | None = None
+        self._lock = threading.Lock()
 
     def ensure_ready(self, dim: int) -> None:
         if self.dim is not None and self.dim != dim:
@@ -36,26 +41,38 @@ class InMemoryChunkStore:
         self.dim = dim
 
     def insert(self, records: list[ChunkRecord]) -> None:
-        for r in records:
-            if self.dim is not None and len(r.dense) != self.dim:
-                raise KnowledgeStoreError("Milvus 錯誤")
-            self.rows[f"{r.document_id}:{r.chunk_index}"] = r
+        with self._lock:
+            for r in records:
+                if self.dim is not None and len(r.dense) != self.dim:
+                    raise KnowledgeStoreError("Milvus 錯誤")
+                self.rows[f"{r.document_id}:{r.chunk_index}"] = r
 
     def delete_document(self, kb_id: int, document_id: int) -> None:
-        self.rows = {
-            k: r
-            for k, r in self.rows.items()
-            if not (r.kb_id == kb_id and r.document_id == document_id)
-        }
+        with self._lock:
+            self.rows = {
+                k: r
+                for k, r in self.rows.items()
+                if not (r.kb_id == kb_id and r.document_id == document_id)
+            }
 
     def delete_kb(self, kb_id: int) -> None:
-        self.rows = {k: r for k, r in self.rows.items() if r.kb_id != kb_id}
+        with self._lock:
+            self.rows = {k: r for k, r in self.rows.items() if r.kb_id != kb_id}
 
     def _hit(self, chunk_id: str, r: ChunkRecord, score: float) -> Hit:
         return Hit(
             chunk_id, r.kb_id, r.document_id, r.filename, r.page, r.text, score,
             kind=r.kind, images=list(r.images), page_image=r.page_image,
+            chunk_index=r.chunk_index,
         )  # fmt: skip
+
+    def list_chunks(self, kb_id: int, document_id: int) -> list[Hit]:
+        found = [
+            self._hit(k, r, 0.0)
+            for k, r in self.rows.items()
+            if r.kb_id == kb_id and r.document_id == document_id
+        ]
+        return sorted(found, key=lambda h: h.chunk_index)
 
     def dense_search(self, kb_id: int, vector: list[float], limit: int) -> list[Hit]:
         scored = [

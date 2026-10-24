@@ -10,12 +10,29 @@ UPDATABLE_DOC_FIELDS = {"status", "error", "progress_done", "progress_total", "c
 UNFINISHED_STATUSES = ("pending", "queued", "parsing", "indexing")
 
 
-def create_kb(conn: sqlite3.Connection, user_id: int, name: str, description: str) -> dict:
+# update_kb: leave the field as it is (None has a meaning of its own there)
+UNCHANGED = object()
+
+
+def vector_weight(kb: dict, default: float) -> float:
+    """The knowledge base's hybrid search weight, or `default` (KB_VECTOR_WEIGHT) when it
+    has none of its own."""
+    weight = kb.get("vector_weight")
+    return default if weight is None else weight
+
+
+def create_kb(
+    conn: sqlite3.Connection,
+    user_id: int,
+    name: str,
+    description: str,
+    parser: str = "liteparse",
+) -> dict:
     now = now_iso()
     cur = conn.execute(
-        "INSERT INTO knowledge_bases (user_id, name, description, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user_id, name, description, now, now),
+        "INSERT INTO knowledge_bases (user_id, name, description, parser, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, name, description, parser, now, now),
     )
     conn.commit()
     return get_kb(conn, user_id, cur.lastrowid)
@@ -23,7 +40,8 @@ def create_kb(conn: sqlite3.Connection, user_id: int, name: str, description: st
 
 def list_kbs(conn: sqlite3.Connection, user_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT k.id, k.name, k.description, k.created_at, k.updated_at, "
+        "SELECT k.id, k.name, k.description, k.parser, k.vector_weight, k.created_at, "
+        "k.updated_at, "
         "COUNT(d.id) AS document_count "
         "FROM knowledge_bases k LEFT JOIN kb_documents d ON d.kb_id = k.id "
         "WHERE k.user_id = ? GROUP BY k.id ORDER BY k.updated_at DESC, k.id DESC",
@@ -34,7 +52,8 @@ def list_kbs(conn: sqlite3.Connection, user_id: int) -> list[dict]:
 
 def get_kb(conn: sqlite3.Connection, user_id: int, kb_id: int) -> dict | None:
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at FROM knowledge_bases "
+        "SELECT id, name, description, parser, vector_weight, created_at, updated_at "
+        "FROM knowledge_bases "
         "WHERE id = ? AND user_id = ?",
         (kb_id, user_id),
     ).fetchone()
@@ -47,20 +66,29 @@ def update_kb(
     kb_id: int,
     name: str | None = None,
     description: str | None = None,
+    parser: str | None = None,
+    vector_weight: float | None | object = UNCHANGED,
 ) -> dict | None:
-    kb = get_kb(conn, user_id, kb_id)
-    if kb is None:
-        return None
-    conn.execute(
-        "UPDATE knowledge_bases SET name = ?, description = ?, updated_at = ? WHERE id = ?",
-        (
-            kb["name"] if name is None else name,
-            kb["description"] if description is None else description,
-            now_iso(),
-            kb_id,
-        ),
+    """Change the given fields; the parser only applies to documents uploaded later.
+
+    vector_weight: a number from 0 to 1, None to follow KB_VECTOR_WEIGHT again, or
+    UNCHANGED (the default) to leave it as it is.
+    """
+    # only the fields given are written, so two saves of different fields (e.g. a rename
+    # and a weight change from two tabs) don't undo each other
+    changes: dict[str, object] = {"name": name, "description": description, "parser": parser}
+    changes = {k: v for k, v in changes.items() if v is not None}
+    if vector_weight is not UNCHANGED:
+        changes["vector_weight"] = vector_weight
+    changes["updated_at"] = now_iso()
+    assignments = ", ".join(f"{column} = ?" for column in changes)  # fixed column names
+    cur = conn.execute(
+        f"UPDATE knowledge_bases SET {assignments} WHERE id = ? AND user_id = ?",
+        (*changes.values(), kb_id, user_id),
     )
     conn.commit()
+    if cur.rowcount == 0:
+        return None
     return get_kb(conn, user_id, kb_id)
 
 
@@ -140,7 +168,7 @@ def claim_next_document(
 
 
 def requeue_stale_documents(conn: sqlite3.Connection, stale_before: str) -> list[int]:
-    """Put documents whose worker went away (no update since stale_before) back in the queue."""
+    """Put documents whose ingester went away (no update since stale_before) back in the queue."""
     rows = conn.execute(
         "UPDATE kb_documents SET status = 'queued', progress_done = 0, updated_at = ? "
         "WHERE status IN ('parsing', 'indexing') AND updated_at < ? RETURNING id",
@@ -164,7 +192,7 @@ def fail_stale_pending_documents(
 
 
 def touch_document(conn: sqlite3.Connection, doc_id: int) -> None:
-    """Heartbeat: show that a worker is still busy with this document."""
+    """Heartbeat: show that the ingester is still busy with this document."""
     conn.execute(
         "UPDATE kb_documents SET updated_at = ? WHERE id = ? AND status IN ('parsing', 'indexing')",
         (now_iso(), doc_id),
@@ -197,9 +225,9 @@ def requeue_finished_documents(
 ) -> dict[int, int]:
     """Put every 'ready' or 'failed' document back in the queue; returns kb_id -> count.
 
-    Documents a worker may be handling (pending, parsing, indexing) are left alone, and
+    Documents an ingester may be handling (pending, parsing, indexing) are left alone, and
     queued ones are already in line. The status check is part of the UPDATE, so a document
-    that a worker claims in the meantime is not touched. error, chunk_count and progress
+    that an ingester claims in the meantime is not touched. error, chunk_count and progress
     are reset the same way a fresh upload starts.
     """
     if dry_run:

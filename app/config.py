@@ -1,3 +1,4 @@
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,6 +52,17 @@ def _positive_int(name: str, raw: str) -> int:
     return value
 
 
+def _positive_float(name: str, raw: str) -> float:
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        value = 0.0
+    # rejects nan and inf too: neither is a usable timeout
+    if not (0 < value < math.inf):
+        raise ValueError(f"{name} 必須是正數")
+    return value
+
+
 def _check_admin(username: str, password: str) -> None:
     """The admin account from .env follows the same rules as registration."""
     if not username and not password:
@@ -85,14 +97,21 @@ class Settings:
     max_upload_mb: int = 50
     ocr_model: str = "lightonai/LightOnOCR-3-0.8B"
     liteparse_ocr_language: str = "chi_tra+eng"
-    kb_worker_mode: str = "embedded"
+    kb_ingest_mode: str = "embedded"
     ocr_backend: str = "transformers"
     vllm_base_url: str = "http://localhost:8001/v1"
     milvus_uri: str = "http://localhost:19530"
     milvus_token: str = field(default="", repr=False)
     milvus_collection: str = "phoebe_chunks"
     reply_lock_ttl_seconds: int = 90
-    kb_worker_poll_seconds: float = 2.0
+    kb_ingest_poll_seconds: float = 2.0
+    # how many documents the ingester processes at the same time
+    ingest_concurrency: int = 1
+    # pages of one document LightOnOCR keeps in flight at the same time; 4 was fastest on
+    # the RTX 2060 benchmark (docs/vllm-rtx2060.md)
+    ocr_concurrency: int = 4
+    # one OCR request, including the time it queues inside vLLM
+    ocr_timeout_seconds: float = 600.0
     kb_stale_seconds: int = 120
     kb_heartbeat_seconds: float = 30.0
     admin_username: str = ""
@@ -132,8 +151,8 @@ class Settings:
             liteparse_ocr_language=os.environ.get(
                 "LITEPARSE_OCR_LANGUAGE", d.liteparse_ocr_language
             ),
-            kb_worker_mode=_choice(
-                "KB_WORKER_MODE", d.kb_worker_mode, ("embedded", "external")
+            kb_ingest_mode=_choice(
+                "KB_INGEST_MODE", d.kb_ingest_mode, ("embedded", "external")
             ),
             ocr_backend=_choice("OCR_BACKEND", d.ocr_backend, ("transformers", "vllm")),
             vllm_base_url=os.environ.get("VLLM_BASE_URL", d.vllm_base_url),
@@ -143,8 +162,19 @@ class Settings:
             reply_lock_ttl_seconds=int(
                 os.environ.get("REPLY_LOCK_TTL_SECONDS", d.reply_lock_ttl_seconds)
             ),
-            kb_worker_poll_seconds=float(
-                os.environ.get("KB_WORKER_POLL_SECONDS", d.kb_worker_poll_seconds)
+            kb_ingest_poll_seconds=float(
+                os.environ.get("KB_INGEST_POLL_SECONDS", d.kb_ingest_poll_seconds)
+            ),
+            ingest_concurrency=_positive_int(
+                "INGEST_CONCURRENCY",
+                os.environ.get("INGEST_CONCURRENCY", str(d.ingest_concurrency)),
+            ),
+            ocr_concurrency=_positive_int(
+                "OCR_CONCURRENCY", os.environ.get("OCR_CONCURRENCY", str(d.ocr_concurrency))
+            ),
+            ocr_timeout_seconds=_positive_float(
+                "OCR_TIMEOUT_SECONDS",
+                os.environ.get("OCR_TIMEOUT_SECONDS", str(d.ocr_timeout_seconds)),
             ),
             kb_stale_seconds=int(os.environ.get("KB_STALE_SECONDS", d.kb_stale_seconds)),
             kb_heartbeat_seconds=float(
@@ -165,6 +195,12 @@ class Settings:
             raise ValueError(
                 "ADMIN_USERNAMES 已不再使用，請改設 ADMIN_USERNAME 與 ADMIN_PASSWORD"
             )
+        for old_name, new_name in (
+            ("KB_WORKER_MODE", "KB_INGEST_MODE"),
+            ("KB_WORKER_POLL_SECONDS", "KB_INGEST_POLL_SECONDS"),
+        ):
+            if os.environ.get(old_name, "").strip():
+                raise ValueError(f"{old_name} 已改名為 {new_name}")
         _check_admin(settings.admin_username, settings.admin_password)
         if settings.reply_lock_ttl_seconds <= REPLY_HEARTBEAT_SECONDS:
             raise ValueError(

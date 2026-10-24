@@ -18,7 +18,9 @@ services:
       - ETCD_QUOTA_BACKEND_BYTES=4294967296
       - ETCD_SNAPSHOT_COUNT=50000
     volumes:
-      - ./volumes/etcd:/etcd
+      # 資料庫類型的資料放在 Docker 管理的 volume（原因見 docs/docker-storage.md）
+      - etcd-data:/etcd
+      # - ./volumes/etcd:/etcd
     command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
@@ -33,7 +35,8 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
     volumes:
-      - ./volumes/minio:/minio_data
+      - minio-data:/minio_data
+      # - ./volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -54,7 +57,8 @@ services:
       MINIO_ADDRESS: minio:9000
       MQ_TYPE: woodpecker
     volumes:
-      - ./volumes/milvus:/var/lib/milvus
+      - milvus-data:/var/lib/milvus
+      # - ./volumes/milvus:/var/lib/milvus
     ports:
       - "127.0.0.1:19530:19530"
     depends_on:
@@ -82,13 +86,17 @@ services:
     environment:
       EMBED_MODEL_ID: ${EMBED_MODEL_ID:-google/embeddinggemma-2}
       EMBED_IMAGE_TOKENS: ${EMBED_IMAGE_TOKENS:-280}
+      # CPU 模式；GPU 模式由 docker-compose.gpu.yml 改成 cuda（docs/gpu-memory.md）
+      EMBED_DEVICE: cpu
       HF_HOME: /hf-cache
       # 選用：主機環境有設定時才傳入
       HF_TOKEN:
     ports:
       - "127.0.0.1:8002:8000"
     volumes:
-      - ./volumes/embedder-hf-cache:/hf-cache
+      # 模型快取放在 Docker 管理的 volume：載入模型不經過 Windows 檔案共享（9P），讀得比較快
+      - embedder-hf-cache:/hf-cache
+      # - ./volumes/embedder-hf-cache:/hf-cache
     healthcheck:
       test:
         - CMD
@@ -118,7 +126,7 @@ services:
     ports:
       - "${PHOEBE_PORT:-8000}:8000"
     environment:
-      KB_WORKER_MODE: external
+      KB_INGEST_MODE: external
       MILVUS_URI: http://milvus:19530
       EMBEDDER_URL: http://embedder:8000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
@@ -127,7 +135,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # SQLite（WAL，web 與 worker 同時讀寫）放在 Docker 管理的 volume：
+      # SQLite（WAL，web 與 ingest 同時讀寫）放在 Docker 管理的 volume：
       # Windows 主機目錄經過檔案共享層，檔案鎖與共用記憶體不可靠
       - phoebe-db:/db
       - ./volumes/kb:/data/kb
@@ -150,13 +158,13 @@ services:
       retries: 5
       start_period: 20s
 
-  worker:
+  ingest:
     <<: *env
     build:
       context: ..
       dockerfile: docker/Dockerfile
-      target: worker
-    image: phoebe-worker:local
+      target: ingest
+    image: phoebe-ingest:local
     restart: unless-stopped
     depends_on:
       web:
@@ -166,9 +174,13 @@ services:
       embedder:
         condition: service_healthy
       # 只等容器啟動：vLLM 還在下載模型或失敗時，LiteParse 仍可使用（OCR 解析器會顯示未啟動）
+      # vllm 只在 lightonocr profile 啟用時存在；沒啟用就略過（required: false）
       vllm:
         condition: service_started
-    stop_grace_period: 30s
+        required: false
+    # 收到 SIGTERM 後，處理中的文件要等已送進 vLLM 的 OCR 頁面跑完才會停；
+    # 一次 4 頁約 90 秒，30 秒會被 SIGKILL，文件得等過期重排。
+    stop_grace_period: 120s
     environment:
       OCR_BACKEND: vllm
       VLLM_BASE_URL: http://vllm:8000/v1
@@ -184,16 +196,18 @@ services:
       - ./volumes/kb:/data/kb
 
   # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
-  # 只想給本機快速測試用：docker compose up -d vllm（只對本機 127.0.0.1:8001 開放）
+  # 預設不啟動，需加 profile：docker compose --profile lightonocr up -d
+  # 只想給本機快速測試用：docker compose --profile lightonocr up -d vllm（只對本機 127.0.0.1:8001 開放）
   # 不載入 env_file：vllm 不需要應用程式設定，避免 vLLM 對未知的 VLLM_* 環境變數發出警告
   vllm:
     image: vllm/vllm-openai:v0.30.0
+    profiles: ["lightonocr"]
     restart: unless-stopped
     ports:
       # 無驗證的 GPU 端點，只對本機開放
       - "127.0.0.1:8001:8000"
     command:
-      - --model
+      # 映像的進入點是 `vllm serve`，模型放在第一個位置參數（--model 已被標為淘汰）
       - ${OCR_MODEL:-lightonai/LightOnOCR-3-0.8B}
       - --trust-remote-code
       - --limit-mm-per-prompt
@@ -206,18 +220,27 @@ services:
       # RTX 2060（Turing）不支援 bfloat16
       - --dtype
       - float16
+      # VRAM 分配見 docs/gpu-memory.md：權重與運算高峰固定約 3.5 GiB，只有 KV cache 可以調。
+      # KV cache 直接指定大小（4 頁同時 OCR 約需 0.4 GiB）；比例只當作啟動檢查，
+      # 剩餘顯存少於「比例 × 整張卡」時 vLLM 拒絕啟動（不指定時預設 0.92，6 GB 顯卡會失敗）
+      - --kv-cache-memory-bytes
+      - ${OCR_VLLM_KV_CACHE_MEMORY:-512M}
       - --gpu-memory-utilization
-      - ${OCR_VLLM_GPU_UTIL:-0.8}
+      - ${OCR_VLLM_GPU_UTIL:-0.7}
       - --max-model-len
       - ${OCR_VLLM_MAX_MODEL_LEN:-18000}
       # 6GB 顯卡：CUDA graph 的額外記憶體會讓 KV cache 配不到空間，改用 eager 並限制同時序列數
       - --enforce-eager
       - --max-num-seqs
-      - ${OCR_VLLM_MAX_NUM_SEQS:-8}
+      - ${OCR_VLLM_MAX_NUM_SEQS:-4}
     ipc: host
     volumes:
       # vLLM 映像以 root 執行，Hugging Face 預設快取在 /root/.cache/huggingface
-      - ./volumes/vllm-hf-cache:/root/.cache/huggingface
+      - vllm-hf-cache:/root/.cache/huggingface
+      # - ./volumes/vllm-hf-cache:/root/.cache/huggingface
+      # Triton 編譯好的 GPU 程式；沒保存的話，每次重建容器都要重新編譯好幾分鐘
+      - vllm-triton-cache:/root/.triton/cache
+      # - ./volumes/vllm-triton-cache:/root/.triton/cache
     healthcheck:
       test:
         - CMD
@@ -237,6 +260,15 @@ services:
               count: all
               capabilities: [gpu]
 
-# 除了 SQLite 之外，資料都放在 docker/volumes/ 下（主機目錄，已被 git 忽略）
+# 存放方式與原因見 docs/docker-storage.md：
+# - Docker 管理的 volume（實際名稱前面加 phoebe_）：SQLite、Milvus（含 etcd、minio）、模型快取、Triton 快取
+# - 主機目錄 docker/volumes/（已被 git 忽略）：上傳的檔案與解析出的圖片（kb）
+# 想改回主機目錄時，把各服務註解掉的 ./volumes/... 那一行換回來即可
 volumes:
   phoebe-db:
+  etcd-data:
+  minio-data:
+  milvus-data:
+  embedder-hf-cache:
+  vllm-hf-cache:
+  vllm-triton-cache:

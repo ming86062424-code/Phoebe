@@ -464,3 +464,38 @@ def test_liteparse_embeds_pages_in_batches(store, tmp_path):
     assert [(r.page, r.kind, r.page_image.name) for r in rows] == [
         (n, "page_image", f"page_{n}.png") for n in range(1, 11)
     ]
+
+
+# ---- list_chunks (the document's chunks, for the chunk viewer) ----
+
+
+def test_list_chunks_returns_the_documents_chunks_in_order(index, tmp_path):
+    from PIL import Image
+
+    Image.new("RGB", (6, 8), "white").save(tmp_path / "page_2.png")
+    index.add_document(
+        1, 10, "a.pdf",
+        [
+            ParsedChunk(1, "第一頁的文字"),
+            ParsedChunk(2, "第二頁 ![圖片 1](img:img_2_1.png) 圖", [ImageRef("img_2_1.png", 3, 4)],
+                        page_image=ImageRef("page_2.png", 6, 8), kind="page_image"),
+            ParsedChunk(3, "   "),  # empty text chunks are not indexed
+            ParsedChunk(4, "第四頁"),
+        ],
+        image_dir=tmp_path,
+    )  # fmt: skip
+    index.add_document(1, 11, "b.pdf", [ParsedChunk(1, "別的文件")])
+    chunks = index.list_chunks(1, 10)
+    assert [c.to_dict() for c in chunks] == [
+        {"index": 1, "page": 1, "kind": "text", "text": "第一頁的文字", "chars": 6,
+         "images": [], "page_image": None},
+        {"index": 2, "page": 2, "kind": "page_image", "text": "第二頁 ![圖片 1](img:img_2_1.png) 圖",
+         "chars": 10, "images": [{"name": "img_2_1.png", "width": 3, "height": 4}],
+         "page_image": {"name": "page_2.png", "width": 6, "height": 8}},
+        {"index": 3, "page": 4, "kind": "text", "text": "第四頁", "chars": 3,
+         "images": [], "page_image": None},
+    ]  # fmt: skip
+
+
+def test_list_chunks_of_an_unknown_document_is_empty(index):
+    assert index.list_chunks(1, 99) == []

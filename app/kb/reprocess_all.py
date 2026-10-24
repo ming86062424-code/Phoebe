@@ -1,18 +1,18 @@
 """Re-parse every knowledge-base document with its original parser.
 
-Run from the project root (or, in Docker, inside the worker container):
+Run from the project root (or, in Docker, inside the ingest container):
 
     uv run python -m app.kb.reprocess_all [--dry-run]
-    docker compose run --rm --no-deps worker python -m app.kb.reprocess_all
+    docker compose run --rm --no-deps ingest python -m app.kb.reprocess_all
 
 Every 'ready' or 'failed' document is set back to 'queued' (error and chunk_count cleared,
-like a fresh upload); a running worker then re-parses and re-indexes it. Documents that are
-pending, parsing or indexing are skipped, so a document a worker is busy with is never
+like a fresh upload); a running ingest service then re-parses and re-indexes it. Documents that are
+pending, parsing or indexing are skipped, so a document the ingester is busy with is never
 disturbed (queue it again by running this once more when they are done).
 
-The document's image folder is not removed here: the worker removes it before it parses
+The document's image folder is not removed here: the ingester removes it before it parses
 (and fails the document with a clear message if a file is in use), and deleting it from this
-process could race a worker that claims the document right after it is queued.
+process could race the ingester that claims the document right after it is queued.
 """
 
 import argparse
@@ -33,7 +33,7 @@ def reprocess(conn: sqlite3.Connection, dry_run: bool) -> dict[int, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="把所有文件重新排入佇列，由 worker 依原解析器重新處理")
+    parser = argparse.ArgumentParser(description="把所有文件重新排入佇列，由 ingest 依原解析器重新處理")
     parser.add_argument("--dry-run", action="store_true", help="只統計，不修改任何文件")
     args = parser.parse_args(argv)
 

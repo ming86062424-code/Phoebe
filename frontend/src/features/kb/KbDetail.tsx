@@ -1,21 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Pencil, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { Layers, Pencil, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import type { KbDocument, KnowledgeBase, ParserInfo, Source } from '../../api/types'
 import ConfirmDialog from '../../shell/ConfirmDialog'
 import { SourceCards } from './SourceCard'
 import UploadPanel from './UploadPanel'
+import { STATUS_TEXT } from './documentStatus'
 import styles from './KbDetail.module.css'
 
 const POLL_MS = 2000
+// ingest re-checks the parsers every 15 s (STATUS_PUBLISH_SECONDS); polling at the same
+// pace turns the badge green soon after vLLM finishes loading, without a page reload
+const PARSER_POLL_MS = 15000
 
-const STATUS_TEXT: Record<KbDocument['status'], string> = {
-  pending: '排隊中',
-  queued: '排隊中',
-  parsing: '解析中',
-  indexing: '建立索引中',
-  ready: '完成',
-  failed: '失敗',
+function formatWeight(weight: number): string {
+  return `向量 ${weight.toFixed(2)} ／ 關鍵字 ${(1 - weight).toFixed(2)}`
 }
 
 function formatSize(bytes: number): string {
@@ -34,9 +33,10 @@ interface Props {
   kb: KnowledgeBase
   onChanged(kb: KnowledgeBase): void
   onDocumentsChanged(): void
+  onViewChunks(doc: KbDocument): void
 }
 
-export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
+export default function KbDetail({ kb, onChanged, onDocumentsChanged, onViewChunks }: Props) {
   const [docs, setDocs] = useState<KbDocument[] | null>(null)
   const [parsers, setParsers] = useState<ParserInfo[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -46,10 +46,14 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Source[] | null>(null)
   const [searching, setSearching] = useState(false)
-  // hybrid weight for the search test: starts at the chat's default (null until loaded;
-  // without it the server's default is used)
-  const [defaultWeight, setDefaultWeight] = useState<number | null>(null)
-  const [weight, setWeight] = useState<number | null>(null)
+  // hybrid weight: the knowledge base's own (used by the chat), else the system default
+  // (KB_VECTOR_WEIGHT). Unknown (null) while the default can't be loaded: the server decides.
+  const [systemWeight, setSystemWeight] = useState<number | null>(null)
+  const kbWeight = kb.vector_weight ?? systemWeight
+  // a weight being tried in the search test (null: the knowledge base's weight)
+  const [trial, setTrial] = useState<number | null>(null)
+  const weight = trial ?? kbWeight
+  const [savingWeight, setSavingWeight] = useState(false)
 
   const loadDocs = useCallback(() => {
     return api.listDocuments(kb.id).then(setDocs, (e) => setError(errorText(e, '無法載入文件')))
@@ -61,11 +65,14 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
   }, [loadDocs])
 
   useEffect(() => {
+    // a failed refresh keeps the last known state
+    const timer = setInterval(() => void api.listParsers().then(setParsers, () => undefined), PARSER_POLL_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
     api.searchSettings().then(
-      (s) => {
-        setDefaultWeight(s.vector_weight)
-        setWeight(s.vector_weight)
-      },
+      (s) => setSystemWeight(s.vector_weight),
       () => undefined,
     )
   }, [])
@@ -88,6 +95,37 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
   const uploaded = () => {
     void loadDocs()
     onDocumentsChanged()
+  }
+
+  // the choice being saved shows right away; kb.parser takes over once the save settles
+  const [pendingParser, setPendingParser] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const changeParser = async (parser: string) => {
+    setPendingParser(parser)
+    setError(null)
+    try {
+      onChanged(await api.updateKb(kb.id, { parser }))
+    } catch (err) {
+      setError(errorText(err, '解析器設定失敗'))
+    } finally {
+      setPendingParser(null)
+    }
+  }
+  const kbParser = parsers.find((p) => p.id === kb.parser) ?? null
+  // the parser the select shows (the one being saved, if any)
+  const shownParser = parsers.find((p) => p.id === (pendingParser ?? kb.parser)) ?? null
+
+  const saveWeight = async (vector_weight: number | null) => {
+    setSavingWeight(true)
+    setError(null)
+    try {
+      onChanged(await api.updateKb(kb.id, { vector_weight }))
+      setTrial(null)
+    } catch (err) {
+      setError(errorText(err, '權重設定失敗'))
+    } finally {
+      setSavingWeight(false)
+    }
   }
 
   const rename = async (e: React.FormEvent) => {
@@ -189,11 +227,73 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
       )}
 
       <section className={styles.card}>
+        <h2 className={styles.cardTitle}>知識庫設定</h2>
+        <label className={styles.setting}>
+          PDF 與圖片的解析器
+          <select
+            aria-label="知識庫的解析器"
+            value={pendingParser ?? kb.parser}
+            // files still waiting to upload would otherwise switch parser mid-batch
+            disabled={pendingParser !== null || uploading || parsers.length === 0}
+            onChange={(e) => void changeParser(e.target.value)}
+          >
+            {/* a parser no longer installed still shows what the setting is */}
+            {!kbParser && <option value={kb.parser}>{kb.parser}</option>}
+            {parsers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {shownParser && (
+          // native <option>s can't be colored, so the chosen parser's state is a badge
+          <span
+            role="status"
+            aria-label="解析器狀態"
+            className={styles.parserStatus}
+            data-state={shownParser.available ? 'ok' : 'unavailable'}
+          >
+            <span className={styles.statusDot} aria-hidden />
+            {shownParser.available
+              ? '可使用'
+              : `目前無法使用${shownParser.reason ? `：${shownParser.reason}` : ''}`}
+          </span>
+        )}
+        <p className={styles.hint}>
+          只影響之後上傳的 PDF 與圖片；已上傳的文件維持原本的解析器（見下方文件列表的「解析器」欄）。txt、md
+          一律使用文字解析。
+        </p>
+        {kbWeight !== null && (
+          <div className={styles.settingRow}>
+            <span>
+              混合查詢權重：{formatWeight(kbWeight)}
+              {kb.vector_weight === null ? '（系統預設）' : '（自訂）'}
+            </span>
+            {kb.vector_weight !== null && (
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={savingWeight}
+                onClick={() => void saveWeight(null)}
+              >
+                改回系統預設
+              </button>
+            )}
+          </div>
+        )}
+        {kbWeight !== null && (
+          <p className={styles.hint}>AI 對話檢索這個知識庫時使用這個權重；可在下方的檢索測試試用後儲存。</p>
+        )}
+      </section>
+
+      <section className={styles.card}>
         <h2 className={styles.cardTitle}>上傳文件</h2>
         <UploadPanel
-          parsers={parsers}
-          upload={(file, parser) => api.uploadDocument(kb.id, file, parser)}
+          parser={kbParser}
+          upload={(file) => api.uploadDocument(kb.id, file)}
           onUploaded={uploaded}
+          onBusyChange={setUploading}
         />
       </section>
 
@@ -225,6 +325,17 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
                   </td>
                   <td>{d.status === 'ready' ? d.chunk_count : '–'}</td>
                   <td className={styles.actions}>
+                    {d.status === 'ready' && d.chunk_count > 0 && (
+                      <button
+                        type="button"
+                        className={styles.icon}
+                        aria-label={`查看切塊 ${d.filename}`}
+                        title="查看切塊"
+                        onClick={() => onViewChunks(d)}
+                      >
+                        <Layers size={14} />
+                      </button>
+                    )}
                     {d.status === 'failed' && (
                       <button
                         type="button"
@@ -276,20 +387,33 @@ export default function KbDetail({ kb, onChanged, onDocumentsChanged }: Props) {
               max={1}
               step={0.05}
               value={weight}
-              onChange={(e) => setWeight(Number(e.target.value))}
+              aria-valuetext={formatWeight(weight)}
+              disabled={savingWeight}
+              onChange={(e) => setTrial(Number(e.target.value))}
             />
             <span className={styles.muted}>
-              {`向量 ${weight.toFixed(2)} ／ 關鍵字 ${(1 - weight).toFixed(2)}`}
-              {weight === defaultWeight && '（聊天預設）'}
+              {formatWeight(weight)}
+              {weight === kbWeight && '（知識庫目前的權重）'}
             </span>
-            {weight !== defaultWeight && (
-              <button
-                type="button"
-                className={styles.secondary}
-                onClick={() => setWeight(defaultWeight)}
-              >
-                還原預設
-              </button>
+            {weight !== kbWeight && (
+              <>
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  disabled={savingWeight}
+                  onClick={() => void saveWeight(weight)}
+                >
+                  設為這個知識庫的權重
+                </button>
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  disabled={savingWeight}
+                  onClick={() => setTrial(null)}
+                >
+                  還原
+                </button>
+              </>
             )}
           </div>
         )}
