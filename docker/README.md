@@ -1,11 +1,11 @@
 # Docker 部署
 
-服務：`web`（Gunicorn）、`ingest`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。每個服務的功能、互相呼叫的方式與資料流程見 [docs/services.md](../docs/services.md)。資料位置：
+服務：`web`（Gunicorn）、`ingest`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）、`monitor`（監控頁面的資源取樣，見 [docs/monitoring.md](../docs/monitoring.md)）。每個服務的功能、互相呼叫的方式與資料流程見 [docs/services.md](../docs/services.md)。資料位置：
 
 | 位置 | 內容 |
 |---|---|
 | 主機目錄 `docker/volumes/kb/` | 上傳的檔案與解析出的圖片 |
-| volume `phoebe_phoebe-db` | SQLite 資料庫 `app.db` |
+| volume `phoebe_phoebe-db` | SQLite 資料庫 `app.db`，以及監控資料 `monitor.db` |
 | volume `phoebe_milvus-data`、`phoebe_etcd-data`、`phoebe_minio-data` | Milvus 向量資料庫 |
 | volume `phoebe_embedder-hf-cache` | embedder 的模型快取 |
 | volume `phoebe_vllm-hf-cache` | vLLM（LightOnOCR）的 Hugging Face 模型快取 |

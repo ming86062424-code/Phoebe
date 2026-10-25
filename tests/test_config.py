@@ -452,3 +452,25 @@ def test_embedder_image_picks_one_torch_variant():
     assert not any(d.startswith(("torch", "torchvision")) for d in project["project"]["dependencies"])
     assert project["tool"]["uv"]["default-groups"] == ["dev", "cpu"]
     assert project["tool"]["uv"]["conflicts"] == [[{"group": "cpu"}, {"group": "cu126"}]]
+
+
+def test_monitor_service_reads_docker_and_the_gpu_without_secrets():
+    """docs/monitoring.md: the monitor samples every container through the Docker socket
+    (read-only mount) and the GPU, as the web image's user so monitor.db stays writable for
+    web and ingest; no ports and none of docker/.env's secrets."""
+    monitor = _compose()["services"]["monitor"]
+    assert monitor["image"] == "phoebe-web:local"
+    assert monitor["build"]["target"] == "web"
+    assert monitor["command"] == ["python", "-m", "app.monitor.collector_main"]
+    assert monitor["volumes"] == ["phoebe-db:/db", "/var/run/docker.sock:/var/run/docker.sock:ro"]
+    assert "user" not in monitor  # the image's own user (UID 1000)
+    assert monitor["group_add"] == ["0"]
+    assert "env_file" not in monitor and "ports" not in monitor
+    assert set(monitor["environment"]) == {
+        "DB_PATH",
+        "MONITOR_INTERVAL_SECONDS",
+        "MONITOR_RESOURCE_RETENTION_HOURS",
+        "MONITOR_EVENT_RETENTION_DAYS",
+    }
+    devices = monitor["deploy"]["resources"]["reservations"]["devices"]
+    assert devices == [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}]

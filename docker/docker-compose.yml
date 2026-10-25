@@ -195,6 +195,40 @@ services:
       - phoebe-db:/db
       - ./volumes/kb:/data/kb
 
+  # 監控頁面的資源取樣（docs/monitoring.md）：每幾秒記錄所有容器的記憶體、CPU 與 GPU 用量，
+  # 寫進 phoebe-db volume 的 monitor.db。沿用 web 的映像，不對外開 port。
+  monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: web
+    image: phoebe-web:local
+    restart: unless-stopped
+    command: ["python", "-m", "app.monitor.collector_main"]
+    # 不載入整份 docker/.env（含 GEMINI_API_KEY 等）：只傳需要的變數
+    environment:
+      DB_PATH: /db/app.db
+      MONITOR_INTERVAL_SECONDS: ${MONITOR_INTERVAL_SECONDS:-5}
+      MONITOR_RESOURCE_RETENTION_HOURS: ${MONITOR_RESOURCE_RETENTION_HOURS:-48}
+      MONITOR_EVENT_RETENTION_DAYS: ${MONITOR_EVENT_RETENTION_DAYS:-30}
+    # 以 web 的使用者（UID 1000）執行，monitor.db 才能讓 web、ingest 一起寫入；
+    # Docker Desktop 的 docker.sock 屬於 root 群組，加入群組 0 才能讀取。
+    # Linux 上 socket 通常屬於 docker 群組：改成該群組的 GID（getent group docker）
+    group_add: ["0"]
+    volumes:
+      - phoebe-db:/db
+      # 讀取容器用量用；這個 socket 等同 Docker 的完整控制權，風險見 docs/monitoring.md
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    stop_grace_period: 10s
+    # nvidia-smi 需要 GPU；沒有 NVIDIA GPU 的機器把這段註解掉（只是少了 GPU 資料）
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   # LightOnOCR 官方的服務方式（vLLM）：GPU 專用於 OCR 模型。
   # 預設不啟動，需加 profile：docker compose --profile lightonocr up -d
   # 只想給本機快速測試用：docker compose --profile lightonocr up -d vllm（只對本機 127.0.0.1:8001 開放）

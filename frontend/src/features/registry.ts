@@ -1,7 +1,8 @@
-import { BookOpen, MessageSquare, Settings, type LucideIcon } from 'lucide-react'
+import { Activity, BookOpen, MessageSquare, Settings, type LucideIcon } from 'lucide-react'
 import { createElement, type ReactNode } from 'react'
 import ChatPage from './chat/ChatPage'
 import KbPage from './kb/KbPage'
+import MonitorPage from './monitor/MonitorPage'
 import SettingsPage from './settings/SettingsPage'
 
 export interface Feature {
@@ -34,6 +35,14 @@ export const features: Feature[] = [
     path: '/settings',
     icon: Settings,
     element: createElement(SettingsPage),
+    adminOnly: true,
+  },
+  {
+    id: 'monitor',
+    label: '監控',
+    path: '/monitor',
+    icon: Activity,
+    element: createElement(MonitorPage),
     adminOnly: true,
   },
 ]

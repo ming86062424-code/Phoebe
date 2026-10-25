@@ -2,6 +2,7 @@ import logging
 import math
 import re
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -146,18 +147,22 @@ class KnowledgeIndex:
         filename: str,
         chunks: list[ParsedChunk],
         image_dir: Path | None = None,
+        timings: dict[str, float] | None = None,
     ) -> int:
         """Index the chunks as they are (one per page) and return how many were written.
 
         Replaces any chunks the document already has, so repeating it is harmless.
         "page_image" chunks read `image_dir / chunk.page_image.name`.
+        `timings`, when given, receives the seconds spent on "embed" and "store".
         """
         kept = [c for c in chunks if c.kind == "page_image" or c.text.strip()]
         if not kept:
             self._store.delete_document(kb_id, document_id)
             return 0
         # Embedding can take minutes for a big PDF; no lock is held.
+        started = time.perf_counter()
         embeddings = self._embed(filename, kept, image_dir)
+        embedded = time.perf_counter()
         self._ensure_ready(len(embeddings[0]))
         records = []
         for i, (chunk, embedding) in enumerate(zip(kept, embeddings, strict=True)):
@@ -188,6 +193,9 @@ class KnowledgeIndex:
         # a retry must not leave the previous attempt's chunks behind
         self._store.delete_document(kb_id, document_id)
         self._store.insert(records)
+        if timings is not None:
+            timings["embed"] = embedded - started
+            timings["store"] = time.perf_counter() - embedded
         return len(records)
 
     def _embed(
@@ -239,16 +247,27 @@ class KnowledgeIndex:
         self._store.delete_kb(kb_id)
 
     def search(
-        self, kb_id: int, query: str, top_k: int, vector_weight: float = DEFAULT_VECTOR_WEIGHT
+        self,
+        kb_id: int,
+        query: str,
+        top_k: int,
+        vector_weight: float = DEFAULT_VECTOR_WEIGHT,
+        timings: dict[str, float] | None = None,
     ) -> list[Source]:
-        """Hybrid search; `vector_weight` (0..1) is the dense path's share of the score."""
+        """Hybrid search; `vector_weight` (0..1) is the dense path's share of the score.
+        `timings`, when given, receives the seconds spent on "embed" and "search"."""
         if top_k <= 0:
             return []
+        started = time.perf_counter()
         vector = [float(x) for x in self._embedder.embed_queries([query])[0]]
+        embedded = time.perf_counter()
         self._ensure_ready(len(vector))
         limit = top_k * CANDIDATE_FACTOR
         dense = self._store.dense_search(kb_id, vector, limit)
         keyword = self._store.keyword_search(kb_id, query, limit)
+        if timings is not None:
+            timings["embed"] = embedded - started
+            timings["search"] = time.perf_counter() - embedded
         return [
             Source(
                 document_id=hit.document_id,

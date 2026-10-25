@@ -7,7 +7,12 @@ import type {
   LlmProvider,
   LlmSettings,
   LlmSettingsPatch,
+  MonitorEvent,
+  MonitorEventKind,
+  MonitorSeries,
+  MonitorStatus,
   ParserInfo,
+  ResourceSample,
   SearchSettings,
   Source,
   User,
@@ -136,4 +141,21 @@ export const api = {
         (vectorWeight === undefined ? '' : `&vector_weight=${vectorWeight}`),
     ),
   searchSettings: () => json<SearchSettings>('/api/search-settings'),
+  monitorEvents: (kind?: MonitorEventKind, before?: number) => {
+    const params = new URLSearchParams()
+    if (kind) params.set('kind', kind)
+    if (before !== undefined) params.set('before', String(before))
+    const query = params.toString()
+    return json<{ events: MonitorEvent[] }>(
+      `/api/monitor/events${query ? `?${query}` : ''}`,
+    ).then((r) => r.events)
+  },
+  monitorStatus: () => json<MonitorStatus>('/api/monitor/status'),
+  monitorSeries: (minutes: number) =>
+    json<MonitorSeries>(`/api/monitor/series?minutes=${minutes}`),
+  monitorSamples: (minutes: number, source?: string) =>
+    json<{ samples: ResourceSample[] }>(
+      `/api/monitor/samples?minutes=${minutes}` +
+        (source ? `&source=${encodeURIComponent(source)}` : ''),
+    ).then((r) => r.samples),
 }
