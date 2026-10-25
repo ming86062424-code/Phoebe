@@ -1,0 +1,399 @@
+/* chart chrome and status colors from the data-viz palette (docs/monitoring.md) */
+.page {
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  --viz-muted: #898781;
+  --viz-ink-2: #52514e;
+  --status-good: #0ca30c;
+  --status-critical: #d03b3b;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  min-width: 0;
+  padding: var(--page-padding);
+  overflow-y: auto;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tab,
+.tabActive {
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
+}
+
+.tabActive {
+  border-bottom-color: var(--color-primary);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.tab:hover {
+  color: var(--color-text);
+}
+
+.tabBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  min-width: 0;
+}
+
+.sectionTitle {
+  margin: var(--space-2) 0 0;
+  font-size: 15px;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.inline select {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.range,
+.rangeActive {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-size: 13px;
+}
+
+.rangeActive {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.error {
+  color: var(--color-danger);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.warning {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--status-critical);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-size: 13px;
+}
+
+/* tables */
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  text-align: left;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.table th,
+.table td {
+  padding: var(--space-2);
+  vertical-align: top;
+}
+
+.table tbody tr + tr td {
+  border-top: 1px solid var(--color-border);
+}
+
+.num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.name {
+  overflow-wrap: anywhere;
+  min-width: 8em;
+}
+
+.details {
+  color: var(--viz-ink-2);
+  min-width: 12em;
+}
+
+.totalRow td {
+  font-weight: 600;
+}
+
+.phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--viz-ink-2);
+  white-space: nowrap;
+}
+
+.phases strong {
+  color: var(--color-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.statusBadge svg {
+  color: var(--viz-muted);
+}
+
+.statusBadge[data-status='ok'] svg {
+  color: var(--status-good);
+}
+
+.statusBadge[data-status='error'] svg {
+  color: var(--status-critical);
+}
+
+.more {
+  align-self: flex-start;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+/* charts */
+.charts,
+.chartsLoading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  transition: opacity 0.2s;
+}
+
+.chartsLoading {
+  opacity: 0.6;
+}
+
+.chart {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  min-width: 0;
+}
+
+.chartTitle {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--viz-ink-2);
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lineKey {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.plot {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+
+.plot svg {
+  display: block;
+}
+
+.grid {
+  stroke: var(--viz-grid);
+  stroke-width: 1;
+}
+
+.axis {
+  stroke: var(--viz-axis);
+  stroke-width: 1;
+}
+
+.tickY,
+.tickX {
+  fill: var(--viz-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tickY {
+  text-anchor: end;
+  dominant-baseline: middle;
+}
+
+
+.line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.reference {
+  stroke: var(--viz-ink-2);
+  stroke-width: 1;
+}
+
+.referenceLabel {
+  fill: var(--viz-ink-2);
+  font-size: 11px;
+}
+
+.crosshair {
+  stroke: var(--viz-ink-2);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.dot {
+  stroke: var(--color-surface);
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.eventBar,
+.eventBarBad {
+  fill: var(--viz-ink-2);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.eventBarBad {
+  fill: var(--status-critical);
+  opacity: 0.8;
+}
+
+.eventBar:hover,
+.eventBar:focus,
+.eventBarBad:hover,
+.eventBarBad:focus {
+  opacity: 1;
+  outline: none;
+}
+
+.tooltip {
+  position: absolute;
+  top: 4px;
+  z-index: 2;
+  min-width: 140px;
+  max-width: 280px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.tooltipTime {
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.tooltipTitle {
+  margin: var(--space-1) 0;
+  overflow-wrap: anywhere;
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tooltipRow strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.tooltipRow span:last-child {
+  color: var(--viz-ink-2);
+}

@@ -1,6 +1,6 @@
 # 服務架構
 
-`cd docker && docker compose up` 會啟動 7 個服務，另外還會用到兩個外部的聊天模型服務。這份文件說明每個服務的工作、它們怎麼互相呼叫，以及資料存在哪裡。設定與操作方式見 [docker/README.md](../docker/README.md)。
+`cd docker && docker compose up` 會啟動 8 個服務，另外還會用到兩個外部的聊天模型服務。這份文件說明每個服務的工作、它們怎麼互相呼叫，以及資料存在哪裡。設定與操作方式見 [docker/README.md](../docker/README.md)。
 
 ## 總覽
 
@@ -35,6 +35,7 @@
 | **milvus** | `milvusdb/milvus:v2.6.25` | 向量資料庫。所有知識庫共用 `phoebe_chunks` 這個 collection，負責向量查詢（cosine）與關鍵字查詢（BM25，jieba 斷詞） | 只限本機 `19530` | 否 |
 | **etcd** | `quay.io/coreos/etcd:v3.5.25` | Milvus 的設定儲存（collection 結構等），只給 Milvus 使用 | 無 | 否 |
 | **minio** | `milvusdb/minio:RELEASE.2024-12-18T13-15-44Z` | Milvus 的物件儲存（實際的資料檔），只給 Milvus 使用 | 無 | 否 |
+| **monitor** | `phoebe-web:local` | 監控頁面的資源取樣：每 5 秒記錄所有容器的記憶體、CPU 與 GPU 用量，寫進 `monitor.db`。需要讀取 Docker socket，見 [monitoring.md](monitoring.md) | 無 | 只讀取用量（`nvidia-smi`） |
 
 「只限本機」表示只綁在 `127.0.0.1`，同網路的其他電腦連不到。這三個服務本身都沒有驗證機制。
 
@@ -125,7 +126,7 @@ vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這�
 | 位置 | 內容 | 可以刪嗎 |
 |---|---|---|
 | 主機目錄 `docker/volumes/kb/` | 上傳的原始檔、整頁圖、裁切圖 | 刪了就要重新上傳 |
-| volume `phoebe_phoebe-db` | SQLite：帳號、對話、知識庫與文件清單、系統設定 | **不可以**，所有帳號與對話都在這裡 |
+| volume `phoebe_phoebe-db` | SQLite：帳號、對話、知識庫與文件清單、系統設定（`app.db`）；監控資料（`monitor.db`） | `app.db` **不可以**，所有帳號與對話都在這裡；`monitor.db` 可以，見 [monitoring.md](monitoring.md) |
 | volume `phoebe_milvus-data`、`phoebe_etcd-data`、`phoebe_minio-data` | 向量資料庫 | 刪了可以用 `reprocess_all` 從原始檔重建（三個要一起刪） |
 | volume `phoebe_vllm-hf-cache` | LightOnOCR 模型快取（約 1.6 GB） | 可以，下次啟動會重新下載 |
 | volume `phoebe_vllm-triton-cache` | vLLM 的 Triton 編譯快取（約 180 MB） | 可以，下次啟動會重新編譯（多花幾分鐘） |

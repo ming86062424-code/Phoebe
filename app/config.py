@@ -123,6 +123,11 @@ class Settings:
     # Ollama's own default context is small (4096): a knowledge-base answer with page
     # images (~740 tokens each) and several pages of text would be cut off silently
     ollama_num_ctx: int = 16384
+    # monitoring page (docs/monitoring.md): resource sampling interval of the monitor
+    # service and how long samples and task events are kept
+    monitor_interval_seconds: float = 5.0
+    monitor_resource_retention_hours: float = 48.0
+    monitor_event_retention_days: float = 30.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -187,6 +192,22 @@ class Settings:
             llm_provider=_choice("LLM_PROVIDER", d.llm_provider, ("ollama", "gemini")),
             ollama_num_ctx=_positive_int(
                 "OLLAMA_NUM_CTX", os.environ.get("OLLAMA_NUM_CTX", str(d.ollama_num_ctx))
+            ),
+            monitor_interval_seconds=_positive_float(
+                "MONITOR_INTERVAL_SECONDS",
+                os.environ.get("MONITOR_INTERVAL_SECONDS", str(d.monitor_interval_seconds)),
+            ),
+            monitor_resource_retention_hours=_positive_float(
+                "MONITOR_RESOURCE_RETENTION_HOURS",
+                os.environ.get(
+                    "MONITOR_RESOURCE_RETENTION_HOURS", str(d.monitor_resource_retention_hours)
+                ),
+            ),
+            monitor_event_retention_days=_positive_float(
+                "MONITOR_EVENT_RETENTION_DAYS",
+                os.environ.get(
+                    "MONITOR_EVENT_RETENTION_DAYS", str(d.monitor_event_retention_days)
+                ),
             ),
         )
         if settings.kb_heartbeat_seconds >= settings.kb_stale_seconds:

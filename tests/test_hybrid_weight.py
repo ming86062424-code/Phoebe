@@ -26,9 +26,9 @@ def weights(kb_services, monkeypatch):
     seen: list[float] = []
     real = kb_services.index.search
 
-    def search(kb_id, query, top_k, vector_weight=0.5):
+    def search(kb_id, query, top_k, vector_weight=0.5, timings=None):
         seen.append(vector_weight)
-        return real(kb_id, query, top_k, vector_weight)
+        return real(kb_id, query, top_k, vector_weight, timings)
 
     monkeypatch.setattr(kb_services.index, "search", search)
     return seen

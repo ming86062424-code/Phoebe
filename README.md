@@ -199,6 +199,7 @@ uv run --group eval pytest evals -v
   - 系統提示詞：最多 4000 字
   - temperature：可自訂，或使用模型預設值
 - Embedding（知識庫）一律使用獨立的 `embedder` 服務（`EMBEDDER_URL`），不受 LLM 供應商影響。
+- 管理員另有「監控」頁：事件紀錄（文件處理、AI 對話、搜尋測試各階段的耗時）、資源使用（各容器與 GPU 的用量）、圖表（記憶體、CPU、GPU 隨時間的變化，並標出各任務的時間）。資源用量由 Docker 的 `monitor` 服務取樣，說明見 [docs/monitoring.md](docs/monitoring.md)。
 
 ### Gemini
 
@@ -250,6 +251,9 @@ uv run --group eval pytest evals -v
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |
 | `WEB_CONCURRENCY` | `2` | Gunicorn worker 數（僅 Docker，設在 `docker/.env`） |
 | `PHOEBE_PORT` | `8000` | Docker 對外連接埠 |
+| `MONITOR_INTERVAL_SECONDS` | `5` | 監控頁面的資源取樣間隔（秒，monitor 服務） |
+| `MONITOR_RESOURCE_RETENTION_HOURS` | `48` | 資源取樣保留幾小時 |
+| `MONITOR_EVENT_RETENTION_DAYS` | `30` | 任務事件保留幾天 |
 | `FRONTEND_DIST` | `<專案根目錄>/frontend/dist` | 前端建置輸出資料夾，由後端提供；使用相對路徑時，會以啟動 uvicorn 的工作目錄為基準 |
 
 ## 部署
@@ -277,6 +281,7 @@ docker compose --profile lightonocr down
 
 - `app/` — 後端（設定、資料庫、驗證、對話、Ollama 客戶端、路由）
 - `app/kb/` — 知識庫（資料存取、解析器、索引、背景處理）
+- `app/monitor/` — 監控（任務事件、資源取樣、monitor 服務）
 - `scripts/` — 手動驗證腳本
 - `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試
