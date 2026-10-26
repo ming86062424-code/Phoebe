@@ -221,7 +221,7 @@ def test_device_comes_from_env(monkeypatch):
     assert r.json()["device"] == "cuda"
 
 
-def test_gpu_encodes_images_two_at_a_time_and_frees_the_cache():
+def test_gpu_frees_the_cache_after_each_request():
     model, freed = FakeModel(), []
     c = TestClient(create_app(model=model, device="cuda", free_cache=lambda: freed.append(1)))
     r = c.post(
@@ -234,17 +234,9 @@ def test_gpu_encodes_images_two_at_a_time_and_frees_the_cache():
         },
     )
     assert r.status_code == 200
-    (_, text_kwargs), (_, image_kwargs) = model.calls
-    assert "batch_size" not in text_kwargs
-    assert image_kwargs["batch_size"] == 2
+    # the whole request in one pass per kind: the caller (ingest) decides the batch size
+    assert all("batch_size" not in kwargs for _, kwargs in model.calls)
     assert freed == [1]  # once per request
-
-
-def test_cpu_keeps_the_default_batch_and_frees_nothing(model):
-    c = TestClient(create_app(model=model))
-    c.post("/embed", json={"items": [{"kind": "image", "image_b64": png_b64()}]})
-    (_, kwargs), = model.calls
-    assert "batch_size" not in kwargs
 
 
 @pytest.mark.parametrize("bad", ["gpu", "CUDA", "mps"])

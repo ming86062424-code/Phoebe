@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 MAX_TEXT_CHARS = 8192
 CANDIDATE_FACTOR = 4  # each retrieval path returns top_k * 4 candidates for fusion
 DEFAULT_VECTOR_WEIGHT = 0.5  # KB_VECTOR_WEIGHT; the keyword path gets the rest
-# page images per embedding request: ~8 PNGs of a 1536 px page stay far below the
-# embedder's 100 MB request cap, and only one batch of image bytes is held at a time
-IMAGE_BATCH_SIZE = 8
+# Page images per embedding request. The embedder runs a whole request in one forward
+# pass, so this is also how many page images (each with its page text) it holds at once:
+# 8 at a time peaked at ~4.7 GB of VRAM on the 6 GB RTX 2060 in GPU mode, 2 needs ~1 GiB
+# less for ~6 % more time (docs/gpu-memory.md). One number for CPU and GPU mode.
+IMAGE_BATCH_SIZE = 2
 
 
 class Embedder(Protocol):
