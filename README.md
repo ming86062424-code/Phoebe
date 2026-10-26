@@ -202,6 +202,14 @@ npx tsc -b       # 型別檢查
 npm run lint     # 程式風格檢查
 ```
 
+**效能測試**（僅在需要時手動執行，不屬於上面的自動化測試；需要 Docker 服務都在跑，會跑好幾分鐘）：
+
+```
+uv run python -m scripts.benchmark
+```
+
+用固定的情境實際跑文件處理、搜尋、對話，報告寫到 `docs/benchmarks/`，並和基準比較，說明見 [docs/benchmarks.md](docs/benchmarks.md)。
+
 **LLM 回答品質評測**（僅手動執行；需要真實的 Ollama，會跑數分鐘；分數僅供觀察，不是通過／失敗的門檻）：
 
 ```

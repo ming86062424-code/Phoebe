@@ -1,0 +1,12 @@
+{
+  "description": "固定的效能測試情境：檔案在 test_data/（不在 git 裡），換情境時請另存新檔，不要改這份，否則前後無法比較",
+  "documents": [
+    {"file": "test_data/草莓園入園方案.pdf", "parsers": ["liteparse", "lightonocr"]},
+    {"file": "test_data/rag/01_人事規章/請假制度.md", "parsers": ["text"]}
+  ],
+  "knowledge_base_document": "test_data/草莓園入園方案.pdf",
+  "questions": [
+    "草莓園入園要多少錢？",
+    "園區裡有哪些設施？"
+  ]
+}
