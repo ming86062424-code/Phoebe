@@ -166,19 +166,43 @@ uv run python -m app.kb.reprocess_all
 
 ## 測試
 
-單元測試（不需要 Milvus）：
+自動化測試分成三組，各自在對應的目錄執行。大部分測試把 LLM、embedder、Milvus、解析器換成測試替身，不需要 GPU、網路或 Docker。
+
+**後端**（專案根目錄，約 3–4 分鐘）：
 
 ```
-uv run pytest
+uv run pytest -q
 ```
 
-本機執行應用程式或整合測試需要 Milvus（以 Docker 執行）：`cd docker && docker compose up -d milvus`。整合測試標記為 `milvus`，連不上就自動略過：
+- `-q` 只印每個測試的結果符號和最後的總結；`-v` 會逐一列出每個測試的名稱。
+- 只跑某個檔案或某個測試：`uv run pytest tests/test_monitor.py`、`uv run pytest tests/test_monitor.py::test_chat_trace_finishes_once`。
+- 連真實服務的整合測試也在裡面：標記為 `milvus`（需要 Milvus）與 `embedder`（需要 embedder 服務）的測試，服務連得上時會一起執行，連不上就自動略過。只跑或排除它們：
+
+  ```
+  uv run pytest -m milvus
+  uv run pytest -m embedder
+  uv run pytest -m "not milvus and not embedder"
+  ```
+
+  服務的位址用 `MILVUS_URI`、`EMBEDDER_URL` 指定（預設 `http://localhost:19530`、`http://localhost:8002`）；以 Docker 啟動：`cd docker && docker compose up -d milvus embedder`。
+
+**embedder 服務**（它有自己的套件環境，用假模型，不下載模型，幾秒就跑完）：
 
 ```
-MILVUS_URI=http://127.0.0.1:19530 uv run pytest -m milvus
+cd embedder
+uv run pytest -q
 ```
 
-評測（僅手動執行；需要真實的 Ollama，會跑數分鐘；分數僅供觀察，不是通過／失敗的門檻）：
+**前端**（約 1 分鐘）：
+
+```
+cd frontend
+npx vitest run
+npx tsc -b       # 型別檢查
+npm run lint     # 程式風格檢查
+```
+
+**LLM 回答品質評測**（僅手動執行；需要真實的 Ollama，會跑數分鐘；分數僅供觀察，不是通過／失敗的門檻）：
 
 ```
 uv run --group eval pytest evals -v
