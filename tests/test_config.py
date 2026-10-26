@@ -474,3 +474,13 @@ def test_monitor_service_reads_docker_and_the_gpu_without_secrets():
     }
     devices = monitor["deploy"]["resources"]["reservations"]["devices"]
     assert devices == [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}]
+
+
+def test_every_service_rotates_its_logs():
+    """Docker keeps json-file logs without a limit by default: every service caps them."""
+    services = _compose()["services"]
+    for name, svc in services.items():
+        assert svc["logging"] == {
+            "driver": "json-file",
+            "options": {"max-size": "10m", "max-file": "3"},
+        }, name

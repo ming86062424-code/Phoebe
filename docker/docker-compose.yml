@@ -8,10 +8,19 @@ x-env: &env
     - path: .env
       required: false
 
+# 每個服務的 log 最多保留 3 個 10 MB 的檔案，舊的自動刪除（Docker 預設沒有上限，會一直長大）。
+# 看 log：docker compose logs -f <服務>；容器重建後舊 log 會一起刪除
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   etcd:
     image: quay.io/coreos/etcd:v3.5.25
     restart: unless-stopped
+    logging: *logging
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
       - ETCD_AUTO_COMPACTION_RETENTION=1000
@@ -31,6 +40,7 @@ services:
   minio:
     image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
     restart: unless-stopped
+    logging: *logging
     environment:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
@@ -49,6 +59,7 @@ services:
   milvus:
     image: milvusdb/milvus:v2.6.25
     restart: unless-stopped
+    logging: *logging
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
@@ -82,6 +93,7 @@ services:
       dockerfile: docker/embedder.Dockerfile
     image: phoebe-embedder:local
     restart: unless-stopped
+    logging: *logging
     # 不繼承整份 docker/.env（含 GEMINI_API_KEY 等）：只傳需要的變數
     environment:
       EMBED_MODEL_ID: ${EMBED_MODEL_ID:-google/embeddinggemma-2}
@@ -117,6 +129,7 @@ services:
       target: web
     image: phoebe-web:local
     restart: unless-stopped
+    logging: *logging
     depends_on:
       milvus:
         condition: service_healthy
@@ -166,6 +179,7 @@ services:
       target: ingest
     image: phoebe-ingest:local
     restart: unless-stopped
+    logging: *logging
     depends_on:
       web:
         condition: service_healthy
@@ -204,6 +218,7 @@ services:
       target: web
     image: phoebe-web:local
     restart: unless-stopped
+    logging: *logging
     command: ["python", "-m", "app.monitor.collector_main"]
     # 不載入整份 docker/.env（含 GEMINI_API_KEY 等）：只傳需要的變數
     environment:
@@ -237,6 +252,7 @@ services:
     image: vllm/vllm-openai:v0.30.0
     profiles: ["lightonocr"]
     restart: unless-stopped
+    logging: *logging
     ports:
       # 無驗證的 GPU 端點，只對本機開放
       - "127.0.0.1:8001:8000"
