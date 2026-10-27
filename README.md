@@ -210,11 +210,14 @@ uv run python -m scripts.benchmark
 
 用固定的情境實際跑文件處理、搜尋、對話，報告寫到 `docs/benchmarks/`，並和基準比較，說明見 [docs/benchmarks.md](docs/benchmarks.md)。
 
-**LLM 回答品質評測**（僅手動執行；需要真實的 Ollama，會跑數分鐘；分數僅供觀察，不是通過／失敗的門檻）：
+**AI 品質評測**（僅手動執行，用 DeepEval；裁判模型由 `EVAL_JUDGE_MODEL` 決定，預設是 Gemini，付費方案會計費，免費方案每分鐘只能呼叫 15 次，每天 500 次，所以 RAG 評測要跑 1 小時左右，一天最好只跑一次；分數僅供觀察，不是通過／失敗的門檻）：
 
 ```
-uv run --group eval pytest evals -v
+uv run --group eval pytest evals/test_rag_quality.py   # 知識庫問答（RAG），需要 Docker 服務都在跑
+uv run --group eval pytest evals/test_chat_quality.py  # 一般聊天，需要本機 Ollama 的 CHAT_MODEL
 ```
+
+RAG 評測用 `test_data/rag/` 的 25 份文件和 43 題，分開評「檢索有沒有找對段落」和「回答是否正確、有沒有編造」，報告寫到 `evals/reports/`，說明見 [docs/rag-eval.md](docs/rag-eval.md)。
 
 注意：單純執行 `uv sync` 會移除 eval、ocr 群組的套件；`uv run --group eval`／`uv run --group ocr` 會重新安裝。
 
@@ -253,7 +256,7 @@ uv run --group eval pytest evals -v
 | `OLLAMA_NUM_CTX` | `16384` | Ollama 每次對話的 context 長度。Ollama 本身預設只有 4096，知識庫回答帶整頁圖（每張約 740 token）時會被截斷 |
 | `ADMIN_USERNAME` | 空 | 管理員帳號，啟動時自動建立（3–32 字元） |
 | `ADMIN_PASSWORD` | 空 | 管理員密碼，每次啟動同步到資料庫（8 字元以上，最多 72 位元組） |
-| `EVAL_JUDGE_MODEL` | `qwen3.5:4b` | 評測的裁判模型 |
+| `EVAL_JUDGE_MODEL` | `gemini-3.5-flash-lite` | 評測（`evals/`）的裁判模型：`gemini-` 開頭用 Gemini（需要 `GEMINI_API_KEY`），其他名稱用本機 Ollama 的模型。只有手動執行評測時使用，容器不讀取 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
 | `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |
@@ -317,7 +320,7 @@ docker compose --profile lightonocr down
 - `scripts/` — 手動驗證腳本
 - `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試
-- `evals/` — 聊天品質評測（deepeval）
+- `evals/` — AI 品質評測（DeepEval）：一般聊天、知識庫問答（RAG）
 
 ## 開發流程
 
