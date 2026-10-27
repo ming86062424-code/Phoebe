@@ -4,6 +4,14 @@
 - 子專案：1 / 4（部署基礎 → LLM 供應商切換 → Milvus 混合查詢 → 多模態知識庫）
 - 狀態：使用者授權直接開發（規格與計畫不需逐段確認）
 
+> **之後的變更**（2026-10-27 補註）：以下內容是當時的設計，保留作為紀錄。後來改變的部分：
+>
+> - `worker` 全面改名為 `ingest`（`KB_WORKER_*` → `KB_INGEST_*`、`worker_main` → `ingest_main`），vllm 改成選用的 `lightonocr` profile，`--max-num-seqs` 改為 4（`2026-10-22-ingest-concurrency-design.md`）。
+> - vLLM 改成直接指定 KV cache 大小（`OCR_VLLM_KV_CACHE_MEMORY=512M`），`OCR_VLLM_GPU_UTIL` 預設改為 0.7，只當作啟動檢查（`docs/gpu-memory.md`）。
+> - Chroma 與 `migrate-chroma` profile、`app.kb.migrate_chroma` 都已移除。
+> - Docker 的資料位置：SQLite 在 volume `phoebe-db`（掛在 `/db`），上傳檔案在主機目錄 `docker/volumes/kb/`，Milvus 與模型快取在各自的 volume（`docs/docker-storage.md`）。
+> - 新增 `monitor` 服務（`2026-10-25-monitoring-design.md`），以及 embedder 的 GPU 模式（`2026-10-24-embedder-gpu-mode-design.md`）。
+
 ## 1. 目的與範圍
 
 **目的**：讓 Phoebe 能以兩種方式啟動，並為後續子專案打好設定與部署基礎：
