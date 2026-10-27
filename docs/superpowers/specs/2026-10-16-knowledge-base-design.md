@@ -4,6 +4,13 @@
 - 狀態：已確認（使用者授權直接開發）
 - 前一版規格：`docs/superpowers/specs/2026-10-16-app-shell-design.md`
 
+> **之後的變更**（2026-10-27 補註）：以下內容是當時的設計，保留作為紀錄。後來改變的部分：
+>
+> - 不再使用 LlamaIndex 與 Chroma：向量庫改為 Milvus 混合查詢（`2026-10-19-milvus-hybrid-design.md`），embedding 改由獨立的 embedder 服務產生（`2026-10-19-multimodal-kb-design.md`）。
+> - 不再用 `SentenceSplitter` 切塊：PDF 每頁一個 chunk，txt／md 依段落或標題切塊（`docs/parsers.md`）。
+> - 解析器改成**知識庫層級的設定**，不在上傳時選；支援的檔案類型擴充為 PDF、txt、md、圖檔。
+> - `app/kb/worker.py` 改名為 `app/kb/ingest.py`（`2026-10-22-ingest-concurrency-design.md`）。
+
 ## 1. 目的與範圍
 
 讓使用者上傳 PDF 建立個人知識庫，並在 AI 對話中選用知識庫，回答附上來源（檔名＋頁碼）。

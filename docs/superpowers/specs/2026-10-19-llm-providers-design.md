@@ -5,6 +5,12 @@
 - 建立在子專案 1（`feature/deployment`，PR #6）之上
 - 狀態：使用者授權直接開發（規格與計畫不需逐段確認）
 
+> **之後的變更**（2026-10-27 補註）：以下內容是當時的設計，保留作為紀錄。後來改變的部分：
+>
+> - 管理員改由 `ADMIN_USERNAME`、`ADMIN_PASSWORD` 指定，啟動時自動建立帳號並同步密碼；`ADMIN_USERNAMES` 已不再使用，設定了會拒絕啟動。
+> - 預設的聊天供應商改為 Gemini（`LLM_PROVIDER`，預設 `gemini`）。
+> - embedding 已不使用 Ollama，改由 embedder 服務產生（`2026-10-19-multimodal-kb-design.md`）。
+
 ## 1. 目的與範圍
 
 **目的**：聊天可以使用本機 Ollama 或雲端 Gemini，由管理員在系統設定頁切換，讓 GPU 可以專供知識庫解析（子專案 1 的 vLLM OCR）。

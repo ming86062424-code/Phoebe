@@ -5,6 +5,12 @@
 - 建立在子專案 2（`feature/llm-providers`，PR #7）之上
 - 狀態：使用者授權直接開發
 
+> **之後的變更**（2026-10-27 補註）：以下內容是當時的設計，保留作為紀錄。後來改變的部分：
+>
+> - 兩路結果的合併改為**加權相加**（與 Milvus WeightedRanker 相同的正規化），不再用 RRF。向量權重由 `KB_VECTOR_WEIGHT` 設定（預設 0.5），每個知識庫也可以自訂。
+> - embedding 改由 embedder 服務產生（`2026-10-19-multimodal-kb-design.md`），不再使用 Ollama 與 `SentenceSplitter`。
+> - Chroma 遷移指令與 `migrate` dependency group 已移除。
+
 ## 1. 目的與範圍
 
 **目的**：把知識庫的向量庫從 Chroma 換成 Milvus，檢索改為「BM25 關鍵字 ＋ 向量」混合查詢，提升專有名詞、編號、代碼等精確字詞的命中率。

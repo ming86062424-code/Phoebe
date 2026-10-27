@@ -1,14 +1,13 @@
 # Phoebe
 
-在本機 Ollama 上運作的聊天應用（FastAPI + SQLite + React），附多模態知識庫（PDF、txt、md、圖檔；Milvus，BM25 + 向量混合檢索，文字與圖片共用同一個向量空間）。
+AI 聊天應用（FastAPI + SQLite + React；聊天模型可在雲端 Gemini 與本機 Ollama 之間切換，預設 Gemini），附多模態知識庫（PDF、txt、md、圖檔；Milvus，BM25 + 向量混合檢索，文字與圖片共用同一個向量空間）。
 
 ## 事前準備
 
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/)
 - Node 22 以上（前端建置與開發用）
-- Ollama 已啟動，位於 http://localhost:11434
-- 下載模型：`ollama pull gemma4:e4b`（評測另需 `ollama pull qwen3.5:4b`）
+- 聊天模型（擇一）：Gemini API key（`GEMINI_API_KEY`，見下方「Gemini」），或本機 Ollama（位於 http://localhost:11434，`ollama pull gemma4:e4b`）
 - 知識庫 Embedding 服務（`embedder`，以 Docker 執行）：`cd docker && docker compose up -d embedder`，位於 http://localhost:8002（見下方「Embedding 服務」）
 
 ## 安裝與執行
@@ -110,9 +109,9 @@ cd frontend && npm run typecheck
 
 ### Embedding 服務（embedder）
 
-文字與圖片共用同一個 embedding 模型 `google/embeddinggemma-2`（768 維），由獨立的 `embedder` 服務提供（`embedder/`，sentence-transformers，CPU float32，不需 GPU）。應用程式以 `EMBEDDER_URL` 連線（本機預設 `http://localhost:8002`；Docker 內固定為 `http://embedder:8000`）。因此「用文字問、命中圖片內容」可以直接運作，不需要先把圖片轉成文字。
+文字與圖片共用同一個 embedding 模型 `google/embeddinggemma-2`（768 維），由獨立的 `embedder` 服務提供（`embedder/`，sentence-transformers，float32；預設在 CPU 執行，不用 LightOnOCR 時可改用 GPU，見 [docker/README.md](docker/README.md)）。應用程式以 `EMBEDDER_URL` 連線（本機預設 `http://localhost:8002`；Docker 內固定為 `http://embedder:8000`）。因此「用文字問、命中圖片內容」可以直接運作，不需要先把圖片轉成文字。
 
-- 首次啟動會從 Hugging Face 下載模型（約 1–2 GB），第一次啟動會等很久；載入完成前 `GET /health` 回 503，檢索與解析會顯示「無法連線到 embedding 服務」。
+- 首次啟動會從 Hugging Face 下載模型（約 1.5 GB），第一次啟動會等很久；載入完成前 `GET /health` 回 503，檢索與解析會顯示「無法連線到 embedding 服務」。
 - 本機啟動：`cd docker && docker compose up -d embedder`。細節與疑難排解見 [docker/README.md](docker/README.md)。
 
 PDF 與圖檔的解析器是**知識庫層級的設定**（知識庫頁上方的「知識庫設定」，新建的知識庫預設 LiteParse），之後上傳的 PDF 與圖檔一律使用這個設定；txt、md 一律用文字解析，不受影響。
@@ -275,12 +274,15 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 43 題，分開評「檢索�
 | `OCR_TIMEOUT_SECONDS` | `600` | 每一頁 OCR 請求的逾時秒數 |
 | `KB_STALE_SECONDS` | `120` | 解析中逾時多久視為卡住並重新排入 |
 | `KB_HEARTBEAT_SECONDS` | `30` | 處理中的文件刷新 `updated_at` 的間隔 |
-| `REPLY_LOCK_TTL_SECONDS` | `600` | 對話回覆鎖逾時秒數 |
+| `REPLY_LOCK_TTL_SECONDS` | `90` | 對話回覆鎖逾時秒數（串流中每 30 秒更新一次，必須大於 30） |
 | `OCR_BACKEND` | `transformers` | `transformers` 或 `vllm` |
 | `VLLM_BASE_URL` | `http://localhost:8001/v1` | vLLM 位址 |
 | `OCR_VLLM_KV_CACHE_MEMORY` | `512M` | vLLM 的 KV cache 大小（僅 Docker，見 [docs/gpu-memory.md](docs/gpu-memory.md)） |
 | `OCR_VLLM_GPU_UTIL` | `0.7` | vLLM 啟動時的顯存檢查比例，剩餘顯存不足就拒絕啟動（僅 Docker） |
+| `OCR_VLLM_MAX_MODEL_LEN` | `18000` | vLLM 的最大上下文長度（僅 Docker） |
 | `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 同時處理的請求上限（僅 Docker） |
+| `EMBED_MODEL_ID` | `google/embeddinggemma-2` | embedder 載入的模型（僅 Docker，設在 `docker/.env`）；更換後需重建知識庫 |
+| `EMBED_IMAGE_TOKENS` | `280` | embedder 每張圖片的 soft token 數，只接受 70、140、280、560、1120（僅 Docker） |
 | `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |
@@ -314,14 +316,20 @@ docker compose --profile lightonocr down
 
 ## 專案結構
 
-- `app/` — 後端（設定、資料庫、驗證、對話、Ollama 客戶端、路由）
+- `app/` — 後端（設定、資料庫、驗證、對話、路由）
+- `app/llm/` — 聊天模型的客戶端（Ollama、Gemini）
 - `app/kb/` — 知識庫（資料存取、解析器、索引、背景處理）
 - `app/monitor/` — 監控（任務事件、資源取樣、monitor 服務）
-- `scripts/` — 手動驗證腳本
+- `embedder/` — Embedding 服務（獨立的套件環境與測試）
+- `docker/` — Docker 部署（compose、Dockerfile、說明）
+- `scripts/` — 手動執行的腳本（效能測試、資源紀錄、OCR 驗證）
+- `docs/` — 說明文件；`docs/superpowers/` 是各功能開發時的設計規格與計畫（歷史紀錄）
 - `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試
 - `evals/` — AI 品質評測（DeepEval）：一般聊天、知識庫問答（RAG）
 
 ## 開發流程
 
-所有變更都透過 feature 分支與 Pull Request 進行，由 repo 擁有者審查後合併，不直接推送到 `main`。
+- 功能在 `feature/*` 分支開發（從 `develop` 開出），完成後合併回 `develop`。
+- 要發布時從 `develop` 開 `release/YYYY-MM-DD` 分支，對 `main` 開 Pull Request，由 repo 擁有者審查後合併。
+- 不直接推送到 `main`。

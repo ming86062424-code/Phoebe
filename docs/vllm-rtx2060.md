@@ -14,7 +14,9 @@
 | 模型 | `lightonai/LightOnOCR-3-0.8B` |
 | NVIDIA 驅動 | 580.88（CUDA 13.0） |
 
-## 最後的設定
+## 當時的設定（2026-10-23）
+
+> 這是改用 KV cache 大小之前的設定，只留作對照。目前的參數以 `docker/docker-compose.yml` 為準：模型改成第一個位置參數（`--model` 已被標為淘汰），另外加上 `--kv-cache-memory-bytes ${OCR_VLLM_KV_CACHE_MEMORY:-512M}`，`--gpu-memory-utilization` 預設改為 0.7。
 
 `docker/docker-compose.yml` 的 `vllm` 服務：
 
@@ -118,7 +120,7 @@ LightOnOCR 一份文件可以同時送好幾頁給 vLLM（`OCR_CONCURRENCY`）�
 
 ## 和主機 Ollama 共用 GPU
 
-- vLLM 會依 `OCR_VLLM_GPU_UTIL` 一次佔走約 4.8 GiB 顯存，而且服務執行期間一直保留。這時主機上的 Ollama 幾乎拿不到顯存。
+- 當時 vLLM 會依 `OCR_VLLM_GPU_UTIL` 一次佔走約 4.8 GiB 顯存，而且服務執行期間一直保留，主機上的 Ollama 幾乎拿不到顯存。2026-10-24 改成指定 KV cache 大小後，vLLM 約佔 2.8 GB，但 6 GB 顯卡剩下的空間仍放不下 `gemma4:e4b`（6.6 GB），結論不變。
 - 實測 vllm 執行時，用 Ollama 載入 `gemma4:e4b` 聊天會出現 503，錯誤包含 `llama-server reported out-of-memory during startup`。
 - 就算載得進去，模型也幾乎都在 CPU 上執行，`/api/ps` 顯示只用到 0.3 GB 顯存，回答很慢。
 
@@ -129,7 +131,7 @@ LightOnOCR 一份文件可以同時送好幾頁給 vLLM（`OCR_CONCURRENCY`）�
 
 ## 換成更大顯存的 GPU 時
 
-- 可以調高 `OCR_VLLM_GPU_UTIL` 和 `OCR_VLLM_MAX_NUM_SEQS`。
+- 可以調高 `OCR_VLLM_KV_CACHE_MEMORY` 和 `OCR_VLLM_MAX_NUM_SEQS`（每頁約需 7,000 個 token，見 [gpu-memory.md](gpu-memory.md)）。
 - 可以拿掉 compose 裡的 `--enforce-eager`，啟用 CUDA graph，吞吐量較高。
 - Ampere（RTX 30 系列）以上的顯卡支援 bfloat16，可以把 `--dtype` 改回官方建議的 `bfloat16`。
 - 改完後執行 `docker compose --profile lightonocr up -d vllm`，再用 `docker compose logs -f vllm` 確認有出現 KV cache 大小的訊息，沒有出現上面那些錯誤。

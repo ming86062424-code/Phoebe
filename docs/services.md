@@ -1,6 +1,6 @@
 # 服務架構
 
-`cd docker && docker compose up` 會啟動 8 個服務，另外還會用到兩個外部的聊天模型服務。這份文件說明每個服務的工作、它們怎麼互相呼叫，以及資料存在哪裡。設定與操作方式見 [docker/README.md](../docker/README.md)。
+`cd docker && docker compose up` 會啟動 7 個服務（加上 `--profile lightonocr` 時再多一個 vllm，共 8 個），另外還會用到兩個外部的聊天模型服務。這份文件說明每個服務的工作、它們怎麼互相呼叫，以及資料存在哪裡。設定與操作方式見 [docker/README.md](../docker/README.md)。
 
 ## 總覽
 
