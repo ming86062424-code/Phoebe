@@ -65,7 +65,7 @@ def test_settings_from_env_defaults_and_override(monkeypatch):
     monkeypatch.delenv("CHAT_MODEL", raising=False)
     monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
     assert Settings.from_env().chat_model == "gemma4:e4b"
-    assert Settings.from_env().eval_judge_model == "qwen3.5:4b"
+    assert Settings.from_env().eval_judge_model == "gemini-3.5-flash-lite"
     monkeypatch.setenv("SESSION_DAYS", "3")
     assert Settings.from_env().session_days == 3
 
