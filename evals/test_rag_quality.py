@@ -25,6 +25,9 @@ dataset = EvaluationDataset()
 dataset.add_goldens_from_json_file(file_path=str(HERE / "rag.dataset.json"))
 GOLDENS = dataset.goldens
 RETRIEVAL_GOLDENS = [g for g in GOLDENS if g.additional_metadata["sources"]]
+# a bare code or a short phrase only checks what retrieval finds: there is no question to answer
+RETRIEVAL_ONLY = {"keyword", "semantic_phrase"}
+ANSWER_GOLDENS = [g for g in GOLDENS if g.additional_metadata["category"] not in RETRIEVAL_ONLY]
 
 records: list[dict] = []
 _replies: dict[str, Reply] = {}
@@ -97,7 +100,7 @@ def test_retrieval(rag, golden: Golden):
     assert rank is not None, f"應出現的來源不在前 {len(reply.sources)} 段"
 
 
-@pytest.mark.parametrize("golden", GOLDENS, ids=_ids(GOLDENS))
+@pytest.mark.parametrize("golden", ANSWER_GOLDENS, ids=_ids(ANSWER_GOLDENS))
 def test_answer(rag, judge, golden: Golden):
     """The answer, scored by the judge model."""
     meta = golden.additional_metadata
