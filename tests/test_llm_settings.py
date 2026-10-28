@@ -70,7 +70,7 @@ def test_gemini_env_settings(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
     s = Settings.from_env()
-    assert (s.gemini_api_key, s.gemini_model) == ("", "gemini-2.5-flash")
+    assert (s.gemini_api_key, s.gemini_model) == ("", "gemini-3.5-flash-lite")
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     assert Settings.from_env().gemini_api_key == "k"
 

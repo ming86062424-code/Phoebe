@@ -117,7 +117,7 @@ class Settings:
     admin_username: str = ""
     admin_password: str = field(default="", repr=False)
     gemini_api_key: str = field(default="", repr=False)
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     # chat provider until an admin picks one on the settings page
     llm_provider: str = "gemini"
     # Ollama's own default context is small (4096): a knowledge-base answer with page

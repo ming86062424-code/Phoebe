@@ -9,6 +9,7 @@
 >
 > - 管理員改由 `ADMIN_USERNAME`、`ADMIN_PASSWORD` 指定，啟動時自動建立帳號並同步密碼；`ADMIN_USERNAMES` 已不再使用，設定了會拒絕啟動。
 > - 預設的聊天供應商改為 Gemini（`LLM_PROVIDER`，預設 `gemini`）。
+> - `GEMINI_MODEL` 預設改為 `gemini-3.5-flash-lite`。
 > - embedding 已不使用 Ollama，改由 embedder 服務產生（`2026-10-19-multimodal-kb-design.md`）。
 
 ## 1. 目的與範圍
