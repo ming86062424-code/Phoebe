@@ -151,7 +151,7 @@ docker compose logs -f ingest             # ingest 依序重新處理
 
 - `ADMIN_USERNAME`、`ADMIN_PASSWORD`：管理員帳密，web 啟動時自動建立帳號並同步密碼（改密碼後 `docker compose restart web ingest`）。舊版的 `ADMIN_USERNAMES` 已不再使用。管理員可看到「系統設定」頁，設定LLM 供應商（Ollama／Gemini）、模型（即時取得清單）、系統提示詞（最多 4000 字）與 temperature（自訂或預設值）。
 - `GEMINI_API_KEY`：到 [Google AI Studio](https://aistudio.google.com/apikey) 建立金鑰後填入。金鑰只放在 `docker/.env`，不會出現在介面或資料庫；留空則 Gemini 選項停用。
-- `GEMINI_MODEL`：預設 `gemini-2.5-flash`。
+- `GEMINI_MODEL`：預設 `gemini-3.5-flash-lite`。
 
 GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 Gemini。Embedding 一律使用 `embedder` 容器（預設 CPU，見上方「CPU／GPU 兩種模式」）。
 
