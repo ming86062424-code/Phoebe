@@ -82,7 +82,7 @@ def _check_admin(username: str, password: str) -> None:
 class Settings:
     ollama_base_url: str = "http://localhost:11434"
     chat_model: str = "gemma4:e4b"
-    eval_judge_model: str = "gemini-3.5-flash-lite"
+    eval_judge_model: str = "gemini-3.1-flash-lite"
     db_path: str = str(PROJECT_ROOT / "data" / "app.db")
     session_days: int = 7
     chat_think: bool = True

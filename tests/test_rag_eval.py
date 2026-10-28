@@ -2,7 +2,9 @@ import json
 
 import pytest
 
-from evals.rag_report import render_markdown, source_rank, summarize, write_report
+from pathlib import Path
+
+from evals.rag_report import CATEGORY_LABEL, render_markdown, source_rank, summarize, write_report
 
 LEAVE = {"file": "01_人事規章/請假制度.md", "section": "特別休假的計算與遞延"}
 
@@ -138,3 +140,20 @@ def test_daily_limit_is_not_retried():
     assert waits == []
     assert short_error(RuntimeError(GEMINI_DAILY)) == "Gemini 免費方案今日的請求次數已用完"
     assert short_error(RuntimeError("x" * 300)).endswith("…")
+
+
+def test_dataset_categories_and_answers():
+    """Every question has a known category; the bare codes and short phrases only test
+    retrieval, so they carry sources but no expected answer."""
+    path = Path(__file__).resolve().parent.parent / "evals" / "rag.dataset.json"
+    goldens = json.loads(path.read_text(encoding="utf-8"))
+    assert len({g["name"] for g in goldens}) == len(goldens)
+    for g in goldens:
+        meta = g["additional_metadata"]
+        assert meta["category"] in CATEGORY_LABEL, g["name"]
+        if meta["category"] in ("keyword", "semantic_phrase"):
+            assert meta["sources"] and not g.get("expected_output"), g["name"]
+        elif meta["category"] == "no_answer":
+            assert not meta["sources"], g["name"]
+        else:
+            assert meta["sources"] and g.get("expected_output"), g["name"]

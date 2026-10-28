@@ -415,8 +415,144 @@
     }
   },
   {
+    "name": "keyword-question-1",
+    "input": "FL-360C 濾網多久要更換？",
+    "expected_output": "約一年（每天運轉 8 小時估算）；運轉滿 3200 小時亮紅燈必須更換，HEPA 與活性碳是一體的複合濾網，不能分開換",
+    "additional_metadata": {
+      "category": "keyword_question",
+      "sources": [
+        {
+          "file": "02_家電手冊/空氣清淨機AP-360.md",
+          "section": "濾網組成與更換時機"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-question-2",
+    "input": "BK-T1-DAILY 這個備份作業什麼時候執行？備份保存多久？",
+    "expected_output": "第一級資料庫的每日增量備份，每天凌晨 2 點執行，保存 35 天",
+    "additional_metadata": {
+      "category": "keyword_question",
+      "sources": [
+        {
+          "file": "05_資訊維運/備份政策.md",
+          "section": "備份週期與保存期限"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-question-3",
+    "input": "DS-20 除垢劑要怎麼使用？",
+    "expected_output": "在水箱倒入一包 DS-20 與 500 毫升的水後啟動除垢程序，全程約 35 分鐘，出水口下方要放 1 公升以上的容器",
+    "additional_metadata": {
+      "category": "keyword_question",
+      "sources": [
+        {
+          "file": "02_家電手冊/全自動咖啡機CM-80.md",
+          "section": "除垢與錯誤代碼"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-question-4",
+    "input": "adm- 開頭的帳號可以用來收發電子郵件嗎？",
+    "expected_output": "不行；adm- 開頭的特權帳號不能收發電子郵件或瀏覽網頁，只能透過特權存取管理平台登入",
+    "additional_metadata": {
+      "category": "keyword_question",
+      "sources": [
+        {
+          "file": "05_資訊維運/帳號與密碼管理.md",
+          "section": "特權帳號與離職停權"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-question-5",
+    "input": "分機 2317 是誰？可以找他申請什麼？",
+    "expected_output": "人資部的林雅婷專員，是同仁關懷基金的申請窗口（住院前 10 日補足另一半薪資），需檢附住院證明與出院病歷摘要",
+    "additional_metadata": {
+      "category": "keyword_question",
+      "sources": [
+        {
+          "file": "01_人事規章/請假制度.md",
+          "section": "病假與住院病假"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-phrase-1",
+    "input": "生完小孩在家帶孩子的長假",
+    "additional_metadata": {
+      "category": "semantic_phrase",
+      "sources": [
+        {
+          "file": "01_人事規章/請假制度.md",
+          "section": "家庭照顧假與育嬰留職停薪"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-phrase-2",
+    "input": "房間潮濕衣服晾不乾",
+    "additional_metadata": {
+      "category": "semantic_phrase",
+      "sources": [
+        {
+          "file": "02_家電手冊/除濕機DH-16.md",
+          "section": "乾衣模式與排水"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-phrase-3",
+    "input": "被壞人威脅開門",
+    "additional_metadata": {
+      "category": "semantic_phrase",
+      "sources": [
+        {
+          "file": "02_家電手冊/智慧門鎖DL-9.md",
+          "section": "安全警報與防撬設計"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-phrase-4",
+    "input": "員工離開公司後的電腦帳號",
+    "additional_metadata": {
+      "category": "semantic_phrase",
+      "sources": [
+        {
+          "file": "05_資訊維運/帳號與密碼管理.md",
+          "section": "特權帳號與離職停權"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-phrase-5",
+    "input": "甜點烤完會扁掉",
+    "additional_metadata": {
+      "category": "semantic_phrase",
+      "sources": [
+        {
+          "file": "04_料理食譜/烘焙點心.md",
+          "section": "戚風蛋糕"
+        }
+      ]
+    }
+  },
+  {
     "name": "semantic-1",
     "input": "生小孩之後可以請長假在家帶小孩嗎？",
+    "expected_output": "可以申請育嬰留職停薪：任職滿 6 個月、子女未滿 3 歲，每一子女最長 2 年、最短以 6 個月為單位，需在開始日 30 天前以書面向人資部申請",
     "additional_metadata": {
       "category": "semantic",
       "sources": [
@@ -430,6 +566,7 @@
   {
     "name": "semantic-2",
     "input": "家裡很潮濕，衣服晾不乾怎麼辦？",
+    "expected_output": "使用除濕機的乾衣模式：衣物晾在出風口前方 1 到 2 公尺並關閉門窗，4 坪房間約 4 到 5 小時可以乾",
     "additional_metadata": {
       "category": "semantic",
       "sources": [
@@ -443,6 +580,7 @@
   {
     "name": "semantic-3",
     "input": "有人拿刀逼我開門怎麼辦？",
+    "expected_output": "使用脅迫指紋開門：門會正常開啟，同時在背景發送求救通知給緊急聯絡人，畫面不會有異常顯示",
     "additional_metadata": {
       "category": "semantic",
       "sources": [
@@ -456,6 +594,7 @@
   {
     "name": "semantic-4",
     "input": "員工離開公司後電腦帳號怎麼處理？",
+    "expected_output": "資訊部要在最後工作日當天晚上 12 點前停用所有帳號（SSO、特權帳號、VPN 憑證），保留 90 天後永久刪除；被終止契約則在通知後 1 小時內停用",
     "additional_metadata": {
       "category": "semantic",
       "sources": [
@@ -469,6 +608,7 @@
   {
     "name": "semantic-5",
     "input": "甜點要怎麼做才不會塌下去？",
+    "expected_output": "以戚風蛋糕為例：出爐後立刻倒扣放涼至少 2 小時，是不回縮、不塌陷的關鍵",
     "additional_metadata": {
       "category": "semantic",
       "sources": [
@@ -527,8 +667,8 @@
   },
   {
     "name": "confusable-4",
-    "input": "10 分鐘內要做什麼？",
-    "expected_output": "P1 緊急告警要在 10 分鐘內回應",
+    "input": "官網打不開了，值班工程師要在多久內回應？",
+    "expected_output": "屬於 P1 緊急告警，要在 10 分鐘內回應並開始處理，同時在 #incident 頻道建立事件討論串",
     "additional_metadata": {
       "category": "confusable",
       "sources": [
