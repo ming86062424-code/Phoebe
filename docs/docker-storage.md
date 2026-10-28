@@ -6,7 +6,7 @@
 
 | 資料 | 存放方式 | 名稱或路徑 | 原因 |
 |---|---|---|---|
-| SQLite（帳號、對話、知識庫清單、設定） | Docker 管理的 volume | `phoebe_phoebe-db` | 資料庫：需要可靠的檔案鎖 |
+| SQLite（帳號、對話、知識庫清單、設定的 `app.db`；監控資料 `monitor.db`） | Docker 管理的 volume | `phoebe_phoebe-db` | 資料庫：需要可靠的檔案鎖 |
 | Milvus 向量資料 | Docker 管理的 volume | `phoebe_milvus-data` | 資料庫：大量隨機讀寫 |
 | etcd（Milvus 的設定儲存） | Docker 管理的 volume | `phoebe_etcd-data` | 資料庫：大量小檔案、需要 fsync |
 | minio（Milvus 的資料檔） | Docker 管理的 volume | `phoebe_minio-data` | 資料庫：大量小檔案 |

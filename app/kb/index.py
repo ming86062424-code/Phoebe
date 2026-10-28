@@ -2,6 +2,7 @@ import logging
 import math
 import re
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -14,9 +15,11 @@ logger = logging.getLogger(__name__)
 MAX_TEXT_CHARS = 8192
 CANDIDATE_FACTOR = 4  # each retrieval path returns top_k * 4 candidates for fusion
 DEFAULT_VECTOR_WEIGHT = 0.5  # KB_VECTOR_WEIGHT; the keyword path gets the rest
-# page images per embedding request: ~8 PNGs of a 1536 px page stay far below the
-# embedder's 100 MB request cap, and only one batch of image bytes is held at a time
-IMAGE_BATCH_SIZE = 8
+# Page images per embedding request. The embedder runs a whole request in one forward
+# pass, so this is also how many page images (each with its page text) it holds at once:
+# 8 at a time peaked at ~4.7 GB of VRAM on the 6 GB RTX 2060 in GPU mode, 2 needs ~1 GiB
+# less for ~6 % more time (docs/gpu-memory.md). One number for CPU and GPU mode.
+IMAGE_BATCH_SIZE = 2
 
 
 class Embedder(Protocol):
@@ -146,18 +149,22 @@ class KnowledgeIndex:
         filename: str,
         chunks: list[ParsedChunk],
         image_dir: Path | None = None,
+        timings: dict[str, float] | None = None,
     ) -> int:
         """Index the chunks as they are (one per page) and return how many were written.
 
         Replaces any chunks the document already has, so repeating it is harmless.
         "page_image" chunks read `image_dir / chunk.page_image.name`.
+        `timings`, when given, receives the seconds spent on "embed" and "store".
         """
         kept = [c for c in chunks if c.kind == "page_image" or c.text.strip()]
         if not kept:
             self._store.delete_document(kb_id, document_id)
             return 0
         # Embedding can take minutes for a big PDF; no lock is held.
+        started = time.perf_counter()
         embeddings = self._embed(filename, kept, image_dir)
+        embedded = time.perf_counter()
         self._ensure_ready(len(embeddings[0]))
         records = []
         for i, (chunk, embedding) in enumerate(zip(kept, embeddings, strict=True)):
@@ -188,6 +195,9 @@ class KnowledgeIndex:
         # a retry must not leave the previous attempt's chunks behind
         self._store.delete_document(kb_id, document_id)
         self._store.insert(records)
+        if timings is not None:
+            timings["embed"] = embedded - started
+            timings["store"] = time.perf_counter() - embedded
         return len(records)
 
     def _embed(
@@ -239,16 +249,27 @@ class KnowledgeIndex:
         self._store.delete_kb(kb_id)
 
     def search(
-        self, kb_id: int, query: str, top_k: int, vector_weight: float = DEFAULT_VECTOR_WEIGHT
+        self,
+        kb_id: int,
+        query: str,
+        top_k: int,
+        vector_weight: float = DEFAULT_VECTOR_WEIGHT,
+        timings: dict[str, float] | None = None,
     ) -> list[Source]:
-        """Hybrid search; `vector_weight` (0..1) is the dense path's share of the score."""
+        """Hybrid search; `vector_weight` (0..1) is the dense path's share of the score.
+        `timings`, when given, receives the seconds spent on "embed" and "search"."""
         if top_k <= 0:
             return []
+        started = time.perf_counter()
         vector = [float(x) for x in self._embedder.embed_queries([query])[0]]
+        embedded = time.perf_counter()
         self._ensure_ready(len(vector))
         limit = top_k * CANDIDATE_FACTOR
         dense = self._store.dense_search(kb_id, vector, limit)
         keyword = self._store.keyword_search(kb_id, query, limit)
+        if timings is not None:
+            timings["embed"] = embedded - started
+            timings["search"] = time.perf_counter() - embedded
         return [
             Source(
                 document_id=hit.document_id,

@@ -1,11 +1,11 @@
 # Docker 部署
 
-服務：`web`（Gunicorn）、`ingest`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）。每個服務的功能、互相呼叫的方式與資料流程見 [docs/services.md](../docs/services.md)。資料位置：
+服務：`web`（Gunicorn）、`ingest`（獨立文件解析，不含 torch）、`vllm`（LightOnOCR 官方服務方式，GPU 專用於 OCR）、`milvus`（向量資料庫，含 `etcd`、`minio`；Milvus 映像 `v2.6.25`）、`embedder`（embedding 服務，見下）、`monitor`（監控頁面的資源取樣，見 [docs/monitoring.md](../docs/monitoring.md)）。每個服務的功能、互相呼叫的方式與資料流程見 [docs/services.md](../docs/services.md)。資料位置：
 
 | 位置 | 內容 |
 |---|---|
 | 主機目錄 `docker/volumes/kb/` | 上傳的檔案與解析出的圖片 |
-| volume `phoebe_phoebe-db` | SQLite 資料庫 `app.db` |
+| volume `phoebe_phoebe-db` | SQLite 資料庫 `app.db`，以及監控資料 `monitor.db` |
 | volume `phoebe_milvus-data`、`phoebe_etcd-data`、`phoebe_minio-data` | Milvus 向量資料庫 |
 | volume `phoebe_embedder-hf-cache` | embedder 的模型快取 |
 | volume `phoebe_vllm-hf-cache` | vLLM（LightOnOCR）的 Hugging Face 模型快取 |
@@ -19,7 +19,7 @@
 
 - Windows：Docker Desktop（使用 WSL2 後端）
 - NVIDIA 驅動（支援 WSL2 的版本）；用 `docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi` 確認容器看得到 GPU
-- 主機已啟動 Ollama，並已下載對話模型（Embedding 由 `embedder` 容器提供，不需 Ollama）
+- 聊天模型：在 `docker/.env` 設定 `GEMINI_API_KEY`（預設用 Gemini），或在主機啟動 Ollama 並下載對話模型（Embedding 由 `embedder` 容器提供，不需 Ollama）
 - Compose 2.24 以上（`env_file` 的 `required: false`）
 
 ## 準備 docker/.env
@@ -31,7 +31,7 @@ cd docker
 cp .env.example .env
 ```
 
-編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_KV_CACHE_MEMORY`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`），同時也當作容器的環境變數（vllm 除外，它不載入 `docker/.env`）。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_KV_CACHE_MEMORY`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`、`EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`MONITOR_*`）。只有 web 與 ingest 會把整份 `docker/.env` 載入成容器的環境變數；embedder、monitor 只拿到 compose 指定的幾個變數，vllm 與 Milvus 相關服務則完全不載入。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`EMBEDDER_URL`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
@@ -63,7 +63,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 | `OCR_VLLM_KV_CACHE_MEMORY` | `512M` | KV cache 約 3.9 萬個 token，足夠同時 OCR 4 頁；2026-10-24 前是用比例 0.8 讓 vLLM 自己算，KV cache 有 1.28 GiB，用不到那麼多 |
 | `OCR_VLLM_GPU_UTIL` | `0.7` | 只當作啟動檢查：剩餘顯存少於 0.7 × 6 GB 就拒絕啟動。不指定時預設 0.92，Windows 桌面約佔 1 GiB，6 GB 顯卡會啟動失敗 |
 | `--enforce-eager`（固定） | 開 | CUDA graph 的額外記憶體會讓 KV cache 配不到空間（「No available memory for the cache blocks」），改用 eager 模式 |
-| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 預設 256 條序列 × 18000 tokens 在 6GB 配不到 KV cache；改為 4 條後實測：KV cache 1.28 GiB（99,243 tokens，18000 長度下約 5.5 倍並行），GPU 總用量約 4.4/6 GiB，與 8 條時相同 |
+| `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 預設 256 條序列 × 18000 tokens 在 6GB 配不到 KV cache，改為最多同時 4 條，配合 `OCR_CONCURRENCY=4`。512M 的 KV cache 足夠 4 頁同時 OCR |
 
 顯存更大的 GPU 可調高 `OCR_VLLM_KV_CACHE_MEMORY` 與 `OCR_VLLM_MAX_NUM_SEQS`，並視需要移除 compose 中的 `--enforce-eager` 以啟用 CUDA graph（吞吐量較高）。Compose 變數刻意不用 `VLLM_` 開頭，否則 vLLM 會警告未知的環境變數（vllm 服務也不載入 `docker/.env`）。
 
@@ -151,9 +151,9 @@ docker compose logs -f ingest             # ingest 依序重新處理
 
 - `ADMIN_USERNAME`、`ADMIN_PASSWORD`：管理員帳密，web 啟動時自動建立帳號並同步密碼（改密碼後 `docker compose restart web ingest`）。舊版的 `ADMIN_USERNAMES` 已不再使用。管理員可看到「系統設定」頁，設定LLM 供應商（Ollama／Gemini）、模型（即時取得清單）、系統提示詞（最多 4000 字）與 temperature（自訂或預設值）。
 - `GEMINI_API_KEY`：到 [Google AI Studio](https://aistudio.google.com/apikey) 建立金鑰後填入。金鑰只放在 `docker/.env`，不會出現在介面或資料庫；留空則 Gemini 選項停用。
-- `GEMINI_MODEL`：預設 `gemini-2.5-flash`。
+- `GEMINI_MODEL`：預設 `gemini-3.5-flash-lite`。
 
-GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 Gemini。Embedding 一律使用 `embedder` 容器（CPU）。
+GPU 專用於 OCR（vLLM）時，建議在「系統設定」把聊天切換為 Gemini。Embedding 一律使用 `embedder` 容器（預設 CPU，見上方「CPU／GPU 兩種模式」）。
 
 ## 主機 Ollama 連線
 

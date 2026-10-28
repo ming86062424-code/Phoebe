@@ -75,11 +75,13 @@
   ```
 
   這是最直接的解法。
-- **降低 embedder 的記憶體高峰**：每批送給 embedder 的整頁圖目前是 8 張（`app/kb/index.py` 的 `IMAGE_BATCH_SIZE`）。改小可以降低高峰，代價是 LiteParse 建立索引稍微變慢。
+- **降低 embedder 的記憶體高峰**：2026-10-27 起每批送給 embedder 的整頁圖從 8 張改成 2 張（`app/kb/index.py` 的 `IMAGE_BATCH_SIZE`），CPU 模式的 embedder 高峰從約 3.5 GB 降到約 2.7 GB，建立索引沒有變慢。
 - **測試時關掉 RAGFlow**，數據會比較乾淨。
 - **embedder 暫時連不上時的處理**：2026-10-24 起，建立索引時會等 10、30、60 秒各重試一次，embedder 被終止後自動重啟、載入完模型，文件就能接著完成；重試 3 次都失敗才標為失敗，可以手動按「重試」。
 
 ## 怎麼記錄硬體用量
+
+> 2026-10-27 起有固定情境的效能測試腳本 `scripts/benchmark.py`，會自動讀出各階段時間和資源高峰並和基準比較，見 [benchmarks.md](benchmarks.md)。下面的腳本適合記錄一段自訂期間的用量。
 
 測試時另開一個終端機，在專案根目錄執行：
 

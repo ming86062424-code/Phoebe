@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from app.kb.parsers.base import IMAGE_NAME
 from app.kb.parsers.images import open_image
 from app.kb.parsers.text_parser import decode_text
 from app.kb.services import KbServices
+from app.monitor.store import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -398,12 +400,25 @@ async def search(
         if vector_weight is None
         else vector_weight
     )
+    timings: dict[str, float] = {}
+    started = time.time()
+    details = {"kb_id": kb_id, "kb": kb_row["name"], "user": user["username"], "vector_weight": weight}
     try:
         sources = await run_in_threadpool(
-            kb.index.search, kb_id, q, settings.kb_top_k, weight
+            kb.index.search, kb_id, q, settings.kb_top_k, weight, timings
         )
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
+        detail = f"知識庫檢索失敗：{e}"
+        await run_in_threadpool(
+            record_event, settings.db_path, "search", "error", started, time.time(),
+            f"搜尋測試：{kb_row['name']}", timings, {**details, "error": detail},
+        )
+        raise HTTPException(status_code=503, detail=detail) from e
     # chunks of a document deleted during a store outage may linger; SQLite is the truth
     live = {d["id"] for d in store.list_documents(conn, kb_id)}
-    return [s.to_dict() for s in sources if s.document_id in live]
+    found = [s.to_dict() for s in sources if s.document_id in live]
+    await run_in_threadpool(
+        record_event, settings.db_path, "search", "ok", started, time.time(),
+        f"搜尋測試：{kb_row['name']}", timings, {**details, "results": len(found)},
+    )
+    return found

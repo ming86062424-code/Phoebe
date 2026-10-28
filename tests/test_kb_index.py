@@ -5,7 +5,7 @@ import pytest
 
 from app.kb import index as index_module
 from app.kb.chunk_store import Hit, KnowledgeStoreError
-from app.kb.index import KnowledgeIndex, Source, weighted_fuse
+from app.kb.index import IMAGE_BATCH_SIZE, KnowledgeIndex, Source, weighted_fuse
 from app.kb.parsers.base import ImageRef, ParsedChunk
 from tests.fakes_embedder import FakeEmbedder
 from tests.fakes_store import InMemoryChunkStore
@@ -401,7 +401,7 @@ def test_page_image_chunks_embed_png_bytes_with_text(store, tmp_path):
     assert rows[0].page_image == ImageRef("page_1.png", 10, 10)
 
 
-def test_page_image_embeddings_are_sent_in_batches_of_eight(store, tmp_path):
+def test_page_image_embeddings_are_sent_in_batches_of_two(store, tmp_path):
     chunks = []
     for n in range(1, 21):
         (tmp_path / f"page_{n}.png").write_bytes(f"png-{n}".encode())
@@ -412,7 +412,8 @@ def test_page_image_embeddings_are_sent_in_batches_of_eight(store, tmp_path):
     index = KnowledgeIndex(store, spy)
     assert index.add_document(1, 10, "a.pdf", chunks, image_dir=tmp_path) == 20
     sizes = [len(c[1]) for c in spy.calls if c[0] == "image_texts"]
-    assert sizes == [8, 8, 4]
+    assert IMAGE_BATCH_SIZE == 2  # the embedder's memory peak (docs/gpu-memory.md)
+    assert sizes == [2] * 10
     # vectors line up with their pages
     rows = sorted(store.rows.values(), key=lambda r: r.chunk_index)
     assert [r.page for r in rows] == list(range(1, 21))
@@ -440,7 +441,7 @@ def test_add_document_without_chunks_clears_old_ones(index, store):
 
 
 def test_liteparse_embeds_pages_in_batches(store, tmp_path):
-    """A long scanned PDF: each page image goes to the embedder in batches of at most 8,
+    """A long scanned PDF: each page image goes to the embedder in batches of at most 2,
     together with that page's LiteParse text, never in one request."""
     from app.kb.parsers.liteparse_parser import LiteParseParser
     from tests.pdf_factory import make_pdf
@@ -454,7 +455,7 @@ def test_liteparse_embeds_pages_in_batches(store, tmp_path):
     index = KnowledgeIndex(store, spy)
     assert index.add_document(1, 10, "long.pdf", chunks, image_dir=out) == 10
     batches = [c[1] for c in spy.calls if c[0] == "image_texts"]
-    assert [len(b) for b in batches] == [8, 2]
+    assert [len(b) for b in batches] == [2] * 5
     assert not any(c[0] == "documents" for c in spy.calls)
     sent = [item for batch in batches for item in batch]
     assert [text for _, text in sent] == [f"page number {n}" for n in range(1, 11)]

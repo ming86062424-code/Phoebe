@@ -32,9 +32,6 @@ VALID_IMAGE_TOKENS = (70, 140, 280, 560, 1120)
 # EMBED_DEVICE: "cuda" only with the GPU image (docker/docker-compose.gpu.yml); docs/gpu-memory.md
 DEFAULT_DEVICE = "cpu"
 VALID_DEVICES = ("cpu", "cuda")
-# Images per forward pass on the GPU. 8 page images at once peaked at ~4.7 GB of VRAM on the
-# RTX 2060 (6 GB); 2 at a time needs ~1 GiB less and is only ~6 % slower (2026-10-24).
-GPU_IMAGE_BATCH = 2
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # decoded
 MAX_IMAGE_B64_CHARS = (MAX_IMAGE_BYTES + 2) // 3 * 4
 MAX_IMAGE_PIXELS = 25_000_000
@@ -224,9 +221,9 @@ def create_app(
                     {"text": "<|image|> " + item.text, "image": _decode_image(item.image_b64)}
                 )
 
-        image_kwargs: dict = {"processing_kwargs": {"image": {"max_soft_tokens": image_tokens}}}
-        if device == "cuda":
-            image_kwargs["batch_size"] = GPU_IMAGE_BATCH
+        # a request is encoded in one forward pass per kind: the caller's batch size (ingest
+        # sends 2 page images per request) bounds the memory peak
+        image_kwargs = {"processing_kwargs": {"image": {"max_soft_tokens": image_tokens}}}
         out: np.ndarray | None = None
         with lock:
             for idx, inputs, kwargs in (

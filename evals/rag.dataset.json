@@ -1,0 +1,580 @@
+[
+  {
+    "name": "general-01",
+    "input": "特休沒休完可以遞延幾天？",
+    "expected_output": "最多遞延 5 日，要在下個週期前 6 個月內休完",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "01_人事規章/請假制度.md",
+          "section": "特別休假的計算與遞延"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-02",
+    "input": "年終獎金是幾個月？什麼時候發？",
+    "expected_output": "基本 1.5 個月本薪，農曆春節前 10 個工作天發",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "01_人事規章/薪資與獎金.md",
+          "section": "年終獎金與績效獎金"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-03",
+    "input": "去美國出差每天的膳雜費是多少？",
+    "expected_output": "每日 110 美元，出發與返國當日各算半日",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "01_人事規章/出差規定.md",
+          "section": "交通、住宿與膳雜費標準"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-04",
+    "input": "新人訓練在哪裡上課？上幾天？",
+    "expected_output": "桃園「星澄學習中心」，龜山區文化二路 88 號三樓，3 天",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "01_人事規章/教育訓練.md",
+          "section": "新人訓練「星航營」"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-05",
+    "input": "對考核結果不服要怎麼申訴？",
+    "expected_output": "結果公布後 10 個工作天內向人資部書面申訴，由 3 人申訴小組 20 個工作天內決定",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "01_人事規章/績效考核.md",
+          "section": "申訴與績效改善計畫"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-06",
+    "input": "AP-360 的濾網多久要換？",
+    "expected_output": "複合濾網 FL-360C 約一年（亮紅燈 3200 小時）；初濾網每兩週水洗",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "02_家電手冊/空氣清淨機AP-360.md",
+          "section": "濾網組成與更換時機"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-07",
+    "input": "咖啡機出現 C5 是什麼意思？",
+    "expected_output": "沖煮單元卡住，關機後打開側門取出沖洗晾乾",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "02_家電手冊/全自動咖啡機CM-80.md",
+          "section": "除垢與錯誤代碼"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-08",
+    "input": "掃地機器人的集塵袋多久要換？",
+    "expected_output": "3 公升，約可存放 60 天的灰塵，滿時 App 會通知",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "02_家電手冊/掃地機器人RV-5.md",
+          "section": "吸力、拖地與集塵站"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-09",
+    "input": "門鎖的電池沒電了怎麼開門？",
+    "expected_output": "用 USB Type-C 行動電源接外側面板底部的緊急供電孔",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "02_家電手冊/智慧門鎖DL-9.md",
+          "section": "電池更換與緊急供電"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-10",
+    "input": "除濕機的乾衣模式最多跑多久？",
+    "expected_output": "最長 6 小時後自動停止",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "02_家電手冊/除濕機DH-16.md",
+          "section": "乾衣模式與排水"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-11",
+    "input": "台南行程的團費是多少？",
+    "expected_output": "每人 4,800 元（四人房），兩人房加 1,200 元",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "03_旅遊指南/台南古都.md",
+          "section": "報名須知與費用"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-12",
+    "input": "太魯閣哪些地方要戴安全帽？",
+    "expected_output": "燕子口與九曲洞一帶",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "03_旅遊指南/花蓮太魯閣.md",
+          "section": "太魯閣步道與安全規定"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-13",
+    "input": "澎湖跳島什麼季節才有出團？",
+    "expected_output": "每年 4 月到 9 月",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "03_旅遊指南/澎湖跳島.md",
+          "section": "費用、天候與取消規定"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-14",
+    "input": "金門的菜刀可以帶上飛機嗎？",
+    "expected_output": "不行，刀具不能放隨身行李，必須托運",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "03_旅遊指南/金門戰地.md",
+          "section": "閩南聚落與在地美食"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-15",
+    "input": "阿里山看日出要穿什麼？",
+    "expected_output": "保暖外套、帽子與手套；觀日平台清晨約 10 度，冬天接近 0 度",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "03_旅遊指南/阿里山日出.md",
+          "section": "祝山日出與觀日時間"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-16",
+    "input": "三杯雞的薑要怎麼處理？",
+    "expected_output": "切厚片，用黑麻油小火煸約 5 分鐘到邊緣捲曲",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "04_料理食譜/台式家常菜.md",
+          "section": "三杯雞"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-17",
+    "input": "親子丼的蛋要分幾次下？",
+    "expected_output": "兩次：先下三分之二，燜 30 秒後再下剩下的",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "04_料理食譜/日式料理.md",
+          "section": "親子丼"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-18",
+    "input": "披薩麵團的含水量是多少？",
+    "expected_output": "65%",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "04_料理食譜/義式料理.md",
+          "section": "瑪格麗特披薩"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-19",
+    "input": "戚風蛋糕出爐後為什麼要倒扣？",
+    "expected_output": "讓組織冷卻時被重力拉住而不塌陷，至少倒扣 2 小時",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "04_料理食譜/烘焙點心.md",
+          "section": "戚風蛋糕"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-20",
+    "input": "紅酒燉牛肉要烤多久？",
+    "expected_output": "160 度烤 3 小時",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "04_料理食譜/湯品與燉菜.md",
+          "section": "法式紅酒燉牛肉"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-21",
+    "input": "第一級資料的復原時間目標是多少？",
+    "expected_output": "RTO 4 小時，RPO 15 分鐘",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "05_資訊維運/備份政策.md",
+          "section": "還原演練與復原目標"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-22",
+    "input": "密碼最少要幾個字元？",
+    "expected_output": "14 個字元",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "05_資訊維運/帳號與密碼管理.md",
+          "section": "密碼規則與多因素驗證"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-23",
+    "input": "遇到勒索軟體要付贖金嗎？",
+    "expected_output": "不付，一律從備份還原",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "05_資訊維運/資安事件通報.md",
+          "section": "應變步驟與證據保全"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-24",
+    "input": "什麼時候不能部署？",
+    "expected_output": "12/20–1/5 年底結帳期、春節前後、星澄購物節期間",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "05_資訊維運/系統上線與變更.md",
+          "section": "部署時段與凍結期"
+        }
+      ]
+    }
+  },
+  {
+    "name": "general-25",
+    "input": "P1 告警要在多久內回應？",
+    "expected_output": "10 分鐘內",
+    "additional_metadata": {
+      "category": "general",
+      "sources": [
+        {
+          "file": "05_資訊維運/值班與監控.md",
+          "section": "告警等級與回應時間"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-1",
+    "input": "FL-360C",
+    "additional_metadata": {
+      "category": "keyword",
+      "sources": [
+        {
+          "file": "02_家電手冊/空氣清淨機AP-360.md",
+          "section": "濾網組成與更換時機"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-2",
+    "input": "BK-T1-DAILY",
+    "additional_metadata": {
+      "category": "keyword",
+      "sources": [
+        {
+          "file": "05_資訊維運/備份政策.md",
+          "section": "備份週期與保存期限"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-3",
+    "input": "DS-20 除垢劑",
+    "additional_metadata": {
+      "category": "keyword",
+      "sources": [
+        {
+          "file": "02_家電手冊/全自動咖啡機CM-80.md",
+          "section": "除垢與錯誤代碼"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-4",
+    "input": "adm- 帳號",
+    "additional_metadata": {
+      "category": "keyword",
+      "sources": [
+        {
+          "file": "05_資訊維運/帳號與密碼管理.md",
+          "section": "特權帳號與離職停權"
+        }
+      ]
+    }
+  },
+  {
+    "name": "keyword-5",
+    "input": "分機 2317",
+    "additional_metadata": {
+      "category": "keyword",
+      "sources": [
+        {
+          "file": "01_人事規章/請假制度.md",
+          "section": "病假與住院病假"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-1",
+    "input": "生小孩之後可以請長假在家帶小孩嗎？",
+    "additional_metadata": {
+      "category": "semantic",
+      "sources": [
+        {
+          "file": "01_人事規章/請假制度.md",
+          "section": "家庭照顧假與育嬰留職停薪"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-2",
+    "input": "家裡很潮濕，衣服晾不乾怎麼辦？",
+    "additional_metadata": {
+      "category": "semantic",
+      "sources": [
+        {
+          "file": "02_家電手冊/除濕機DH-16.md",
+          "section": "乾衣模式與排水"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-3",
+    "input": "有人拿刀逼我開門怎麼辦？",
+    "additional_metadata": {
+      "category": "semantic",
+      "sources": [
+        {
+          "file": "02_家電手冊/智慧門鎖DL-9.md",
+          "section": "安全警報與防撬設計"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-4",
+    "input": "員工離開公司後電腦帳號怎麼處理？",
+    "additional_metadata": {
+      "category": "semantic",
+      "sources": [
+        {
+          "file": "05_資訊維運/帳號與密碼管理.md",
+          "section": "特權帳號與離職停權"
+        }
+      ]
+    }
+  },
+  {
+    "name": "semantic-5",
+    "input": "甜點要怎麼做才不會塌下去？",
+    "additional_metadata": {
+      "category": "semantic",
+      "sources": [
+        {
+          "file": "04_料理食譜/烘焙點心.md",
+          "section": "戚風蛋糕"
+        }
+      ]
+    }
+  },
+  {
+    "name": "confusable-1",
+    "input": "DL-9 智慧門鎖保固幾年？",
+    "expected_output": "3 年",
+    "additional_metadata": {
+      "category": "confusable",
+      "sources": [
+        {
+          "file": "02_家電手冊/智慧門鎖DL-9.md",
+          "section": "電池更換與緊急供電"
+        }
+      ]
+    }
+  },
+  {
+    "name": "confusable-2",
+    "input": "阿里山行程取消會退多少錢？",
+    "expected_output": "出發前 10 天以上取消退還 80%，3 到 9 天退還 50%",
+    "additional_metadata": {
+      "category": "confusable",
+      "sources": [
+        {
+          "file": "03_旅遊指南/阿里山日出.md",
+          "section": "費用與注意事項"
+        }
+      ]
+    }
+  },
+  {
+    "name": "confusable-3",
+    "input": "績效獎金 S 等發多少？",
+    "expected_output": "2 個月本薪",
+    "additional_metadata": {
+      "category": "confusable",
+      "sources": [
+        {
+          "file": "01_人事規章/薪資與獎金.md",
+          "section": "年終獎金與績效獎金"
+        },
+        {
+          "file": "01_人事規章/績效考核.md",
+          "section": "等第分布與校準"
+        }
+      ]
+    }
+  },
+  {
+    "name": "confusable-4",
+    "input": "10 分鐘內要做什麼？",
+    "expected_output": "P1 緊急告警要在 10 分鐘內回應",
+    "additional_metadata": {
+      "category": "confusable",
+      "sources": [
+        {
+          "file": "05_資訊維運/值班與監控.md",
+          "section": "告警等級與回應時間"
+        }
+      ]
+    }
+  },
+  {
+    "name": "confusable-5",
+    "input": "錯誤代碼 E2",
+    "expected_output": "空氣清淨機 AP-360 的風扇馬達異常",
+    "additional_metadata": {
+      "category": "confusable",
+      "sources": [
+        {
+          "file": "02_家電手冊/空氣清淨機AP-360.md",
+          "section": "故障排除與保固"
+        }
+      ]
+    }
+  },
+  {
+    "name": "no-answer-1",
+    "input": "星澄科技的員工餐廳幾點開？",
+    "additional_metadata": {
+      "category": "no_answer",
+      "sources": []
+    }
+  },
+  {
+    "name": "no-answer-2",
+    "input": "暖嵐的電視怎麼設定 Wi-Fi？",
+    "additional_metadata": {
+      "category": "no_answer",
+      "sources": []
+    }
+  },
+  {
+    "name": "no-answer-3",
+    "input": "雲遊旅行社有沒有日本團？",
+    "additional_metadata": {
+      "category": "no_answer",
+      "sources": []
+    }
+  }
+]

@@ -12,6 +12,7 @@ from app.kb import store
 from app.kb.filetypes import UPLOAD_EXTENSIONS
 from app.kb.index import KnowledgeIndex
 from app.kb.parsers.base import Parser, ParseError
+from app.monitor.store import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -442,23 +443,31 @@ class Ingester:
             store.update_document(conn, doc_id, progress_done=done, progress_total=total)
 
         indexed = False
+        # monitoring event (docs/monitoring.md): outcome and seconds per phase
+        started, phases = time.time(), {}
+        outcome: dict = {"status": "error"}
         try:
             out_dir = self.doc_dir(doc["kb_id"], doc_id)
             # images from an earlier attempt must not linger next to the new ones
             if out_dir.exists() and not _remove(out_dir):
+                outcome["error"] = STALE_FOLDER_ERROR
                 self._fail(conn, doc_id, identity, STALE_FOLDER_ERROR)
                 return
             out_dir.mkdir(parents=True, exist_ok=True)
             path = self.file_path(doc["kb_id"], doc_id, doc["filename"])
+            parse_started = time.perf_counter()
             parsed = parser.parse(path, out_dir, on_progress)
+            phases["parse"] = time.perf_counter() - parse_started
+            outcome["pages"] = len(parsed)
             check_current()
             store.update_document(conn, doc_id, status="indexing")
             # Clear vectors from any earlier, interrupted attempt before writing new ones.
             self.index.delete_document(doc["kb_id"], doc_id)
             chunks = self.index.add_document(
-                doc["kb_id"], doc_id, doc["filename"], parsed, image_dir=out_dir
+                doc["kb_id"], doc_id, doc["filename"], parsed, image_dir=out_dir, timings=phases
             )
             indexed = True
+            outcome["chunks"] = chunks
             check_current()
             if chunks == 0:
                 error = (
@@ -467,19 +476,42 @@ class Ingester:
                     else "沒有擷取到任何文字，掃描檔請改用 LightOnOCR"
                 )
                 store.update_document(conn, doc_id, status="failed", error=error)
+                outcome["error"] = error
                 return
             store.update_document(conn, doc_id, status="ready", chunk_count=chunks)
+            outcome["status"] = "ok"
         except _Stopped:
             logger.info("ingest 停止中，文件 %s 留待下次處理", doc_id)
+            outcome["status"] = "stopped"
         except _Superseded:
+            outcome["status"] = "deleted"
             if indexed:
                 self.index.delete_document(doc["kb_id"], doc_id)
             self._remove_leftovers(conn, doc["kb_id"], doc_id)
         except ParseError as e:
+            outcome["error"] = str(e)
             self._fail(conn, doc_id, identity, str(e))
         except Exception as e:
             logger.exception("文件 %s 處理失敗", doc_id)
-            self._fail(conn, doc_id, identity, f"處理失敗：{e}")
+            outcome["error"] = f"處理失敗：{e}"
+            self._fail(conn, doc_id, identity, outcome["error"])
+        finally:
+            status = outcome.pop("status")
+            record_event(
+                self.db_path,
+                "document",
+                status,
+                started,
+                time.time(),
+                doc["filename"],
+                phases,
+                {
+                    "kb_id": doc["kb_id"],
+                    "document_id": doc_id,
+                    "parser": parser.id,
+                    **outcome,
+                },
+            )
 
     def _remove_leftovers(self, conn, kb_id: int, doc_id: int) -> None:
         """After a document was deleted mid-run: drop the folder this run (re)created, and

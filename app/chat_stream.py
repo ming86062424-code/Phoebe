@@ -16,6 +16,7 @@ from app import conversations
 from app.config import REPLY_HEARTBEAT_SECONDS
 from app.db import connect, now_iso
 from app.llm import ChatClient, ChatDelta, ImagesNotSupported, LlmError, LlmUnavailable
+from app.monitor.chat_trace import ChatTrace
 
 logger = logging.getLogger(__name__)
 
@@ -179,11 +180,13 @@ async def ndjson_reply(
     system: str | None = None,
     temperature: float | None = None,
     images: list[bytes] | None = None,
+    trace: ChatTrace | None = None,
 ) -> StreamingResponse:
     """Stream the reply; release() runs once the reply ends, however it ends.
 
     When sources is given, they are emitted first and saved with the reply.
     images go to the model with the last user message only (never into the database).
+    trace, when given, is finished with the reply's outcome (monitoring page).
     """
     try:
         return await _ndjson_reply(
@@ -196,9 +199,12 @@ async def ndjson_reply(
             system,
             temperature,
             images or [],
+            trace,
         )
-    except BaseException:
+    except BaseException as e:
         release()
+        if trace is not None:
+            trace.finish("error", e.detail if isinstance(e, HTTPException) else str(e))
         raise
 
 
@@ -212,7 +218,10 @@ async def _ndjson_reply(
     system: str | None,
     temperature: float | None,
     images: list[bytes],
+    trace: ChatTrace | None,
 ) -> StreamingResponse:
+    if trace is not None:
+        trace.llm_started()
     try:
         stream, first = await _open_stream(client, history, system, temperature, images)
     except LlmUnavailable as e:
@@ -228,7 +237,13 @@ async def _ndjson_reply(
         def handle(delta: ChatDelta) -> str:
             if delta.kind == "content":
                 parts.append(delta.text)
+            if trace is not None:
+                trace.delta(delta.kind)
             return _line({"type": delta.kind, "text": delta.text})
+
+        def finish(status: str, error: str | None = None) -> None:
+            if trace is not None:
+                trace.finish(status, error)
 
         try:
             if sources is not None:
@@ -239,6 +254,7 @@ async def _ndjson_reply(
                 async for delta in stream:
                     yield handle(delta)
             except (LlmError, httpx.HTTPError) as e:
+                finish("error", str(e) or INTERRUPTED_DETAIL)
                 yield _line({"type": "error", "detail": str(e) or INTERRUPTED_DETAIL})
                 return
             # The generator uses its own connection so it doesn't depend on the
@@ -250,15 +266,24 @@ async def _ndjson_reply(
                 )
             except sqlite3.Error:
                 # e.g. the conversation was deleted in another tab mid-stream
+                finish("error", SAVE_FAILED_DETAIL)
                 yield _line({"type": "error", "detail": SAVE_FAILED_DETAIL})
                 return
             finally:
                 save_conn.close()
+            finish("ok")
             yield _line({"type": "done", "message_id": message_id})
         finally:
+            # the client went away mid-reply (finish() is a no-op after an outcome)
+            finish("cancelled")
             release()
+
+    def cleanup() -> None:
+        if trace is not None:
+            trace.finish("cancelled")
+        release()
 
     # The background task covers a client that disconnects before the body starts.
     return StreamingResponse(
-        body_iter(), media_type="application/x-ndjson", background=BackgroundTask(release)
+        body_iter(), media_type="application/x-ndjson", background=BackgroundTask(cleanup)
     )

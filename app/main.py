@@ -9,7 +9,7 @@ from app.auth import ensure_admin
 from app.config import Settings
 from app.db import connect, init_db
 from app.kb.services import KbServices, build_kb_services
-from app.routes import auth, chat, conversations, kb
+from app.routes import auth, chat, conversations, kb, monitor
 from app.routes import settings as settings_routes
 
 def create_app(
@@ -42,6 +42,7 @@ def create_app(
     app.include_router(chat.router)
     app.include_router(kb.router)
     app.include_router(settings_routes.router)
+    app.include_router(monitor.router)
     dist = Path(settings.frontend_dist)
     if (dist / "index.html").is_file():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")

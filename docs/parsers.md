@@ -44,7 +44,7 @@
 ### 建立索引
 
 - 每頁送給 embedder 的是 **「整頁圖＋該頁文字」**，產生一個向量。
-- 每批 8 頁（`app/kb/index.py` 的 `IMAGE_BATCH_SIZE`）。
+- 每批 2 頁（`app/kb/index.py` 的 `IMAGE_BATCH_SIZE`）：embedder 一次處理整批，批次越大記憶體高峰越高，選 2 的原因見 [gpu-memory.md](gpu-memory.md)。
 - embedder 處理圖片時，每張圖換算成 280 個 token（`EMBED_IMAGE_TOKENS`）。
 - **沒有文字的頁面也會建立索引**，因為整頁圖本身就能產生向量。
 - 在 CPU 上算圖片向量很花時間：12 頁的測試檔約需 100 秒，比解析本身還久。

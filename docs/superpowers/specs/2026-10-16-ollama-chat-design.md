@@ -3,6 +3,13 @@
 - 日期：2026-10-16
 - 狀態：待審核
 
+> **之後的變更**（2026-10-27 補註）：以下內容是當時的設計，保留作為紀錄。後來改變的部分：
+>
+> - 前端改成 React，串流改成 NDJSON 並顯示思考過程（`2026-10-16-app-shell-design.md`）。
+> - 聊天模型可以在 Ollama 與 Gemini 之間切換，預設 Gemini（`2026-10-19-llm-providers-design.md`）。
+> - 評測的裁判模型改為 `gemini-3.5-flash-lite`（`EVAL_JUDGE_MODEL`），另有知識庫問答評測（`docs/rag-eval.md`）。
+> - RAG 已經做了，見之後的知識庫相關規格。
+
 ## 1. 目的與範圍
 
 **目的**：練習 superpowers 開發流程（brainstorming → spec → plan → TDD → review），以「最小但完整」為原則。

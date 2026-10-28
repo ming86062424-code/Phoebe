@@ -127,3 +127,50 @@ export interface LlmSettings {
 }
 
 export type LlmSettingsPatch = Partial<Omit<LlmSettings, 'providers'>>
+
+export type MonitorEventKind = 'document' | 'chat' | 'search'
+
+export interface MonitorEvent {
+  id: number
+  kind: MonitorEventKind
+  status: string // ok | error | cancelled | stopped | deleted
+  started_at: number // epoch seconds
+  ended_at: number
+  duration: number // seconds
+  title: string
+  phases: Record<string, number> // seconds per phase
+  details: Record<string, unknown>
+}
+
+export interface ResourceSample {
+  ts: number
+  source: string // container name, or GPU
+  kind: 'container' | 'gpu'
+  project: string
+  mem_mib: number
+  mem_limit_mib: number | null
+  cpu_pct: number | null
+  gpu_util_pct: number | null
+}
+
+export interface MonitorStatus {
+  collector: { last_sample_at: number | null; interval_seconds: number; error: string } | null
+  running: boolean
+  latest: ResourceSample[]
+}
+
+export interface SeriesPoint {
+  ts: number
+  mem_mib: number
+  mem_limit_mib: number | null
+  cpu_pct: number | null
+  gpu_util_pct: number | null
+}
+
+export interface MonitorSeries {
+  since: number
+  until: number
+  step: number
+  sources: { source: string; kind: 'container' | 'gpu'; project: string; points: SeriesPoint[] }[]
+  events: MonitorEvent[]
+}
