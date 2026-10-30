@@ -216,7 +216,7 @@ uv run --group eval pytest evals/test_rag_quality.py   # 知識庫問答（RAG�
 uv run --group eval pytest evals/test_chat_quality.py  # 一般聊天，需要本機 Ollama 的 CHAT_MODEL
 ```
 
-RAG 評測用 `test_data/rag/` 的 25 份文件和 43 題，分開評「檢索有沒有找對段落」和「回答是否正確、有沒有編造」，報告寫到 `evals/reports/`，說明見 [docs/rag-eval.md](docs/rag-eval.md)。
+RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索有沒有找對段落」和「回答是否正確、有沒有編造」，報告寫到 `evals/reports/`（不納入 git），說明見 [docs/rag-eval.md](docs/rag-eval.md)。
 
 注意：單純執行 `uv sync` 會移除 eval、ocr 群組的套件；`uv run --group eval`／`uv run --group ocr` 會重新安裝。
 
@@ -255,7 +255,7 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 43 題，分開評「檢索�
 | `OLLAMA_NUM_CTX` | `16384` | Ollama 每次對話的 context 長度。Ollama 本身預設只有 4096，知識庫回答帶整頁圖（每張約 740 token）時會被截斷 |
 | `ADMIN_USERNAME` | 空 | 管理員帳號，啟動時自動建立（3–32 字元） |
 | `ADMIN_PASSWORD` | 空 | 管理員密碼，每次啟動同步到資料庫（8 字元以上，最多 72 位元組） |
-| `EVAL_JUDGE_MODEL` | `gemini-3.5-flash-lite` | 評測（`evals/`）的裁判模型：`gemini-` 開頭用 Gemini（需要 `GEMINI_API_KEY`），其他名稱用本機 Ollama 的模型。只有手動執行評測時使用，容器不讀取 |
+| `EVAL_JUDGE_MODEL` | `gemini-3.1-flash-lite` | 評測（`evals/`）的裁判模型：`gemini-` 開頭用 Gemini（需要 `GEMINI_API_KEY`），其他名稱用本機 Ollama 的模型。只有手動執行評測時使用，容器不讀取 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
 | `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |

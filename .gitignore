@@ -194,3 +194,6 @@ docker/volumes/
 # 
 test_data/
 
+
+# RAG eval reports (evals/test_rag_quality.py), regenerated on every run
+evals/reports/

@@ -14,7 +14,7 @@ from deepeval.test_case import LLMTestCase
 
 from evals.metrics import rag_answer_metrics
 from evals.rag_app import RAG_DIR, LiveRag, Reply
-from evals.rag_report import short_error, source_rank, with_retry, write_report
+from evals.rag_report import RETRIEVAL_ONLY, short_error, source_rank, with_retry, write_report
 from scripts.benchmark import _git_commit
 
 HERE = Path(__file__).resolve().parent
@@ -25,6 +25,7 @@ dataset = EvaluationDataset()
 dataset.add_goldens_from_json_file(file_path=str(HERE / "rag.dataset.json"))
 GOLDENS = dataset.goldens
 RETRIEVAL_GOLDENS = [g for g in GOLDENS if g.additional_metadata["sources"]]
+ANSWER_GOLDENS = [g for g in GOLDENS if g.additional_metadata["category"] not in RETRIEVAL_ONLY]
 
 records: list[dict] = []
 _replies: dict[str, Reply] = {}
@@ -97,7 +98,7 @@ def test_retrieval(rag, golden: Golden):
     assert rank is not None, f"應出現的來源不在前 {len(reply.sources)} 段"
 
 
-@pytest.mark.parametrize("golden", GOLDENS, ids=_ids(GOLDENS))
+@pytest.mark.parametrize("golden", ANSWER_GOLDENS, ids=_ids(ANSWER_GOLDENS))
 def test_answer(rag, judge, golden: Golden):
     """The answer, scored by the judge model."""
     meta = golden.additional_metadata
@@ -109,7 +110,7 @@ def test_answer(rag, judge, golden: Golden):
     }
     records.append(record)
     assert reply.error is None, reply.error
-    metrics = rag_answer_metrics(judge, meta["category"], bool(golden.expected_output))
+    metrics = rag_answer_metrics(judge, meta["category"])
     case = LLMTestCase(
         input=golden.input,
         actual_output=reply.answer,

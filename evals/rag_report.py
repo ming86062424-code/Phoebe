@@ -22,11 +22,15 @@ _DAILY_LIMIT = ("PerDay", "per day")
 
 CATEGORY_LABEL = {
     "general": "一般問答",
-    "keyword": "關鍵字檢索",
-    "semantic": "語意檢索",
+    "keyword": "關鍵字（只輸入代號）",
+    "keyword_question": "關鍵字（完整問題）",
+    "semantic_phrase": "語意（簡短詞組）",
+    "semantic": "語意（完整問題）",
     "confusable": "容易混淆",
     "no_answer": "知識庫沒有答案",
 }
+# a bare code or a short phrase only checks what retrieval finds: there is no question to answer
+RETRIEVAL_ONLY = frozenset({"keyword", "semantic_phrase"})
 
 
 def retry_delay(message: str) -> float | None:
