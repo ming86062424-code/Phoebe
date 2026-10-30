@@ -9,7 +9,7 @@ from deepeval.test_case import SingleTurnParams
 THRESHOLD = 0.7
 
 
-def rag_answer_metrics(judge, category: str, has_expected: bool) -> list:
+def rag_answer_metrics(judge, category: str) -> list:
     # grounded in the retrieved chunks, nothing made up
     metrics = [FaithfulnessMetric(threshold=THRESHOLD, model=judge, async_mode=False)]
     if category == "no_answer":
@@ -26,15 +26,15 @@ def rag_answer_metrics(judge, category: str, has_expected: bool) -> list:
         ))
         return metrics
     metrics.append(AnswerRelevancyMetric(threshold=THRESHOLD, model=judge, async_mode=False))
-    if has_expected:
-        metrics.append(GEval(
-            name="答案正確",
-            criteria="回答是否包含標準答案中的關鍵事實（數字、名稱、條件），而且沒有與標準答案矛盾。"
-                     "用詞不同或補充其他正確細節都不扣分。",
-            evaluation_params=[SingleTurnParams.INPUT, SingleTurnParams.ACTUAL_OUTPUT,
-                               SingleTurnParams.EXPECTED_OUTPUT],
-            threshold=THRESHOLD,
-            model=judge,
-            async_mode=False,
-        ))
+    # every answered question outside no_answer has an expected answer (tests/test_rag_eval.py)
+    metrics.append(GEval(
+        name="答案正確",
+        criteria="回答是否包含標準答案中的關鍵事實（數字、名稱、條件），而且沒有與標準答案矛盾。"
+                 "用詞不同或補充其他正確細節都不扣分。",
+        evaluation_params=[SingleTurnParams.INPUT, SingleTurnParams.ACTUAL_OUTPUT,
+                           SingleTurnParams.EXPECTED_OUTPUT],
+        threshold=THRESHOLD,
+        model=judge,
+        async_mode=False,
+    ))
     return metrics

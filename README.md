@@ -216,7 +216,7 @@ uv run --group eval pytest evals/test_rag_quality.py   # 知識庫問答（RAG�
 uv run --group eval pytest evals/test_chat_quality.py  # 一般聊天，需要本機 Ollama 的 CHAT_MODEL
 ```
 
-RAG 評測用 `test_data/rag/` 的 25 份文件和 53 題，分開評「檢索有沒有找對段落」和「回答是否正確、有沒有編造」，報告寫到 `evals/reports/`（不納入 git），說明見 [docs/rag-eval.md](docs/rag-eval.md)。
+RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索有沒有找對段落」和「回答是否正確、有沒有編造」，報告寫到 `evals/reports/`（不納入 git），說明見 [docs/rag-eval.md](docs/rag-eval.md)。
 
 注意：單純執行 `uv sync` 會移除 eval、ocr 群組的套件；`uv run --group eval`／`uv run --group ocr` 會重新安裝。
 
