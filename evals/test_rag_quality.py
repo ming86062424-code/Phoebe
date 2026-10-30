@@ -14,7 +14,7 @@ from deepeval.test_case import LLMTestCase
 
 from evals.metrics import rag_answer_metrics
 from evals.rag_app import RAG_DIR, LiveRag, Reply
-from evals.rag_report import short_error, source_rank, with_retry, write_report
+from evals.rag_report import RETRIEVAL_ONLY, short_error, source_rank, with_retry, write_report
 from scripts.benchmark import _git_commit
 
 HERE = Path(__file__).resolve().parent
@@ -25,8 +25,6 @@ dataset = EvaluationDataset()
 dataset.add_goldens_from_json_file(file_path=str(HERE / "rag.dataset.json"))
 GOLDENS = dataset.goldens
 RETRIEVAL_GOLDENS = [g for g in GOLDENS if g.additional_metadata["sources"]]
-# a bare code or a short phrase only checks what retrieval finds: there is no question to answer
-RETRIEVAL_ONLY = {"keyword", "semantic_phrase"}
 ANSWER_GOLDENS = [g for g in GOLDENS if g.additional_metadata["category"] not in RETRIEVAL_ONLY]
 
 records: list[dict] = []
@@ -112,7 +110,7 @@ def test_answer(rag, judge, golden: Golden):
     }
     records.append(record)
     assert reply.error is None, reply.error
-    metrics = rag_answer_metrics(judge, meta["category"], bool(golden.expected_output))
+    metrics = rag_answer_metrics(judge, meta["category"])
     case = LLMTestCase(
         input=golden.input,
         actual_output=reply.answer,

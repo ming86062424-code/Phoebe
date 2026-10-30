@@ -620,6 +620,20 @@
     }
   },
   {
+    "name": "semantic-6",
+    "input": "官網打不開了，值班工程師要在多久內回應？",
+    "expected_output": "屬於 P1 緊急告警，要在 10 分鐘內回應並開始處理，同時在 #incident 頻道建立事件討論串",
+    "additional_metadata": {
+      "category": "semantic",
+      "sources": [
+        {
+          "file": "05_資訊維運/值班與監控.md",
+          "section": "告警等級與回應時間"
+        }
+      ]
+    }
+  },
+  {
     "name": "confusable-1",
     "input": "DL-9 智慧門鎖保固幾年？",
     "expected_output": "3 年",
@@ -667,14 +681,14 @@
   },
   {
     "name": "confusable-4",
-    "input": "官網打不開了，值班工程師要在多久內回應？",
-    "expected_output": "屬於 P1 緊急告警，要在 10 分鐘內回應並開始處理，同時在 #incident 頻道建立事件討論串",
+    "input": "除濕機面板顯示 P1 是什麼意思？",
+    "expected_output": "水箱沒有放好",
     "additional_metadata": {
       "category": "confusable",
       "sources": [
         {
-          "file": "05_資訊維運/值班與監控.md",
-          "section": "告警等級與回應時間"
+          "file": "02_家電手冊/除濕機DH-16.md",
+          "section": "清潔保養與故障排除"
         }
       ]
     }

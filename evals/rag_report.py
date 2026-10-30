@@ -29,6 +29,8 @@ CATEGORY_LABEL = {
     "confusable": "容易混淆",
     "no_answer": "知識庫沒有答案",
 }
+# a bare code or a short phrase only checks what retrieval finds: there is no question to answer
+RETRIEVAL_ONLY = frozenset({"keyword", "semantic_phrase"})
 
 
 def retry_delay(message: str) -> float | None:

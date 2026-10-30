@@ -1,10 +1,16 @@
 import json
+from pathlib import Path
 
 import pytest
 
-from pathlib import Path
-
-from evals.rag_report import CATEGORY_LABEL, render_markdown, source_rank, summarize, write_report
+from evals.rag_report import (
+    CATEGORY_LABEL,
+    RETRIEVAL_ONLY,
+    render_markdown,
+    source_rank,
+    summarize,
+    write_report,
+)
 
 LEAVE = {"file": "01_人事規章/請假制度.md", "section": "特別休假的計算與遞延"}
 
@@ -151,7 +157,7 @@ def test_dataset_categories_and_answers():
     for g in goldens:
         meta = g["additional_metadata"]
         assert meta["category"] in CATEGORY_LABEL, g["name"]
-        if meta["category"] in ("keyword", "semantic_phrase"):
+        if meta["category"] in RETRIEVAL_ONLY:
             assert meta["sources"] and not g.get("expected_output"), g["name"]
         elif meta["category"] == "no_answer":
             assert not meta["sources"], g["name"]
