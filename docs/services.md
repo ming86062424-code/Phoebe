@@ -81,7 +81,16 @@ vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這�
 
 程式不限制這兩個值，換了更強的硬體時調高即可；目前的預設值是配合 RTX 2060 6 GB 與 16 GB 記憶體的 Docker 環境。實測數據見 [vllm-rtx2060.md](vllm-rtx2060.md)。
 
-**調高 `INGEST_CONCURRENCY` 前先看記憶體**（2026-10-23 實測）：LiteParse 每處理一份 PDF 都要把頁面轉成 400 DPI 的圖、跑 Tesseract，同時處理 2 份時 ingest 的記憶體高峰約 **3.2 GB**（一次一份時約 0.2–0.4 GB），embedder 高峰約 5 GB。Docker 虛擬機只有 15.5 GB，在同時開著 vLLM 和其他程式（例如約 5 GB 的 RAGFlow）的情況下設成 2，虛擬機記憶體不足，系統終止了 embedder，處理中的文件因此失敗；關掉 vLLM 後同樣設定就能順利完成。
+**調高 `INGEST_CONCURRENCY` 前先看記憶體**：LiteParse 每處理一份 PDF，都要把頁面轉成 400 DPI 的圖、跑 Tesseract，所以同時處理的份數越多，ingest 用的記憶體越多。2026-10-23 的實測：
+
+| 同時處理 | ingest 記憶體最高 |
+|---|---|
+| 1 份 | 約 0.2–0.4 GB |
+| 2 份 | 約 3.2 GB |
+
+那次設成 2 份時，Docker 虛擬機只有 15.5 GB，又同時開著 vLLM 和其他程式（例如約 5 GB 的 RAGFlow），記憶體不夠，系統終止了 embedder，處理中的文件因此失敗；關掉 vLLM 後，同樣的設定可以順利完成。
+
+當時 embedder 最高用到約 5 GB，之後已經降低：2026-10-24 起不載入用不到的音訊編碼器，2026-10-27 起整頁圖每次只送 2 張。現在 CPU 模式待機約 2.5 GB，處理一份 12 頁 PDF 時最高約 2.7 GB（[parser-benchmarks.md](parser-benchmarks.md)）。同時處理 2 份的情況還沒有重新量過。
 
 ### 可靠性
 
