@@ -392,3 +392,80 @@ def test_default_loader_gets_the_device(monkeypatch):
         app.state.loading_thread.join(5)
         assert c.get("/health").json()["device"] == "cuda"
     assert calls == [("google/embeddinggemma-2", "cuda")]
+
+
+class BlockingModel(FakeModel):
+    """encode() waits until release is set, like a hung forward pass."""
+
+    def __init__(self):
+        super().__init__()
+        self.release = threading.Event()
+
+    def encode(self, inputs, **kwargs):
+        self.release.wait(5)
+        return super().encode(inputs, **kwargs)
+
+
+def test_stuck_encode_calls_on_stuck():
+    model = BlockingModel()
+    stuck = threading.Event()
+    app = create_app(model=model, encode_timeout=0.1, on_stuck=stuck.set)
+    client = TestClient(app)
+    worker = threading.Thread(
+        target=client.post, args=("/embed",), kwargs={"json": {"items": [{"kind": "query", "text": "a"}]}}
+    )
+    worker.start()
+    try:
+        assert stuck.wait(3)
+    finally:
+        model.release.set()
+        worker.join(5)
+
+
+def test_fast_encode_does_not_call_on_stuck(model):
+    stuck = threading.Event()
+    client = TestClient(create_app(model=model, encode_timeout=0.2, on_stuck=stuck.set))
+    r = client.post("/embed", json={"items": [{"kind": "query", "text": "a"}]})
+    assert r.status_code == 200
+    assert not stuck.wait(0.4)
+
+
+def test_stuck_encode_exits_process_by_default(monkeypatch):
+    called = []
+    exited = threading.Event()
+    monkeypatch.setattr("os._exit", lambda code: (called.append(code), exited.set()))
+    model = BlockingModel()
+    client = TestClient(create_app(model=model, encode_timeout=0.1))
+    worker = threading.Thread(
+        target=client.post, args=("/embed",), kwargs={"json": {"items": [{"kind": "query", "text": "a"}]}}
+    )
+    worker.start()
+    try:
+        assert exited.wait(3)
+    finally:
+        model.release.set()
+        worker.join(5)
+    assert called == [1]
+
+
+def test_encode_timeout_comes_from_env(monkeypatch, model):
+    monkeypatch.setenv("EMBED_TIMEOUT_SECONDS", "0.1")
+    stuck = threading.Event()
+    blocking = BlockingModel()
+    client = TestClient(create_app(model=blocking, on_stuck=stuck.set))
+    worker = threading.Thread(
+        target=client.post, args=("/embed",), kwargs={"json": {"items": [{"kind": "query", "text": "a"}]}}
+    )
+    worker.start()
+    try:
+        assert stuck.wait(3)
+    finally:
+        blocking.release.set()
+        worker.join(5)
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "abc"])
+def test_invalid_encode_timeout_rejected(monkeypatch, bad):
+    monkeypatch.setenv("EMBED_TIMEOUT_SECONDS", bad)
+    with pytest.raises(ValueError):
+        create_app(model=FakeModel())

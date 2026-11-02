@@ -31,7 +31,7 @@ cd docker
 cp .env.example .env
 ```
 
-編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_KV_CACHE_MEMORY`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`、`EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`MONITOR_*`）。只有 web 與 ingest 會把整份 `docker/.env` 載入成容器的環境變數；embedder、monitor 只拿到 compose 指定的幾個變數，vllm 與 Milvus 相關服務則完全不載入。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`EMBEDDER_URL`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_KV_CACHE_MEMORY`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`、`EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`EMBED_TIMEOUT_SECONDS`、`MONITOR_*`）。只有 web 與 ingest 會把整份 `docker/.env` 載入成容器的環境變數；embedder、monitor 只拿到 compose 指定的幾個變數，vllm 與 Milvus 相關服務則完全不載入。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`EMBEDDER_URL`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
@@ -89,8 +89,9 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
   ```
   `docker-compose.gpu.yml` 會改用 GPU 版映像 `phoebe-embedder:gpu`（CUDA 12.6 版 PyTorch，`TORCH_VARIANT=cu126`）並設定 `EMBED_DEVICE=cuda`。要用 LightOnOCR 時，執行 `docker compose --profile lightonocr up -d` 切回來，embedder 會回到 CPU。兩種模式的向量相同，切換不用重建索引。6 GB 顯卡放不下兩者，**不要同時帶 GPU 設定檔和 `--profile lightonocr`**。顯存用量與設計原因見 [docs/gpu-memory.md](../docs/gpu-memory.md)。
 - `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200（回應中的 `device` 是 `cpu` 或 `cuda`），載入中回 503。
-- 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）。
-- `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。`EMBED_DEVICE`（由 compose 設定，不從 `.env` 讀取）只接受 `cpu`、`cuda`；設為 `cuda` 但容器看不到 GPU 時，模型載入失敗並重啟，不會偷偷改用 CPU。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
+- 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）、`EMBED_TIMEOUT_SECONDS`（預設 180）。
+- **卡住時自動重啟**：一個請求的運算超過 `EMBED_TIMEOUT_SECONDS` 秒，就視為卡住，程序直接結束，由 `restart: unless-stopped` 重啟。只靠 Docker 不夠：`restart` 只在程序結束時重啟，healthcheck 失敗也只會標成 unhealthy，不會重啟。排隊等前一個請求的時間不算在內。
+- `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。`EMBED_DEVICE`（由 compose 設定，不從 `.env` 讀取）只接受 `cpu`、`cuda`；設為 `cuda` 但容器看不到 GPU 時，模型載入失敗並重啟，不會偷偷改用 CPU。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`EMBED_TIMEOUT_SECONDS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
 - 首次啟動會下載約 1.5 GB 模型到 volume `phoebe_embedder-hf-cache`（healthcheck `start_period` 600 秒）。此 volume 與 vLLM 的模型快取分開，避免 root／非 root 寫入權限衝突。
 - 首次下載可能超過 healthcheck 的等待時間：`start_period` 600 秒，之後每 15 秒檢查一次、最多失敗 10 次（約再 150 秒）。`web`、`ingest` 依賴 `embedder` 健康，若在 `docker compose up -d` 期間因此放棄啟動，等 `docker compose ps` 顯示 embedder 為 healthy（`docker compose logs -f embedder` 可看下載進度）後，再執行一次 `docker compose up -d` 即可，已下載的模型快取不會重來。
 - 本機快速測試：`cd docker && docker compose up -d embedder`；單元測試：`cd embedder && uv run pytest -q`（用假模型，不下載模型）。

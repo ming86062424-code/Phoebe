@@ -283,6 +283,7 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 | `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 同時處理的請求上限（僅 Docker） |
 | `EMBED_MODEL_ID` | `google/embeddinggemma-2` | embedder 載入的模型（僅 Docker，設在 `docker/.env`）；更換後需重建知識庫 |
 | `EMBED_IMAGE_TOKENS` | `280` | embedder 每張圖片的 soft token 數，只接受 70、140、280、560、1120（僅 Docker） |
+| `EMBED_TIMEOUT_SECONDS` | `180` | embedder 一次運算超過這個秒數就視為卡住，程序結束後由 Docker 重啟（僅 Docker） |
 | `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |

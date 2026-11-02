@@ -49,7 +49,7 @@
 
 - **設為 2，4 份 PDF，用 LiteParse，vLLM 關閉時**：最多同時處理 2 份，全部完成，總共 376 秒。記憶體高峰：ingest 3.2 GB、embedder 5.0 GB（embedder 的數字已經過時，現在的用量見下方「記憶體不足造成的失敗紀錄」）。
 - **設為 2，vLLM 和 RAGFlow 都開著時**：虛擬機記憶體不足，embedder 被終止，2 份文件失敗。
-- LiteParse 同時處理兩份時，ingest 的記憶體會從約 0.3 GB 漲到 3.2 GB（兩份都在轉 400 DPI 的頁面圖、跑 Tesseract）。
+- ingest 的 3.2 GB 來自兩份都在轉 400 DPI 的頁面圖、跑 Tesseract。同條件下只處理 1 份的用量還沒量過。
 
 ## 記憶體不足造成的失敗紀錄
 

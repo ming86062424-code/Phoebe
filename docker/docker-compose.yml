@@ -98,6 +98,8 @@ services:
     environment:
       EMBED_MODEL_ID: ${EMBED_MODEL_ID:-google/embeddinggemma-2}
       EMBED_IMAGE_TOKENS: ${EMBED_IMAGE_TOKENS:-280}
+      # 一次運算超過這個秒數就視為卡住：程序結束，由 restart 重啟
+      EMBED_TIMEOUT_SECONDS: ${EMBED_TIMEOUT_SECONDS:-180}
       # CPU 模式；GPU 模式由 docker-compose.gpu.yml 改成 cuda（docs/gpu-memory.md）
       EMBED_DEVICE: cpu
       HF_HOME: /hf-cache

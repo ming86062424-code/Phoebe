@@ -81,12 +81,7 @@ vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這�
 
 程式不限制這兩個值，換了更強的硬體時調高即可；目前的預設值是配合 RTX 2060 6 GB 與 16 GB 記憶體的 Docker 環境。實測數據見 [vllm-rtx2060.md](vllm-rtx2060.md)。
 
-**調高 `INGEST_CONCURRENCY` 前先看記憶體**：LiteParse 每處理一份 PDF，都要把頁面轉成 400 DPI 的圖、跑 Tesseract，所以同時處理的份數越多，ingest 用的記憶體越多。2026-10-23 的實測：
-
-| 同時處理 | ingest 記憶體最高 |
-|---|---|
-| 1 份 | 約 0.2–0.4 GB |
-| 2 份 | 約 3.2 GB |
+**調高 `INGEST_CONCURRENCY` 前先看記憶體**：LiteParse 每處理一份 PDF，都要把頁面轉成 400 DPI 的圖、跑 Tesseract，所以同時處理的份數越多，ingest 用的記憶體越多。2026-10-23 設成 2 份時，ingest 最高約 3.2 GB（同條件下只處理 1 份的用量還沒量過）。
 
 那次設成 2 份時，Docker 虛擬機只有 15.5 GB，又同時開著 vLLM 和其他程式（例如約 5 GB 的 RAGFlow），記憶體不夠，系統終止了 embedder，處理中的文件因此失敗；關掉 vLLM 後，同樣的設定可以順利完成。
 
@@ -96,6 +91,7 @@ vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這�
 
 - **解析模組暫時不能用**（例如 vLLM 還在載入）：該解析器的文件留在「排隊中」，其他文件照常處理，恢復後自動接續
 - **embedder 暫時連不上**（例如記憶體不足被系統終止、正在重新載入模型）：建立索引時會等 10、30、60 秒各重試一次，共重試 3 次；都失敗才把文件標為失敗（「無法連線到 embedding 服務，已重試 3 次」），之後可在知識庫頁按「重試」。提問時的查詢向量不重試，直接回報錯誤，避免回答卡住好幾分鐘
+- **embedder 卡住**：一次運算超過 `EMBED_TIMEOUT_SECONDS`（預設 180 秒）就視為卡住，embedder 自行結束，由 Docker 重啟；正在建立索引的文件會照上一點的方式重試。Docker 本身不會重啟「卡住但沒結束」的服務，所以這個判斷做在 embedder 裡
 - **心跳**：處理中的文件會定時更新時間；ingest 當掉而停住的文件，超過 `KB_STALE_SECONDS` 會被重新排入
 - **文件在處理中被刪除**：處理到下一頁時發現並停止，不會寫入任何 chunk
 - **執行緒安全**：PDF 轉圖用的 pdfium 不是執行緒安全的，所有 pypdfium2 的呼叫都經過同一把鎖；LiteParse 內建自己的 pdfium，不受影響
