@@ -209,6 +209,14 @@ uv run python -m scripts.benchmark
 
 用固定的情境實際跑文件處理、搜尋、對話，報告寫到 `docs/benchmarks/`，並和基準比較，說明見 [docs/benchmarks.md](docs/benchmarks.md)。
 
+**對話壓力測試**（僅手動執行；1、2、5、10 人同時提問，最多 10 人，會用到聊天模型的額度）：
+
+```
+uv run python -m scripts.loadtest
+```
+
+報告寫到 `data/loadtest-<時間>.md`，說明見 [docs/loadtest.md](docs/loadtest.md)。
+
 **AI 品質評測**（僅手動執行，用 DeepEval；裁判模型由 `EVAL_JUDGE_MODEL` 決定，預設是 Gemini，付費方案會計費，免費方案每分鐘只能呼叫 15 次，每天 500 次，所以 RAG 評測要跑 1 小時左右，一天最好只跑一次；分數僅供觀察，不是通過／失敗的門檻）：
 
 ```
