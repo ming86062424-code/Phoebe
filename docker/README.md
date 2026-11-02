@@ -144,7 +144,7 @@ docker compose logs -f ingest             # ingest 依序重新處理
 
 - `run --rm --no-deps ingest` 會開一個一次性容器，掛載同樣的 SQLite（`phoebe-db`）與 `docker/volumes/kb`，連到 Milvus，不會影響執行中的 ingest；若想用執行中的容器，也可改用 `docker compose exec ingest python -m app.kb.reprocess_all`。
 - `reprocess_all` 把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），保留原解析器。正在處理中的文件會略過（避免與 ingest 搶同一份文件），待它們完成後再執行一次即可。舊文件的圖片資料夾由 ingest 在重新解析前自動清除，指令本身不刪檔，以免與剛認領文件的 ingest 競爭。
-- 重新處理時 ingest 會逐頁呼叫 embedder（CPU），文件多或頁數多時會花一段時間；PDF 內的圖片在重新處理後才會有縮圖與圖片向量。
+- 重新處理時 ingest 會分批呼叫 embedder（整頁圖每批 2 張，預設在 CPU 上算），文件多或頁數多時會花一段時間；PDF 內的圖片在重新處理後才會有縮圖與圖片向量。
 
 ## 管理員與 Gemini 聊天
 

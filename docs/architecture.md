@@ -120,7 +120,7 @@ sequenceDiagram
         I->>E: POST /embed（文字 chunk；整頁圖＋文字每批 2 張）
         E-->>I: 向量
     end
-    Note over I,E: embedder 暫時連不上時，等 10、30、60 秒各重試一次
+    Note over I,E: embedder 暫時連不上時，等 10、30、60 秒各重試一次；<br/>embedder 一次運算超過 3 分鐘會自行結束、由 Docker 重啟
     I->>M: 寫入 chunk（文字、向量、圖片清單）
     Note over M: Milvus 自動從文字建立 BM25 索引
     I->>DB: 狀態改成「完成」（ready）和 chunk 數
