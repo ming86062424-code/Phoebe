@@ -4,25 +4,7 @@
 
 ## 總覽
 
-```
-                 瀏覽器（http://localhost:8000）
-                          │
-                          ▼
-   ┌───────────────────── web ─────────────────────┐
-   │ 網頁介面與 API：登入、對話、知識庫、上傳、檢索    │
-   └──┬──────────────┬──────────────┬──────────────┘
-      │ SQLite 佇列    │ 查詢向量      │ 聊天
-      ▼               ▼              ▼
-   ingest ────────► embedder      Gemini（雲端）／主機 Ollama
-      │  解析         ▲
-      ├─► LiteParse（ingest 內）
-      ├─► vllm（LightOnOCR，GPU）
-      │  寫入向量      │
-      ▼               │
-   milvus ◄───────────┘（web 也直接查詢 milvus）
-      ├─ etcd
-      └─ minio
-```
+服務之間怎麼連接，見 [architecture.md](architecture.md) 的架構圖。簡單來說：瀏覽器只連 web；web 處理對話和檢索，把上傳的文件放進 SQLite 的佇列；ingest 從佇列取出文件，解析後請 embedder 算向量，寫進 Milvus；monitor 在背景記錄資源用量。
 
 ## Docker 裡的服務
 
