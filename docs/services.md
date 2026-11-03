@@ -53,21 +53,7 @@ ingest 負責把上傳的文件變成可以檢索的 chunk。它是知識庫唯�
 
 ### 同時處理
 
-| 設定 | 預設 | 說明 |
-|---|---|---|
-| `INGEST_CONCURRENCY` | 1 | ingest 同時處理幾份文件。一個分派者負責認領文件，最多交給這麼多條執行緒同時處理 |
-| `OCR_CONCURRENCY` | 4 | LightOnOCR 處理一份文件時，同時送給 vLLM 的頁數 |
-| `OCR_TIMEOUT_SECONDS` | 600 | 每一頁 OCR 請求的逾時秒數 |
-
-vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這個乘積不要超過 vLLM 的 `--max-num-seqs`（預設 4，`OCR_VLLM_MAX_NUM_SEQS`），超過的部分會在 vLLM 內排隊、拖慢每一頁。
-
-程式不限制這兩個值，換了更強的硬體時調高即可；目前的預設值是配合 RTX 2060 6 GB 與 16 GB 記憶體的 Docker 環境。實測數據見 [vllm-rtx2060.md](vllm-rtx2060.md)。
-
-**調高 `INGEST_CONCURRENCY` 前先看記憶體**：LiteParse 每處理一份 PDF，都要把頁面轉成 400 DPI 的圖、跑 Tesseract，所以同時處理的份數越多，ingest 用的記憶體越多。2026-10-23 設成 2 份時，ingest 最高約 3.2 GB（同條件下只處理 1 份的用量還沒量過）。
-
-那次設成 2 份時，Docker 虛擬機只有 15.5 GB，又同時開著 vLLM 和其他程式（例如約 5 GB 的 RAGFlow），記憶體不夠，系統終止了 embedder，處理中的文件因此失敗；關掉 vLLM 後，同樣的設定可以順利完成。
-
-當時 embedder 最高用到約 5 GB，之後已經降低：2026-10-24 起不載入用不到的音訊編碼器，2026-10-27 起整頁圖每次只送 2 張。現在 CPU 模式待機約 2.5 GB，處理一份 12 頁 PDF 時最高約 2.7 GB（[parser-benchmarks.md](parser-benchmarks.md)）。同時處理 2 份的情況還沒有重新量過。
+ingest 同時處理幾份文件、LightOnOCR 一次送幾頁，以及這些數字的原因，見下方的[並行數與批次大小](#並行數與批次大小)。
 
 ### 可靠性
 
@@ -86,6 +72,76 @@ vLLM 同時收到的請求數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`。這�
 | **主機上的 Ollama** | 選用的本機聊天模型（`gemma4:e4b`）。web 透過 `host.docker.internal:11434` 連線。vllm 開著時 GPU 會被佔走，Ollama 只能用 CPU 執行，見 [vllm-rtx2060.md](vllm-rtx2060.md) |
 
 管理員可以在「系統設定」頁切換聊天的供應商與模型。
+
+## 並行數與批次大小
+
+各服務「同時處理幾個」「一次送幾個」的數字都整理在這裡。預設值是配合開發機設定的：RTX 2060 6 GB 顯卡，Docker 虛擬機約 16 GB 記憶體。換了硬體可以調整「可設定」那一欄有列出變數的項目。
+
+### 總表
+
+| 服務 | 什麼東西的數量 | 預設 | 可設定 |
+|---|---|---|---|
+| web | Gunicorn worker（程序）數 | 2 | `WEB_CONCURRENCY` |
+| web | 每個 worker 處理請求的主 thread | 1 | 否 |
+| web | 同一個對話同時產生的回覆數 | 1 | 否 |
+| ingest | 同時處理的文件數 | 1 | `INGEST_CONCURRENCY` |
+| ingest | 多久查一次佇列 | 2 秒 | `KB_INGEST_POLL_SECONDS` |
+| ingest | LightOnOCR：一份文件同時送給 vLLM 的頁數 | 4 | `OCR_CONCURRENCY` |
+| ingest | 用 pypdfium2 處理 PDF（LightOnOCR 轉頁面圖、LiteParse 讀總頁數） | 一次 1 個呼叫 | 否 |
+| vllm | 同時處理的頁數（序列數） | 4 | `OCR_VLLM_MAX_NUM_SEQS` |
+| embedder | 程序數 | 1 | 否 |
+| embedder | 同時運算的請求數，其他請求排隊 | 1 | 否 |
+| embedder | 每個請求最多幾段文字 | 16 段 | 否（`app/kb/embedder_client.py` 的 `BATCH_SIZE`） |
+| embedder | 每個請求最多幾張整頁圖（各連同該頁文字） | 2 張 | 否（`app/kb/index.py` 的 `IMAGE_BATCH_SIZE`） |
+| embedder | 一次運算超過多久算卡住 | 180 秒 | `EMBED_TIMEOUT_SECONDS` |
+| 回答時 | 附給聊天模型的圖片上限（張數，不是並行數） | 4 張 | `KB_MAX_IMAGES` |
+
+Milvus、Gemini、Ollama 的並行上限 Phoebe 沒有設定，由它們自己決定。Gemini 另外受每分鐘請求數的額度限制。
+
+### 要一起看的關係
+
+- **vLLM 同時收到的頁數 = `INGEST_CONCURRENCY` × `OCR_CONCURRENCY`**。這個乘積不要超過 `OCR_VLLM_MAX_NUM_SEQS`，超過的部分會在 vLLM 裡排隊，拖慢每一頁。三個值要一起調。
+- **embedder 是全系統共用的瓶頸**。web 的「問題轉向量」和 ingest 的「建立索引」排同一個隊，所以文件正在建立索引時，聊天開始回應會變慢。
+
+### 為什麼是這些數字
+
+#### web
+
+- **worker 數 2**：當初沒有留下選 2 的紀錄。推論的理由：
+  - 每個 worker 用 async 輪流處理請求，等聊天模型回應時不佔 CPU，一個 worker 就能同時服務很多對話，不需要開很多個。
+  - 開 2 個，其中一個重啟或卡住時，另一個還能接請求。
+  - 每多一個 worker 就多佔一份記憶體。
+  - 實際能服務多少人，要用壓力測試（[loadtest.md](loadtest.md)）量。
+- **每個 worker 1 個主 thread**：這是 async 的運作方式，不是設定出來的。主 thread 在等待時就去處理別的請求；會卡住主 thread 的工作，例如讀寫 SQLite、檢索，交給輔助 thread 做。
+- **同一個對話一次只產生 1 份回覆**：避免同一個對話裡兩份回覆同時寫入，例如連按兩次送出，或兩個分頁同時送。第二個請求會收到 409「這個對話正在產生回覆，請稍候」。鎖存在 SQLite，2 個 worker 都看得到；處理中的程序當掉時，鎖在 `REPLY_LOCK_TTL_SECONDS`（90 秒）內失效。
+
+#### ingest 與 vLLM
+
+- **同時處理 1 份文件**：記憶體不夠，不是速度。
+  - LiteParse 每處理一份 PDF，都要把頁面轉成 400 DPI 的圖、跑 Tesseract，同時處理的份數越多，ingest 用的記憶體越多。2026-10-23 設成 2 份時，ingest 最高約 3.2 GB（同條件下只處理 1 份的用量還沒量過）。
+  - 那次 Docker 虛擬機只有 15.5 GB，又同時開著 vLLM 和其他程式（例如約 5 GB 的 RAGFlow），記憶體不夠，系統終止了 embedder，處理中的文件因此失敗；關掉 vLLM 後，同樣的設定可以順利完成。
+  - 當時 embedder 最高用到約 5 GB，之後已經降低：2026-10-24 起不載入用不到的音訊編碼器，2026-10-27 起整頁圖每次只送 2 張。現在 CPU 模式待機約 2.5 GB，處理一份 12 頁 PDF 時最高約 2.7 GB（[parser-benchmarks.md](parser-benchmarks.md)）。同時處理 2 份的情況還沒有重新量過。
+  - 記憶體較大的機器可以調高，調高前先用監控頁看實際用量。
+- **每 2 秒查一次佇列**：當初沒有留下紀錄。推論的理由：web 和 ingest 在不同容器，web 沒辦法直接通知 ingest，只能讓 ingest 定時查；文件處理動輒幾十秒以上，多等最多 2 秒影響不大，而查一次佇列只是一個很輕的 SQLite 查詢。
+- **LightOnOCR 一次送 4 頁**：2026-10-23 在 RTX 2060 上實測，一份 12 頁的 PDF，一次 1 頁要 630 秒、2 頁 365 秒、4 頁 279 秒，4 頁最快，ingest 的記憶體只多約 150 MB（[parser-benchmarks.md](parser-benchmarks.md)、[vllm-rtx2060.md](vllm-rtx2060.md)）。
+- **vLLM 最多同時 4 頁**：vLLM 預設最多 256 條序列，在 6 GB 顯卡上配不到 KV cache，無法啟動。改成 4，剛好配合「一次送 4 頁」；每頁約需 7,000 個 token，512 MiB 的 KV cache 放得下 4 頁（[gpu-memory.md](gpu-memory.md)）。
+- **pypdfium2 一次只處理 1 個呼叫**：pdfium 不是執行緒安全的，多個 thread 同時呼叫可能出錯，所以所有 pypdfium2 的呼叫都經過同一把鎖。LiteParse 用的是自己內建的 pdfium，不受這把鎖限制。
+
+#### embedder
+
+- **只有 1 個程序**：每個程序都要載入一份模型，CPU 模式約 2.5 GB。多開一個程序就多一份記憶體，在這台機器上不划算。
+- **一次只算 1 個請求**：模型不是設計來同時被多個 thread 呼叫的，而且同時算多個請求，記憶體高峰會疊加。所以用一把鎖讓請求排隊，一次算一個。
+- **文字每批 16 段**：當初沒有留下選 16 的紀錄。推論的理由：文字很輕，一批 16 段的記憶體負擔很小，又能把一份文件的上百段減少成少數幾次請求。
+- **整頁圖每批 2 張**：圖片很吃記憶體，embedder 會把一個請求裡的圖一次算完，所以一批的張數就決定記憶體高峰。用同樣 8 張圖實測（2026-10-27 起改用 2 張）：一次 8 張時顯存高峰 3.12 GiB、2 張時 2.01 GiB，時間只多約 6%。CPU 模式的高峰也從約 3.5 GB 降到約 2.7 GB，建立索引沒有變慢（[gpu-memory.md](gpu-memory.md)）。
+- **超過 180 秒算卡住**：一個請求最多是 2 張整頁圖，CPU 上大約十幾秒到幾十秒，180 秒有十倍左右的餘裕，不會誤判正常的運算。卡住時 embedder 會自己結束，由 Docker 重啟；Docker 本身不會重啟「卡住但沒結束」的服務，所以這個判斷做在 embedder 裡（2026-11-03 加入）。
+
+#### 回答時附圖上限 4 張
+
+當初的設計規格只寫了「最多 4 張」，沒有寫原因。已知的考量：
+
+- 每張圖都佔模型的上下文空間。用 Ollama 時，一張整頁圖約 740 個 token，圖多了可能超過上下文長度，回答會被截斷，所以 Ollama 的上下文預設調到 16384（`OLLAMA_NUM_CTX`）。
+- 圖片和參考資料是靠順序和文字說明對應的，圖越多，模型越容易對錯。
+- 圖越多，送給模型的資料越大，回答越慢，雲端模型的費用也越高。
 
 ## 資料流程
 
