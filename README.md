@@ -253,6 +253,8 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 
 ## 環境變數
 
+各服務的並行數與批次大小（例如 `WEB_CONCURRENCY`、`INGEST_CONCURRENCY`、`OCR_CONCURRENCY`）和選這些數字的原因，整理在 [docs/services.md](docs/services.md#並行數與批次大小)。
+
 | 變數 | 預設值 | 說明 |
 | --- | --- | --- |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 位址 |
