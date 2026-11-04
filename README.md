@@ -150,7 +150,7 @@ uv run --group ocr python -m scripts.ocr_smoke 路徑/檔案.pdf
 
 回答時會把檢索到的參考圖片一併附給聊天模型（依參考資料順序，頁面圖優先，最多 `KB_MAX_IMAGES` 張，預設 4；最長邊超過 1536 px 會先縮小）。模型不支援圖片時，系統會自動不帶圖重試一次，使用者不會看到錯誤。
 
-注意（Ollama 視覺模型）：4 張大圖可能超過預設的 context 長度（`num_ctx`）。若回答被截斷或失敗，請調低 `KB_MAX_IMAGES`（`0` 為不附圖），或調高 Ollama 的 `num_ctx`（例如在 Modelfile 設 `PARAMETER num_ctx 8192`，或設定環境變數 `OLLAMA_CONTEXT_LENGTH`）。
+注意（Ollama 視覺模型）：4 張大圖可能超過預設的 context 長度（`num_ctx`）。若回答被截斷或失敗，請調低 `KB_MAX_IMAGES`（`0` 為不附圖），或調高 `OLLAMA_NUM_CTX`（預設 16384）。程式每次請求都會帶上這個值，所以 Modelfile 的 `PARAMETER num_ctx` 和 Ollama 的 `OLLAMA_CONTEXT_LENGTH` 都不會生效。
 
 ### 重新處理既有文件
 
@@ -234,7 +234,7 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 
 ## 管理員與系統設定
 
-- 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`，服務啟動時會自動建立這個帳號，不需要註冊。之後以 `.env` 為準：改了密碼重新啟動就會生效（該帳號原本的登入會被登出）；若已有人註冊了同名帳號，密碼會被改成 `.env` 的值並成為管理員。`.env` 已被 git 忽略，但密碼是明文，請保護好這個檔案。
+- 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`，服務啟動時會自動建立這個帳號，不需要註冊。之後以 `.env` 為準：改了密碼重新啟動服務就會生效（Docker 要用 `docker compose up -d`，`restart` 不會重新讀取 `.env`；該帳號原本的登入會被登出）；若已有人註冊了同名帳號，密碼會被改成 `.env` 的值並成為管理員。`.env` 已被 git 忽略，但密碼是明文，請保護好這個檔案。
 - 其他使用者：預設不開放註冊，登入頁會顯示「請向管理員取得帳號」。要讓別人自己註冊，在 `.env` 設 `ALLOW_REGISTRATION=true` 再重新啟動；帳號建好後可以改回 `false`。
 - 只有管理員會在側邊欄看到「系統設定」頁，所有使用者的聊天都套用這份設定：
   - LLM 供應商：本機 Ollama 或 Google Gemini（未設定 `GEMINI_API_KEY` 時 Gemini 選項停用）
