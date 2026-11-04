@@ -30,6 +30,26 @@ MAX_DESCRIPTION_LENGTH = 500
 UPLOAD_CHUNK = 1024 * 1024
 # room for the multipart boundaries and the parser field around the file itself
 MULTIPART_OVERHEAD = 64 * 1024
+
+
+def _size_limited(request: Request, limit: int, error: HTTPException) -> Request:
+    """The request, but reading more than `limit` body bytes raises `error`.
+
+    Content-Length is checked up front; this covers a body sent without one (chunked),
+    which would otherwise be written to a temporary file in full before any check.
+    """
+    received = 0
+
+    async def receive():
+        nonlocal received
+        message = await request.receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise error
+        return message
+
+    return Request(request.scope, receive)
 MAX_FILENAME_LENGTH = 200
 UNSUPPORTED_TYPE = "不支援的檔案類型（支援 PDF、txt、md、png、jpg、jpeg、webp）"
 UNREADABLE = "無法讀取檔案內容"
@@ -213,7 +233,7 @@ async def upload_document(
     PDFs and images use the knowledge base's parser setting; .txt and .md always use the
     text parser. A `parser` form field from older clients is ignored.
     """
-    kb_row = _require_kb(conn, user, kb_id)
+    kb_row = await run_in_threadpool(_require_kb, conn, user, kb_id)
     limit = settings.max_upload_mb * 1024 * 1024
     too_big = HTTPException(status_code=413, detail=f"檔案超過 {settings.max_upload_mb}MB 上限")
     # The form is parsed here rather than by FastAPI so an oversized upload is
@@ -221,7 +241,7 @@ async def upload_document(
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > limit + MULTIPART_OVERHEAD:
         raise too_big
-    form = await request.form()
+    form = await _size_limited(request, limit + MULTIPART_OVERHEAD, too_big).form()
     file = form.get("file")
     if not isinstance(file, UploadFile):
         raise HTTPException(status_code=422, detail="請選擇要上傳的檔案")
@@ -308,8 +328,8 @@ async def document_chunks(
     kb: KbServices = Depends(get_kb_services),
 ):
     """How the document was split: its stored chunks, in order (empty until indexed)."""
-    _require_kb(conn, user, kb_id)
-    doc = store.get_document(conn, doc_id)
+    await run_in_threadpool(_require_kb, conn, user, kb_id)
+    doc = await run_in_threadpool(store.get_document, conn, doc_id)
     if doc is None or doc["kb_id"] != kb_id:
         raise HTTPException(status_code=404, detail="找不到文件")
     try:
@@ -394,7 +414,7 @@ async def search(
     settings: Settings = Depends(get_settings),
     kb: KbServices = Depends(get_kb_services),
 ):
-    kb_row = _require_kb(conn, user, kb_id)
+    kb_row = await run_in_threadpool(_require_kb, conn, user, kb_id)
     weight = (
         store.vector_weight(kb_row, settings.kb_vector_weight)
         if vector_weight is None
@@ -415,7 +435,7 @@ async def search(
         )
         raise HTTPException(status_code=503, detail=detail) from e
     # chunks of a document deleted during a store outage may linger; SQLite is the truth
-    live = {d["id"] for d in store.list_documents(conn, kb_id)}
+    live = {d["id"] for d in await run_in_threadpool(store.list_documents, conn, kb_id)}
     found = [s.to_dict() for s in sources if s.document_id in live]
     await run_in_threadpool(
         record_event, settings.db_path, "search", "ok", started, time.time(),

@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -75,19 +76,27 @@ def authenticate(conn: sqlite3.Connection, username: str, password: str) -> int 
     return row["id"] if verify_password(password, row["password_hash"]) else None
 
 
+def _session_key(token: str) -> str:
+    """What the sessions table stores: a hash, so a copied database cannot log anyone in."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def create_session(conn: sqlite3.Connection, user_id: int, days: int) -> str:
+    """A new login's cookie token; expired sessions are cleared on the way."""
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
+    # every expires_at is UTC isoformat, so the text comparison follows the time
+    conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now.isoformat(),))
     conn.execute(
         "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (token, user_id, now.isoformat(), (now + timedelta(days=days)).isoformat()),
+        (_session_key(token), user_id, now.isoformat(), (now + timedelta(days=days)).isoformat()),
     )
     conn.commit()
     return token
 
 
 def delete_session(conn: sqlite3.Connection, token: str) -> None:
-    conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    conn.execute("DELETE FROM sessions WHERE token = ?", (_session_key(token),))
     conn.commit()
 
 
@@ -101,7 +110,7 @@ def current_user(
         row = conn.execute(
             "SELECT u.id, u.username, s.expires_at FROM sessions s "
             "JOIN users u ON u.id = s.user_id WHERE s.token = ?",
-            (token,),
+            (_session_key(token),),
         ).fetchone()
         if row and datetime.fromisoformat(row["expires_at"]) > datetime.now(timezone.utc):
             return {

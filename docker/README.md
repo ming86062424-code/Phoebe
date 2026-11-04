@@ -31,7 +31,7 @@ cd docker
 cp .env.example .env
 ```
 
-編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_KV_CACHE_MEMORY`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`、`EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`MONITOR_*`）。只有 web 與 ingest 會把整份 `docker/.env` 載入成容器的環境變數；embedder、monitor 只拿到 compose 指定的幾個變數，vllm 與 Milvus 相關服務則完全不載入。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`EMBEDDER_URL`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
+編輯 `docker/.env`（可不修改直接使用）。Compose 會自動讀取它做變數插值（`PHOEBE_PORT`、`OCR_MODEL`、`OCR_VLLM_KV_CACHE_MEMORY`、`OCR_VLLM_GPU_UTIL`、`OCR_VLLM_MAX_MODEL_LEN`、`OCR_VLLM_MAX_NUM_SEQS`、`EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`EMBED_TIMEOUT_SECONDS`、`MONITOR_*`）。只有 web 與 ingest 會把整份 `docker/.env` 載入成容器的環境變數；embedder、monitor 只拿到 compose 指定的幾個變數，vllm 與 Milvus 相關服務則完全不載入。`DB_PATH`、`KB_DIR`、`MILVUS_URI`、`EMBEDDER_URL`、`OLLAMA_BASE_URL`、`KB_INGEST_MODE`、`OCR_BACKEND`、`VLLM_BASE_URL` 由 `docker-compose.yml` 固定，無法在 `.env` 覆寫。`docker/.env` 已被 git 忽略，也不會進入映像。
 
 ## 啟動、停止、看 log
 
@@ -56,7 +56,7 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
 
 啟動參數（0.8B 官方設定）：`--trust-remote-code`、`--limit-mm-per-prompt '{"image": 1}'`、`--default-chat-template-kwargs '{"enable_thinking": false}'`、`--mm-processor-cache-gb 0`、`--no-enable-prefix-caching`、`--max-model-len 18000`（`OCR_VLLM_MAX_MODEL_LEN`）。RTX 2060 是 Turing 架構，不支援 bfloat16，因此固定 `--dtype float16`。
 
-**調校（RTX 2060 6GB 實測）**：完整的排錯過程、錯誤訊息與和 Ollama 共用 GPU 的說明見 [docs/vllm-rtx2060.md](../docs/vllm-rtx2060.md)。
+**調校（RTX 2060 6GB 實測）**：各服務的並行數總表見 [docs/services.md](../docs/services.md#並行數與批次大小)。完整的排錯過程、錯誤訊息與和 Ollama 共用 GPU 的說明見 [docs/vllm-rtx2060.md](../docs/vllm-rtx2060.md)。
 
 | 設定 | 預設 | 說明 |
 |---|---|---|
@@ -89,8 +89,9 @@ LightOnOCR 依官方方式用 vLLM 服務（映像 `vllm/vllm-openai:v0.30.0`，
   ```
   `docker-compose.gpu.yml` 會改用 GPU 版映像 `phoebe-embedder:gpu`（CUDA 12.6 版 PyTorch，`TORCH_VARIANT=cu126`）並設定 `EMBED_DEVICE=cuda`。要用 LightOnOCR 時，執行 `docker compose --profile lightonocr up -d` 切回來，embedder 會回到 CPU。兩種模式的向量相同，切換不用重建索引。6 GB 顯卡放不下兩者，**不要同時帶 GPU 設定檔和 `--profile lightonocr`**。顯存用量與設計原因見 [docs/gpu-memory.md](../docs/gpu-memory.md)。
 - `POST /embed`：`{"items": [{"kind": "query"|"document"|"image"|"image_text", ...}]}` → `{"embeddings": [[...768]]}`；`GET /health`：模型載入完成才回 200（回應中的 `device` 是 `cpu` 或 `cuda`），載入中回 503。
-- 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）。
-- `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。`EMBED_DEVICE`（由 compose 設定，不從 `.env` 讀取）只接受 `cpu`、`cuda`；設為 `cuda` 但容器看不到 GPU 時，模型載入失敗並重啟，不會偷偷改用 CPU。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
+- 設定（`docker/.env`）：`EMBED_MODEL_ID`（預設 `google/embeddinggemma-2`）、`EMBED_IMAGE_TOKENS`（每張圖片的 soft token，預設 280）、`EMBED_TIMEOUT_SECONDS`（預設 180）。
+- **卡住時自動重啟**：一個請求的運算超過 `EMBED_TIMEOUT_SECONDS` 秒，就視為卡住，程序直接結束，由 `restart: unless-stopped` 重啟。只靠 Docker 不夠：`restart` 只在程序結束時重啟，healthcheck 失敗也只會標成 unhealthy，不會重啟。排隊等前一個請求的時間不算在內。
+- `EMBED_IMAGE_TOKENS` 只接受 70、140、280、560、1120，否則服務啟動失敗。`EMBED_DEVICE`（由 compose 設定，不從 `.env` 讀取）只接受 `cpu`、`cuda`；設為 `cuda` 但容器看不到 GPU 時，模型載入失敗並重啟，不會偷偷改用 CPU。模型載入失敗（例如下載中斷）時程序會直接結束，由 `restart: unless-stopped` 自動重啟重試。服務只傳入 `EMBED_MODEL_ID`、`EMBED_IMAGE_TOKENS`、`EMBED_TIMEOUT_SECONDS`、`HF_HOME`（與主機環境有設定時的 `HF_TOKEN`），不載入整份 `docker/.env`。圖片上限：每張解碼後 20 MB 以內、25,000,000 像素以內，整個請求 100 MB 以內（超過回 422／413）。
 - 首次啟動會下載約 1.5 GB 模型到 volume `phoebe_embedder-hf-cache`（healthcheck `start_period` 600 秒）。此 volume 與 vLLM 的模型快取分開，避免 root／非 root 寫入權限衝突。
 - 首次下載可能超過 healthcheck 的等待時間：`start_period` 600 秒，之後每 15 秒檢查一次、最多失敗 10 次（約再 150 秒）。`web`、`ingest` 依賴 `embedder` 健康，若在 `docker compose up -d` 期間因此放棄啟動，等 `docker compose ps` 顯示 embedder 為 healthy（`docker compose logs -f embedder` 可看下載進度）後，再執行一次 `docker compose up -d` 即可，已下載的模型快取不會重來。
 - 本機快速測試：`cd docker && docker compose up -d embedder`；單元測試：`cd embedder && uv run pytest -q`（用假模型，不下載模型）。
@@ -143,13 +144,13 @@ docker compose logs -f ingest             # ingest 依序重新處理
 
 - `run --rm --no-deps ingest` 會開一個一次性容器，掛載同樣的 SQLite（`phoebe-db`）與 `docker/volumes/kb`，連到 Milvus，不會影響執行中的 ingest；若想用執行中的容器，也可改用 `docker compose exec ingest python -m app.kb.reprocess_all`。
 - `reprocess_all` 把所有「完成」與「失敗」的文件設為排隊中（清除錯誤與 chunk 數），保留原解析器。正在處理中的文件會略過（避免與 ingest 搶同一份文件），待它們完成後再執行一次即可。舊文件的圖片資料夾由 ingest 在重新解析前自動清除，指令本身不刪檔，以免與剛認領文件的 ingest 競爭。
-- 重新處理時 ingest 會逐頁呼叫 embedder（CPU），文件多或頁數多時會花一段時間；PDF 內的圖片在重新處理後才會有縮圖與圖片向量。
+- 重新處理時 ingest 會分批呼叫 embedder（整頁圖每批 2 張，預設在 CPU 上算），文件多或頁數多時會花一段時間；PDF 內的圖片在重新處理後才會有縮圖與圖片向量。
 
 ## 管理員與 Gemini 聊天
 
 在 `docker/.env` 設定（修改後需 `docker compose up -d` 重新建立容器才會套用）：
 
-- `ADMIN_USERNAME`、`ADMIN_PASSWORD`：管理員帳密，web 啟動時自動建立帳號並同步密碼（改密碼後 `docker compose restart web ingest`）。舊版的 `ADMIN_USERNAMES` 已不再使用。管理員可看到「系統設定」頁，設定LLM 供應商（Ollama／Gemini）、模型（即時取得清單）、系統提示詞（最多 4000 字）與 temperature（自訂或預設值）。
+- `ADMIN_USERNAME`、`ADMIN_PASSWORD`：管理員帳密，web 啟動時自動建立帳號並同步密碼（改密碼後一樣執行 `docker compose up -d`；`restart` 不會重新讀取 `docker/.env`）。舊版的 `ADMIN_USERNAMES` 已不再使用。管理員可看到「系統設定」頁，設定LLM 供應商（Ollama／Gemini）、模型（即時取得清單）、系統提示詞（最多 4000 字）與 temperature（自訂或預設值）。
 - `GEMINI_API_KEY`：到 [Google AI Studio](https://aistudio.google.com/apikey) 建立金鑰後填入。金鑰只放在 `docker/.env`，不會出現在介面或資料庫；留空則 Gemini 選項停用。
 - `GEMINI_MODEL`：預設 `gemini-3.5-flash-lite`。
 
@@ -182,6 +183,18 @@ docker run --rm -v phoebe_minio-data:/d -v "$PWD":/backup alpine tar czf /backup
 還原時把 `kb/` 資料夾放回 `docker/volumes/`，並用 `tar xzf` 把各個備份解回對應的空 volume（例如 `docker run --rm -v phoebe_milvus-data:/d -v "$PWD":/backup alpine tar xzf /backup/milvus-data.tgz -C /d`）。Milvus 的三個 volume 要一起備份、一起還原。
 
 **更早的版本（2026-10-19 以前，全部用 named volume）**：那時的 `phoebe_phoebe-data`、`phoebe_hf-cache` 已不再使用，確定不需要後可刪除：`docker volume rm phoebe_phoebe-data phoebe_hf-cache`。其他同名的 volume（`phoebe_milvus-data` 等）**現在又在使用中，不要刪除**。
+
+## 對外開放與反向代理
+
+web 預設在所有網路介面上開放 `PHOEBE_PORT`（8000），同一個網路裡的其他電腦都連得到。程式本身只做帳號密碼登入，沒有 HTTPS、沒有登入次數限制，也沒有使用量配額。只在自己電腦上用的話不需要處理；要給其他人用時，建議放在反向代理（例如 nginx、Caddy）後面：
+
+- **讓 8000 只對本機開放**：在 `docker/.env` 設 `PHOEBE_PORT=127.0.0.1:8000`。否則別人可以直接連 8000，繞過反向代理的所有限制。
+- **反向代理負責**：HTTPS、登入 API（`/api/auth/login`）的次數限制、IP 白名單、上傳大小上限（程式本身也會擋超過 `MAX_UPLOAD_MB` 的上傳）。
+- **轉送聊天回答時不要緩衝**：回答是一段一段串流的，nginx 要對 `/api/` 設 `proxy_buffering off`，否則畫面會等整段回答完成才出現。上傳與回答可能需要幾分鐘，`proxy_read_timeout` 也要調長（例如 600 秒）。
+- **走 HTTPS 時**：在 `docker/.env` 設 `COOKIE_SECURE=true`，登入 cookie 就只會透過 HTTPS 傳送。
+- **註冊**：預設關閉（`ALLOW_REGISTRATION=false`），只有管理員帳號能登入。要新增使用者時，暫時設成 `true` 讓對方註冊，再改回 `false`。
+
+改完 `docker/.env` 後執行 `docker compose up -d` 才會套用（`restart` 不會重新讀取設定）。
 
 ## 注意
 

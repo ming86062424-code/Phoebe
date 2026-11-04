@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { api } from '../api/client'
 import styles from './LoginPage.module.css'
@@ -10,6 +10,21 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // sign-up is offered only when the server allows it (ALLOW_REGISTRATION)
+  const [canRegister, setCanRegister] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    api
+      .authOptions()
+      .then((o) => {
+        if (active) setCanRegister(o.allow_registration)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
 
   const isLogin = mode === 'login'
 
@@ -60,16 +75,20 @@ export default function LoginPage() {
         <button type="submit" className={styles.submit} disabled={busy}>
           {isLogin ? '登入' : '註冊'}
         </button>
-        <button
-          type="button"
-          className={styles.switch}
-          onClick={() => {
-            setMode(isLogin ? 'register' : 'login')
-            setError('')
-          }}
-        >
-          {isLogin ? '還沒有帳號？註冊' : '已有帳號？登入'}
-        </button>
+        {canRegister ? (
+          <button
+            type="button"
+            className={styles.switch}
+            onClick={() => {
+              setMode(isLogin ? 'register' : 'login')
+              setError('')
+            }}
+          >
+            {isLogin ? '還沒有帳號？註冊' : '已有帳號？登入'}
+          </button>
+        ) : (
+          <p className={styles.hint}>還沒有帳號？請向管理員取得</p>
+        )}
       </form>
     </div>
   )

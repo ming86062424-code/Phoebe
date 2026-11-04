@@ -37,6 +37,10 @@ MAX_IMAGE_B64_CHARS = (MAX_IMAGE_BYTES + 2) // 3 * 4
 MAX_IMAGE_PIXELS = 25_000_000
 MAX_BODY_BYTES = 100 * 1024 * 1024
 QUERY_PREFIX = "task: search result | query: "
+# An encode running longer than this is treated as hung: the process exits and Docker
+# restarts it (a hung process never exits on its own, so `restart:` alone can't help).
+# One request is at most a few page images: tens of seconds on the CPU.
+DEFAULT_ENCODE_TIMEOUT = 180.0
 
 
 class Query(BaseModel):
@@ -142,9 +146,14 @@ def create_app(
     device: str | None = None,
     free_cache: Callable[[], None] | None = None,
     on_load_error: Callable[[], None] | None = None,
+    encode_timeout: float | None = None,
+    on_stuck: Callable[[], None] | None = None,
 ) -> FastAPI:
     """``model`` is injected (ready immediately); otherwise ``loader`` (default: the real model)
-    runs in a background thread so the server starts answering /health with 503 right away."""
+    runs in a background thread so the server starts answering /health with 503 right away.
+
+    ``on_stuck`` (default: exit the process) runs when one request's encode takes longer
+    than ``encode_timeout`` seconds (env EMBED_TIMEOUT_SECONDS, default 180)."""
     model_id = model_id or os.environ.get("EMBED_MODEL_ID", DEFAULT_MODEL_ID)
     if image_tokens is None:
         image_tokens = int(os.environ.get("EMBED_IMAGE_TOKENS", DEFAULT_IMAGE_TOKENS))
@@ -155,6 +164,21 @@ def create_app(
     device = device or os.environ.get("EMBED_DEVICE", DEFAULT_DEVICE)
     if device not in VALID_DEVICES:
         raise ValueError(f"EMBED_DEVICE must be one of {VALID_DEVICES}, got {device!r}")
+    if encode_timeout is None:
+        raw = os.environ.get("EMBED_TIMEOUT_SECONDS", str(DEFAULT_ENCODE_TIMEOUT))
+        try:
+            encode_timeout = float(raw)
+        except ValueError:
+            raise ValueError(f"EMBED_TIMEOUT_SECONDS must be a number, got {raw!r}") from None
+    if not encode_timeout > 0:
+        raise ValueError(f"EMBED_TIMEOUT_SECONDS must be positive, got {encode_timeout!r}")
+
+    def exit_stuck():
+        log.error("encode took longer than %s s; exiting so Docker restarts the service",
+                  encode_timeout)
+        os._exit(1)
+
+    on_stuck = on_stuck or exit_stuck
     if free_cache is None and device == "cuda":
         free_cache = free_gpu_cache
     state = {"model": model, "error": None}
@@ -226,16 +250,23 @@ def create_app(
         image_kwargs = {"processing_kwargs": {"image": {"max_soft_tokens": image_tokens}}}
         out: np.ndarray | None = None
         with lock:
-            for idx, inputs, kwargs in (
-                (text_idx, text_in, {}),
-                (image_idx, image_in, image_kwargs),
-                (mixed_idx, mixed_in, image_kwargs),
-            ):
-                if inputs:
-                    vecs = np.asarray(m.encode(inputs, **kwargs), dtype=np.float32)
-                    if out is None:
-                        out = np.zeros((len(req.items), vecs.shape[1]), dtype=np.float32)
-                    out[idx] = vecs
+            # started once the lock is held: waiting behind other requests doesn't count
+            watchdog = threading.Timer(encode_timeout, on_stuck)
+            watchdog.daemon = True
+            watchdog.start()
+            try:
+                for idx, inputs, kwargs in (
+                    (text_idx, text_in, {}),
+                    (image_idx, image_in, image_kwargs),
+                    (mixed_idx, mixed_in, image_kwargs),
+                ):
+                    if inputs:
+                        vecs = np.asarray(m.encode(inputs, **kwargs), dtype=np.float32)
+                        if out is None:
+                            out = np.zeros((len(req.items), vecs.shape[1]), dtype=np.float32)
+                        out[idx] = vecs
+            finally:
+                watchdog.cancel()
             if free_cache is not None:
                 free_cache()
         norms = np.linalg.norm(out, axis=1, keepdims=True)

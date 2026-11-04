@@ -59,7 +59,7 @@ cd frontend && npm run dev
 
 **注意**
 
-- 本機版的資料在專案根目錄的 `data/`（SQLite 與上傳檔），和 Docker 版的資料完全分開，需要另外註冊帳號。
+- 本機版的資料在專案根目錄的 `data/`（SQLite 與上傳檔），和 Docker 版的資料完全分開，帳號也要另外建立（管理員帳號一樣由 `.env` 自動建立）。
 - LiteParse 在本機（Windows）也能直接使用，`uv sync` 會一併安裝。
 - 開發完要回到 Docker 版時：`cd docker && docker compose up -d`（要用 LightOnOCR 則加 `--profile lightonocr`）。
 
@@ -150,7 +150,7 @@ uv run --group ocr python -m scripts.ocr_smoke 路徑/檔案.pdf
 
 回答時會把檢索到的參考圖片一併附給聊天模型（依參考資料順序，頁面圖優先，最多 `KB_MAX_IMAGES` 張，預設 4；最長邊超過 1536 px 會先縮小）。模型不支援圖片時，系統會自動不帶圖重試一次，使用者不會看到錯誤。
 
-注意（Ollama 視覺模型）：4 張大圖可能超過預設的 context 長度（`num_ctx`）。若回答被截斷或失敗，請調低 `KB_MAX_IMAGES`（`0` 為不附圖），或調高 Ollama 的 `num_ctx`（例如在 Modelfile 設 `PARAMETER num_ctx 8192`，或設定環境變數 `OLLAMA_CONTEXT_LENGTH`）。
+注意（Ollama 視覺模型）：4 張大圖可能超過預設的 context 長度（`num_ctx`）。若回答被截斷或失敗，請調低 `KB_MAX_IMAGES`（`0` 為不附圖），或調高 `OLLAMA_NUM_CTX`（預設 16384）。程式每次請求都會帶上這個值，所以 Modelfile 的 `PARAMETER num_ctx` 和 Ollama 的 `OLLAMA_CONTEXT_LENGTH` 都不會生效。
 
 ### 重新處理既有文件
 
@@ -209,6 +209,14 @@ uv run python -m scripts.benchmark
 
 用固定的情境實際跑文件處理、搜尋、對話，報告寫到 `docs/benchmarks/`，並和基準比較，說明見 [docs/benchmarks.md](docs/benchmarks.md)。
 
+**對話壓力測試**（僅手動執行；1、2、5、10 人同時提問，最多 10 人，會用到聊天模型的額度）：
+
+```
+uv run python -m scripts.loadtest
+```
+
+報告寫到 `data/loadtest-<時間>.md`，說明見 [docs/loadtest.md](docs/loadtest.md)。
+
 **AI 品質評測**（僅手動執行，用 DeepEval；裁判模型由 `EVAL_JUDGE_MODEL` 決定，預設是 Gemini，付費方案會計費，免費方案每分鐘只能呼叫 15 次，每天 500 次，所以 RAG 評測要跑 1 小時左右，一天最好只跑一次；分數僅供觀察，不是通過／失敗的門檻）：
 
 ```
@@ -226,7 +234,8 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 
 ## 管理員與系統設定
 
-- 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`，服務啟動時會自動建立這個帳號，不需要註冊。之後以 `.env` 為準：改了密碼重新啟動就會生效（該帳號原本的登入會被登出）；若已有人註冊了同名帳號，密碼會被改成 `.env` 的值並成為管理員。`.env` 已被 git 忽略，但密碼是明文，請保護好這個檔案。
+- 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`，服務啟動時會自動建立這個帳號，不需要註冊。之後以 `.env` 為準：改了密碼重新啟動服務就會生效（Docker 要用 `docker compose up -d`，`restart` 不會重新讀取 `.env`；該帳號原本的登入會被登出）；若已有人註冊了同名帳號，密碼會被改成 `.env` 的值並成為管理員。`.env` 已被 git 忽略，但密碼是明文，請保護好這個檔案。
+- 其他使用者：預設不開放註冊，登入頁會顯示「請向管理員取得帳號」。要讓別人自己註冊，在 `.env` 設 `ALLOW_REGISTRATION=true` 再重新啟動；帳號建好後可以改回 `false`。
 - 只有管理員會在側邊欄看到「系統設定」頁，所有使用者的聊天都套用這份設定：
   - LLM 供應商：本機 Ollama 或 Google Gemini（未設定 `GEMINI_API_KEY` 時 Gemini 選項停用）
   - 模型：從目前提供者即時取得模型清單後選擇
@@ -245,6 +254,8 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 
 ## 環境變數
 
+各服務的並行數與批次大小（例如 `WEB_CONCURRENCY`、`INGEST_CONCURRENCY`、`OCR_CONCURRENCY`）和選這些數字的原因，整理在 [docs/services.md](docs/services.md#並行數與批次大小)。
+
 | 變數 | 預設值 | 說明 |
 | --- | --- | --- |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 位址 |
@@ -252,12 +263,15 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 | `GEMINI_API_KEY` | 空 | Google Gemini API 金鑰；只能放在 `.env`／`docker/.env`，留空則「系統設定」中的 Gemini 選項停用 |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini 預設模型（可在「系統設定」頁覆寫） |
 | `LLM_PROVIDER` | `gemini` | 預設的聊天供應商（`gemini` 或 `ollama`），可在「系統設定」頁覆寫 |
+| `OLLAMA_TIMEOUT_SECONDS` | `300` | Ollama 最多可以幾秒沒有回應（等第一段文字，或兩段之間）。CPU 上載入模型可能要幾分鐘；超過就停止這次回答，對話不會一直卡在「正在產生回覆」 |
 | `OLLAMA_NUM_CTX` | `16384` | Ollama 每次對話的 context 長度。Ollama 本身預設只有 4096，知識庫回答帶整頁圖（每張約 740 token）時會被截斷 |
 | `ADMIN_USERNAME` | 空 | 管理員帳號，啟動時自動建立（3–32 字元） |
 | `ADMIN_PASSWORD` | 空 | 管理員密碼，每次啟動同步到資料庫（8 字元以上，最多 72 位元組） |
 | `EVAL_JUDGE_MODEL` | `gemini-3.1-flash-lite` | 評測（`evals/`）的裁判模型：`gemini-` 開頭用 Gemini（需要 `GEMINI_API_KEY`），其他名稱用本機 Ollama 的模型。只有手動執行評測時使用，容器不讀取 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
+| `ALLOW_REGISTRATION` | `false` | 是否開放任何人在登入頁註冊。關閉時只有管理員帳號（由 `.env` 建立）能登入，除非之前已經註冊過 |
+| `COOKIE_SECURE` | `false` | 登入 cookie 只透過 HTTPS 傳送。放在 HTTPS 反向代理後面時設成 `true`；沒有 HTTPS 時開啟會無法登入 |
 | `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |
 | `EMBEDDER_URL` | `http://localhost:8002` | Embedding 服務（`embedder`）位址；Docker 內固定為 `http://embedder:8000`；更換模型後需重建知識庫 |
 | `KB_DIR` | `<專案根目錄>/data/kb` | 上傳檔案與解析出的圖片存放位置 |
@@ -283,11 +297,12 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 | `OCR_VLLM_MAX_NUM_SEQS` | `4` | vLLM 同時處理的請求上限（僅 Docker） |
 | `EMBED_MODEL_ID` | `google/embeddinggemma-2` | embedder 載入的模型（僅 Docker，設在 `docker/.env`）；更換後需重建知識庫 |
 | `EMBED_IMAGE_TOKENS` | `280` | embedder 每張圖片的 soft token 數，只接受 70、140、280、560、1120（僅 Docker） |
+| `EMBED_TIMEOUT_SECONDS` | `180` | embedder 一次運算超過這個秒數就視為卡住，程序結束後由 Docker 重啟（僅 Docker） |
 | `MILVUS_URI` | `http://localhost:19530` | Milvus 位址（快速測試：`cd docker && docker compose up -d milvus`；Docker 內固定為 `http://milvus:19530`） |
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |
 | `WEB_CONCURRENCY` | `2` | Gunicorn worker 數（僅 Docker，設在 `docker/.env`） |
-| `PHOEBE_PORT` | `8000` | Docker 對外連接埠 |
+| `PHOEBE_PORT` | `8000` | Docker 對外連接埠。預設所有網路介面都連得到；設成 `127.0.0.1:8000` 就只有本機能連，放在反向代理後面時要這樣設（見 [docker/README.md](docker/README.md#對外開放與反向代理)） |
 | `MONITOR_INTERVAL_SECONDS` | `5` | 監控頁面的資源取樣間隔（秒，monitor 服務） |
 | `MONITOR_RESOURCE_RETENTION_HOURS` | `48` | 資源取樣保留幾小時 |
 | `MONITOR_EVENT_RETENTION_DAYS` | `30` | 任務事件保留幾天 |
@@ -295,7 +310,7 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 
 ## 部署
 
-以 Docker Compose 部署（Gunicorn web、獨立 ingest 服務、embedder、Milvus；vLLM 為選用），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)：
+以 Docker Compose 部署（Gunicorn web、獨立 ingest 服務、embedder、Milvus；vLLM 為選用），詳見 [docker/README.md](docker/README.md)；各服務的功能與資料流程見 [docs/services.md](docs/services.md)，架構圖與時序圖見 [docs/architecture.md](docs/architecture.md)：
 
 ```
 cd docker
@@ -322,7 +337,7 @@ docker compose --profile lightonocr down
 - `app/monitor/` — 監控（任務事件、資源取樣、monitor 服務）
 - `embedder/` — Embedding 服務（獨立的套件環境與測試）
 - `docker/` — Docker 部署（compose、Dockerfile、說明）
-- `scripts/` — 手動執行的腳本（效能測試、資源紀錄、OCR 驗證）
+- `scripts/` — 手動執行的腳本（效能測試、對話壓力測試、資源紀錄、OCR 驗證、畫架構圖）
 - `docs/` — 說明文件；`docs/superpowers/` 是各功能開發時的設計規格與計畫（歷史紀錄）
 - `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試
@@ -330,6 +345,6 @@ docker compose --profile lightonocr down
 
 ## 開發流程
 
-- 功能在 `feature/*` 分支開發（從 `develop` 開出），完成後合併回 `develop`。
+- 功能、修正、文件分別在 `feat/*`、`fix/*`、`docs/*` 分支開發（從 `develop` 開出），完成後合併回 `develop`。
 - 要發布時從 `develop` 開 `release/YYYY-MM-DD` 分支，對 `main` 開 Pull Request，由 repo 擁有者審查後合併。
 - 不直接推送到 `main`。

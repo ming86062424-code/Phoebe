@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FALSY_VALUES = ("false", "0", "no", "off")
+TRUTHY_VALUES = ("true", "1", "yes", "on")
 # how often a streaming reply refreshes its lock; REPLY_LOCK_TTL_SECONDS must exceed it
 REPLY_HEARTBEAT_SECONDS = 30
 
@@ -85,6 +86,10 @@ class Settings:
     eval_judge_model: str = "gemini-3.1-flash-lite"
     db_path: str = str(PROJECT_ROOT / "data" / "app.db")
     session_days: int = 7
+    # anyone who can reach the site may sign up only when this is on; off by default
+    allow_registration: bool = False
+    # the session cookie is sent over HTTPS only; turn on behind an HTTPS reverse proxy
+    cookie_secure: bool = False
     chat_think: bool = True
     frontend_dist: str = str(PROJECT_ROOT / "frontend" / "dist")
     embedder_url: str = "http://localhost:8002"
@@ -123,6 +128,9 @@ class Settings:
     # Ollama's own default context is small (4096): a knowledge-base answer with page
     # images (~740 tokens each) and several pages of text would be cut off silently
     ollama_num_ctx: int = 16384
+    # seconds Ollama may stay silent (before the first token or between two pieces);
+    # a model loading on CPU can take minutes, but a hung one must not hold the reply lock
+    ollama_timeout_seconds: float = 300.0
     # monitoring page (docs/monitoring.md): resource sampling interval of the monitor
     # service and how long samples and task events are kept
     monitor_interval_seconds: float = 5.0
@@ -138,20 +146,26 @@ class Settings:
             chat_model=os.environ.get("CHAT_MODEL", d.chat_model),
             eval_judge_model=os.environ.get("EVAL_JUDGE_MODEL", d.eval_judge_model),
             db_path=os.environ.get("DB_PATH", d.db_path),
-            session_days=int(os.environ.get("SESSION_DAYS", d.session_days)),
+            session_days=_positive_int("SESSION_DAYS", os.environ.get("SESSION_DAYS", str(d.session_days))),
             chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
             not in FALSY_VALUES,
+            # opt-in switches: only an explicit yes turns them on (an empty value stays off)
+            allow_registration=os.environ.get("ALLOW_REGISTRATION", "").strip().lower()
+            in TRUTHY_VALUES,
+            cookie_secure=os.environ.get("COOKIE_SECURE", "").strip().lower() in TRUTHY_VALUES,
             frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
             embedder_url=os.environ.get("EMBEDDER_URL", d.embedder_url).strip(),
             kb_dir=os.environ.get("KB_DIR", d.kb_dir),
-            kb_top_k=int(os.environ.get("KB_TOP_K", d.kb_top_k)),
+            kb_top_k=_positive_int("KB_TOP_K", os.environ.get("KB_TOP_K", str(d.kb_top_k))),
             kb_vector_weight=_weight(
                 "KB_VECTOR_WEIGHT", os.environ.get("KB_VECTOR_WEIGHT", str(d.kb_vector_weight))
             ),
             kb_max_images=_non_negative_int(
                 "KB_MAX_IMAGES", os.environ.get("KB_MAX_IMAGES", str(d.kb_max_images))
             ),
-            max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", d.max_upload_mb)),
+            max_upload_mb=_positive_int(
+                "MAX_UPLOAD_MB", os.environ.get("MAX_UPLOAD_MB", str(d.max_upload_mb))
+            ),
             ocr_model=os.environ.get("OCR_MODEL", d.ocr_model),
             liteparse_ocr_language=os.environ.get(
                 "LITEPARSE_OCR_LANGUAGE", d.liteparse_ocr_language
@@ -164,11 +178,13 @@ class Settings:
             milvus_uri=os.environ.get("MILVUS_URI", d.milvus_uri),
             milvus_token=os.environ.get("MILVUS_TOKEN", d.milvus_token).strip(),
             milvus_collection=os.environ.get("MILVUS_COLLECTION", d.milvus_collection),
-            reply_lock_ttl_seconds=int(
-                os.environ.get("REPLY_LOCK_TTL_SECONDS", d.reply_lock_ttl_seconds)
+            reply_lock_ttl_seconds=_positive_int(
+                "REPLY_LOCK_TTL_SECONDS",
+                os.environ.get("REPLY_LOCK_TTL_SECONDS", str(d.reply_lock_ttl_seconds)),
             ),
-            kb_ingest_poll_seconds=float(
-                os.environ.get("KB_INGEST_POLL_SECONDS", d.kb_ingest_poll_seconds)
+            kb_ingest_poll_seconds=_positive_float(
+                "KB_INGEST_POLL_SECONDS",
+                os.environ.get("KB_INGEST_POLL_SECONDS", str(d.kb_ingest_poll_seconds)),
             ),
             ingest_concurrency=_positive_int(
                 "INGEST_CONCURRENCY",
@@ -181,9 +197,12 @@ class Settings:
                 "OCR_TIMEOUT_SECONDS",
                 os.environ.get("OCR_TIMEOUT_SECONDS", str(d.ocr_timeout_seconds)),
             ),
-            kb_stale_seconds=int(os.environ.get("KB_STALE_SECONDS", d.kb_stale_seconds)),
-            kb_heartbeat_seconds=float(
-                os.environ.get("KB_HEARTBEAT_SECONDS", d.kb_heartbeat_seconds)
+            kb_stale_seconds=_positive_int(
+                "KB_STALE_SECONDS", os.environ.get("KB_STALE_SECONDS", str(d.kb_stale_seconds))
+            ),
+            kb_heartbeat_seconds=_positive_float(
+                "KB_HEARTBEAT_SECONDS",
+                os.environ.get("KB_HEARTBEAT_SECONDS", str(d.kb_heartbeat_seconds)),
             ),
             admin_username=os.environ.get("ADMIN_USERNAME", "").strip(),
             admin_password=os.environ.get("ADMIN_PASSWORD", ""),
@@ -192,6 +211,10 @@ class Settings:
             llm_provider=_choice("LLM_PROVIDER", d.llm_provider, ("ollama", "gemini")),
             ollama_num_ctx=_positive_int(
                 "OLLAMA_NUM_CTX", os.environ.get("OLLAMA_NUM_CTX", str(d.ollama_num_ctx))
+            ),
+            ollama_timeout_seconds=_positive_float(
+                "OLLAMA_TIMEOUT_SECONDS",
+                os.environ.get("OLLAMA_TIMEOUT_SECONDS", str(d.ollama_timeout_seconds)),
             ),
             monitor_interval_seconds=_positive_float(
                 "MONITOR_INTERVAL_SECONDS",

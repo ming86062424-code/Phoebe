@@ -6,7 +6,7 @@
 
 | 項目 | 值 |
 |---|---|
-| GPU | NVIDIA GeForce RTX 2060，6 GB（vLLM 用約 5.2 GB） |
+| GPU | NVIDIA GeForce RTX 2060，6 GB（2026-10-23 測試時 vLLM 用約 5.2 GB；2026-10-24 改成指定 KV cache 大小後約 2.8 GB，見 [gpu-memory.md](gpu-memory.md)） |
 | 主機記憶體 | 32 GB |
 | Docker 虛擬機記憶體 | **15.5 GB**（WSL2 預設只用主機的一半，未設定 `.wslconfig`） |
 | 同時在跑的其他程式 | RAGFlow（另一個專案，約 3–5 GB 記憶體） |
@@ -47,9 +47,9 @@
 
 ## 同時處理多份文件（`INGEST_CONCURRENCY`，2026-10-23）
 
-- **設為 2，4 份 PDF，用 LiteParse，vLLM 關閉時**：最多同時處理 2 份，全部完成，總共 376 秒。記憶體高峰：ingest 3.2 GB、embedder 5.0 GB。
+- **設為 2，4 份 PDF，用 LiteParse，vLLM 關閉時**：最多同時處理 2 份，全部完成，總共 376 秒。記憶體高峰：ingest 3.2 GB、embedder 5.0 GB（embedder 的數字已經過時，現在的用量見下方「記憶體不足造成的失敗紀錄」）。
 - **設為 2，vLLM 和 RAGFlow 都開著時**：虛擬機記憶體不足，embedder 被終止，2 份文件失敗。
-- LiteParse 同時處理兩份時，ingest 的記憶體會從約 0.3 GB 漲到 3.2 GB（兩份都在轉 400 DPI 的頁面圖、跑 Tesseract）。
+- ingest 的 3.2 GB 來自兩份都在轉 400 DPI 的頁面圖、跑 Tesseract。同條件下只處理 1 份的用量還沒量過。
 
 ## 記憶體不足造成的失敗紀錄
 
@@ -61,7 +61,7 @@
 | 10-23 | `INGEST_CONCURRENCY=2`，vLLM 和 RAGFlow 開著 | embedder 被終止，2 份文件失敗 |
 | 10-23 | `INGEST_CONCURRENCY=1`，依序處理 LiteParse 和 LightOnOCR，vLLM 和 RAGFlow 開著 | embedder 被終止兩次，兩份都在建立索引時失敗 |
 
-待機時的大約用量：vLLM 4.4 GB、embedder 4 GB（算整頁圖向量時會到 5 GB）、RAGFlow 3–5 GB、其他服務約 1.5 GB。
+當時（2026-10-23）待機的大約用量：vLLM 4.4 GB、embedder 4 GB（算整頁圖向量時會到 5 GB）、RAGFlow 3–5 GB、其他服務約 1.5 GB。embedder 之後降低了兩次（下一段，以及「調整時可以參考的方向」的第二點）：現在 CPU 模式待機約 2.5 GB，處理一份 12 頁 PDF 時最高約 2.7 GB。
 
 2026-10-24 起 embedder 不再載入音訊編碼器（304M 參數），同樣的測試中常駐記憶體從 3.67 GB 降到 2.48 GB、高峰從 4.82 GB 降到 3.03 GB，向量完全相同。
 
