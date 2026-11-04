@@ -379,6 +379,7 @@ def test_external_mode_upload_uses_published_status(tmp_path, fake_parser):
         frontend_dist=str(tmp_path / "no-dist"),
         kb_dir=str(tmp_path / "kb"),
         kb_ingest_mode="external",
+        allow_registration=True,
     )
     fake_parser.available = False  # the web process itself could not use it
     services = build_kb_services(

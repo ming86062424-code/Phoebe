@@ -59,7 +59,7 @@ cd frontend && npm run dev
 
 **注意**
 
-- 本機版的資料在專案根目錄的 `data/`（SQLite 與上傳檔），和 Docker 版的資料完全分開，需要另外註冊帳號。
+- 本機版的資料在專案根目錄的 `data/`（SQLite 與上傳檔），和 Docker 版的資料完全分開，帳號也要另外建立（管理員帳號一樣由 `.env` 自動建立）。
 - LiteParse 在本機（Windows）也能直接使用，`uv sync` 會一併安裝。
 - 開發完要回到 Docker 版時：`cd docker && docker compose up -d`（要用 LightOnOCR 則加 `--profile lightonocr`）。
 
@@ -235,6 +235,7 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 ## 管理員與系統設定
 
 - 管理員：在 `.env`（Docker 為 `docker/.env`）設定 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`，服務啟動時會自動建立這個帳號，不需要註冊。之後以 `.env` 為準：改了密碼重新啟動就會生效（該帳號原本的登入會被登出）；若已有人註冊了同名帳號，密碼會被改成 `.env` 的值並成為管理員。`.env` 已被 git 忽略，但密碼是明文，請保護好這個檔案。
+- 其他使用者：預設不開放註冊，登入頁會顯示「請向管理員取得帳號」。要讓別人自己註冊，在 `.env` 設 `ALLOW_REGISTRATION=true` 再重新啟動；帳號建好後可以改回 `false`。
 - 只有管理員會在側邊欄看到「系統設定」頁，所有使用者的聊天都套用這份設定：
   - LLM 供應商：本機 Ollama 或 Google Gemini（未設定 `GEMINI_API_KEY` 時 Gemini 選項停用）
   - 模型：從目前提供者即時取得模型清單後選擇
@@ -269,6 +270,8 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 | `EVAL_JUDGE_MODEL` | `gemini-3.1-flash-lite` | 評測（`evals/`）的裁判模型：`gemini-` 開頭用 Gemini（需要 `GEMINI_API_KEY`），其他名稱用本機 Ollama 的模型。只有手動執行評測時使用，容器不讀取 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
+| `ALLOW_REGISTRATION` | `false` | 是否開放任何人在登入頁註冊。關閉時只有管理員帳號（由 `.env` 建立）能登入，除非之前已經註冊過 |
+| `COOKIE_SECURE` | `false` | 登入 cookie 只透過 HTTPS 傳送。放在 HTTPS 反向代理後面時設成 `true`；沒有 HTTPS 時開啟會無法登入 |
 | `CHAT_THINK` | `true` | 是否讓模型輸出思考過程（`false`、`0`、`no`、`off` 為關閉，不分大小寫） |
 | `EMBEDDER_URL` | `http://localhost:8002` | Embedding 服務（`embedder`）位址；Docker 內固定為 `http://embedder:8000`；更換模型後需重建知識庫 |
 | `KB_DIR` | `<專案根目錄>/data/kb` | 上傳檔案與解析出的圖片存放位置 |
@@ -299,7 +302,7 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 | `MILVUS_TOKEN` | 空 | Milvus 驗證 token（未啟用驗證則留空） |
 | `MILVUS_COLLECTION` | `phoebe_chunks` | 存放知識庫段落的 collection 名稱 |
 | `WEB_CONCURRENCY` | `2` | Gunicorn worker 數（僅 Docker，設在 `docker/.env`） |
-| `PHOEBE_PORT` | `8000` | Docker 對外連接埠 |
+| `PHOEBE_PORT` | `8000` | Docker 對外連接埠。預設所有網路介面都連得到；設成 `127.0.0.1:8000` 就只有本機能連，放在反向代理後面時要這樣設（見 [docker/README.md](docker/README.md#對外開放與反向代理)） |
 | `MONITOR_INTERVAL_SECONDS` | `5` | 監控頁面的資源取樣間隔（秒，monitor 服務） |
 | `MONITOR_RESOURCE_RETENTION_HOURS` | `48` | 資源取樣保留幾小時 |
 | `MONITOR_EVENT_RETENTION_DAYS` | `30` | 任務事件保留幾天 |

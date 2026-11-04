@@ -18,6 +18,8 @@ def settings(tmp_path):
         kb_dir=str(tmp_path / "kb"),
         # most tests exercise the Ollama path; the Gemini default has its own tests
         llm_provider="ollama",
+        # most tests sign up their users; the closed default has its own tests
+        allow_registration=True,
     )
 
 

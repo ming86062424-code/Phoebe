@@ -103,3 +103,50 @@ def test_register_validation_messages_are_chinese(client):
     assert _messages(r) == ["密碼至少需要 8 個字元"]
     r = client.post("/api/auth/register", json={"username": "bob", "password": "密" * 25})
     assert _messages(r) == ["密碼最多 72 個位元組"]
+
+
+def test_registration_is_closed_by_default(settings, kb_services):
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    c = TestClient(create_app(replace(settings, allow_registration=False), kb_services))
+    assert c.get("/api/auth/options").json() == {"allow_registration": False}
+    r = c.post("/api/auth/register", json=CREDS)
+    assert r.status_code == 403
+    assert r.json()["detail"] == "目前不開放註冊，請向管理員取得帳號"
+    assert c.post("/api/auth/login", json=CREDS).status_code == 401
+
+
+def test_auth_options_when_registration_is_open(client):
+    assert client.get("/api/auth/options").json() == {"allow_registration": True}
+
+
+def test_secure_cookie_when_enabled(settings, kb_services):
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    c = TestClient(create_app(replace(settings, cookie_secure=True), kb_services))
+    c.post("/api/auth/register", json=CREDS)
+    r = c.post("/api/auth/login", json=CREDS)
+    assert "secure" in r.headers["set-cookie"].lower()
+
+
+def test_registration_and_secure_cookie_env(monkeypatch):
+    from app.config import Settings
+
+    for name in ("ALLOW_REGISTRATION", "COOKIE_SECURE"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings.from_env()
+    assert (s.allow_registration, s.cookie_secure) == (False, False)
+    monkeypatch.setenv("ALLOW_REGISTRATION", "")
+    assert Settings.from_env().allow_registration is False
+    monkeypatch.setenv("ALLOW_REGISTRATION", "true")
+    monkeypatch.setenv("COOKIE_SECURE", "1")
+    s = Settings.from_env()
+    assert (s.allow_registration, s.cookie_secure) == (True, True)
