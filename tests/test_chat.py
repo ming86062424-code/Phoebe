@@ -365,7 +365,13 @@ def test_unavailable_provider_returns_503(admin_chat, settings):
     assert r.status_code == 503
     assert r.json()["detail"] == "Gemini 目前不可用：未設定 GEMINI_API_KEY"
     assert built == []
-    assert _messages(c, cid) == []
+    # saved like any other 503, so the chat page can retry with regenerate
+    assert [(m["role"], m["content"]) for m in _messages(c, cid)] == [("user", "嗨")]
+    # the reply lock is released: once the provider works, regenerate answers
+    save_conn = connect(settings.db_path)
+    save_llm_settings(save_conn, settings, {"llm_provider": "ollama"})
+    save_conn.close()
+    assert c.post(f"/api/conversations/{cid}/regenerate").status_code == 200
 
 
 def test_store_down_during_retrieval_returns_503(admin_chat, kb_services, monkeypatch):

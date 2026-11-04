@@ -49,11 +49,13 @@ class OllamaChatClient:
         think: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
         num_ctx: int | None = None,
+        timeout: float = 300.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.think = think
         self.num_ctx = num_ctx  # context size; None keeps Ollama's own default
+        self.timeout = timeout  # longest silence while chatting (OLLAMA_TIMEOUT_SECONDS)
         self._transport = transport
 
     async def stream_chat(
@@ -86,7 +88,7 @@ class OllamaChatClient:
             options["temperature"] = temperature
         if options:
             payload["options"] = options
-        timeout = httpx.Timeout(None, connect=5.0)
+        timeout = httpx.Timeout(self.timeout, connect=5.0)
         try:
             async with httpx.AsyncClient(
                 transport=self._transport, timeout=timeout
@@ -119,6 +121,10 @@ class OllamaChatClient:
                             return
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             raise LlmUnavailable() from e
+        except httpx.ReadTimeout as e:
+            raise LlmStreamError(
+                f"Ollama 超過 {self.timeout:g} 秒沒有回應，請稍後再試或改用較小的模型"
+            ) from e
 
     async def _tags(self, timeout: httpx.Timeout | None = None) -> list[str]:
         try:

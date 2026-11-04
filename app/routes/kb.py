@@ -30,6 +30,26 @@ MAX_DESCRIPTION_LENGTH = 500
 UPLOAD_CHUNK = 1024 * 1024
 # room for the multipart boundaries and the parser field around the file itself
 MULTIPART_OVERHEAD = 64 * 1024
+
+
+def _size_limited(request: Request, limit: int, error: HTTPException) -> Request:
+    """The request, but reading more than `limit` body bytes raises `error`.
+
+    Content-Length is checked up front; this covers a body sent without one (chunked),
+    which would otherwise be written to a temporary file in full before any check.
+    """
+    received = 0
+
+    async def receive():
+        nonlocal received
+        message = await request.receive()
+        if message["type"] == "http.request":
+            received += len(message.get("body", b""))
+            if received > limit:
+                raise error
+        return message
+
+    return Request(request.scope, receive)
 MAX_FILENAME_LENGTH = 200
 UNSUPPORTED_TYPE = "不支援的檔案類型（支援 PDF、txt、md、png、jpg、jpeg、webp）"
 UNREADABLE = "無法讀取檔案內容"
@@ -221,7 +241,7 @@ async def upload_document(
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > limit + MULTIPART_OVERHEAD:
         raise too_big
-    form = await request.form()
+    form = await _size_limited(request, limit + MULTIPART_OVERHEAD, too_big).form()
     file = form.get("file")
     if not isinstance(file, UploadFile):
         raise HTTPException(status_code=422, detail="請選擇要上傳的檔案")

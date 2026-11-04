@@ -274,6 +274,35 @@ def test_oversized_upload_is_rejected_before_the_body_is_parsed(make_user, app, 
     assert alice.get(f"/api/kbs/{kb['id']}/documents").json() == []
 
 
+def test_size_limited_request_stops_reading_past_the_limit():
+    # a chunked upload has no Content-Length: the size is only known by counting
+    import asyncio
+
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from app.routes.kb import _size_limited
+
+    pieces = 0
+
+    async def receive():
+        nonlocal pieces
+        pieces += 1
+        return {"type": "http.request", "body": b"x" * 1000, "more_body": True}
+
+    error = HTTPException(status_code=413)
+    request = _size_limited(Request({"type": "http", "headers": []}, receive), 2500, error)
+
+    async def read_all():
+        async for _ in request.stream():
+            pass
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(read_all())
+    assert caught.value is error
+    assert pieces == 3  # stopped at the piece that crossed 2500 bytes
+
+
 def test_upload_does_blocking_work_off_the_event_loop(make_user, monkeypatch):
     import asyncio
 

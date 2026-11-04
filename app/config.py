@@ -123,6 +123,9 @@ class Settings:
     # Ollama's own default context is small (4096): a knowledge-base answer with page
     # images (~740 tokens each) and several pages of text would be cut off silently
     ollama_num_ctx: int = 16384
+    # seconds Ollama may stay silent (before the first token or between two pieces);
+    # a model loading on CPU can take minutes, but a hung one must not hold the reply lock
+    ollama_timeout_seconds: float = 300.0
     # monitoring page (docs/monitoring.md): resource sampling interval of the monitor
     # service and how long samples and task events are kept
     monitor_interval_seconds: float = 5.0
@@ -192,6 +195,10 @@ class Settings:
             llm_provider=_choice("LLM_PROVIDER", d.llm_provider, ("ollama", "gemini")),
             ollama_num_ctx=_positive_int(
                 "OLLAMA_NUM_CTX", os.environ.get("OLLAMA_NUM_CTX", str(d.ollama_num_ctx))
+            ),
+            ollama_timeout_seconds=_positive_float(
+                "OLLAMA_TIMEOUT_SECONDS",
+                os.environ.get("OLLAMA_TIMEOUT_SECONDS", str(d.ollama_timeout_seconds)),
             ),
             monitor_interval_seconds=_positive_float(
                 "MONITOR_INTERVAL_SECONDS",
