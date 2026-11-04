@@ -20,6 +20,9 @@ def settings() -> Settings:
     return Settings.from_env()
 
 
+JUDGE_MODEL = "gemini-3.1-flash-lite"  # EVAL_JUDGE_MODEL, when not set
+
+
 @pytest.fixture(scope="session")
 def config_value(settings: Settings):
     """A setting from the environment or the root .env (loaded by Settings.from_env), else
@@ -63,7 +66,7 @@ def _make_judge_class():
 def judge(settings: Settings, config_value):
     """EVAL_JUDGE_MODEL: a name starting with gemini- uses Gemini (GEMINI_API_KEY),
     anything else a model on the local Ollama."""
-    name = config_value("EVAL_JUDGE_MODEL", settings.eval_judge_model)
+    name = config_value("EVAL_JUDGE_MODEL", JUDGE_MODEL)
     if name.startswith("gemini-"):
         from deepeval.models import GeminiModel
 
