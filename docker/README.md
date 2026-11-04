@@ -184,6 +184,18 @@ docker run --rm -v phoebe_minio-data:/d -v "$PWD":/backup alpine tar czf /backup
 
 **更早的版本（2026-10-19 以前，全部用 named volume）**：那時的 `phoebe_phoebe-data`、`phoebe_hf-cache` 已不再使用，確定不需要後可刪除：`docker volume rm phoebe_phoebe-data phoebe_hf-cache`。其他同名的 volume（`phoebe_milvus-data` 等）**現在又在使用中，不要刪除**。
 
+## 對外開放與反向代理
+
+web 預設在所有網路介面上開放 `PHOEBE_PORT`（8000），同一個網路裡的其他電腦都連得到。程式本身只做帳號密碼登入，沒有 HTTPS、沒有登入次數限制，也沒有使用量配額。只在自己電腦上用的話不需要處理；要給其他人用時，建議放在反向代理（例如 nginx、Caddy）後面：
+
+- **讓 8000 只對本機開放**：在 `docker/.env` 設 `PHOEBE_PORT=127.0.0.1:8000`。否則別人可以直接連 8000，繞過反向代理的所有限制。
+- **反向代理負責**：HTTPS、登入 API（`/api/auth/login`）的次數限制、IP 白名單、上傳大小上限（程式本身也會擋超過 `MAX_UPLOAD_MB` 的上傳）。
+- **轉送聊天回答時不要緩衝**：回答是一段一段串流的，nginx 要對 `/api/` 設 `proxy_buffering off`，否則畫面會等整段回答完成才出現。上傳與回答可能需要幾分鐘，`proxy_read_timeout` 也要調長（例如 600 秒）。
+- **走 HTTPS 時**：在 `docker/.env` 設 `COOKIE_SECURE=true`，登入 cookie 就只會透過 HTTPS 傳送。
+- **註冊**：預設關閉（`ALLOW_REGISTRATION=false`），只有管理員帳號能登入。要新增使用者時，暫時設成 `true` 讓對方註冊，再改回 `false`。
+
+改完 `docker/.env` 後執行 `docker compose up -d` 才會套用（`restart` 不會重新讀取設定）。
+
 ## 注意
 
 - Gunicorn 只在 Linux 容器內使用；Windows 本機快速測試請用 `uv run uvicorn app.main:create_app --factory`。

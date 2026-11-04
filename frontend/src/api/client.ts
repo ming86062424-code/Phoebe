@@ -89,6 +89,7 @@ export const api = {
   me: () => json<User>('/api/me'),
   login: (username: string, password: string) =>
     empty('/api/auth/login', jsonInit('POST', { username, password })),
+  authOptions: () => json<{ allow_registration: boolean }>('/api/auth/options'),
   register: (username: string, password: string) =>
     empty('/api/auth/register', jsonInit('POST', { username, password })),
   logout: () => empty('/api/auth/logout', jsonInit('POST')),

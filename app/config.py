@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FALSY_VALUES = ("false", "0", "no", "off")
+TRUTHY_VALUES = ("true", "1", "yes", "on")
 # how often a streaming reply refreshes its lock; REPLY_LOCK_TTL_SECONDS must exceed it
 REPLY_HEARTBEAT_SECONDS = 30
 
@@ -85,6 +86,10 @@ class Settings:
     eval_judge_model: str = "gemini-3.1-flash-lite"
     db_path: str = str(PROJECT_ROOT / "data" / "app.db")
     session_days: int = 7
+    # anyone who can reach the site may sign up only when this is on; off by default
+    allow_registration: bool = False
+    # the session cookie is sent over HTTPS only; turn on behind an HTTPS reverse proxy
+    cookie_secure: bool = False
     chat_think: bool = True
     frontend_dist: str = str(PROJECT_ROOT / "frontend" / "dist")
     embedder_url: str = "http://localhost:8002"
@@ -144,6 +149,10 @@ class Settings:
             session_days=int(os.environ.get("SESSION_DAYS", d.session_days)),
             chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
             not in FALSY_VALUES,
+            # opt-in switches: only an explicit yes turns them on (an empty value stays off)
+            allow_registration=os.environ.get("ALLOW_REGISTRATION", "").strip().lower()
+            in TRUTHY_VALUES,
+            cookie_secure=os.environ.get("COOKIE_SECURE", "").strip().lower() in TRUTHY_VALUES,
             frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
             embedder_url=os.environ.get("EMBEDDER_URL", d.embedder_url).strip(),
             kb_dir=os.environ.get("KB_DIR", d.kb_dir),

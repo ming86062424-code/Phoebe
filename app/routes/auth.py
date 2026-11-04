@@ -37,8 +37,23 @@ class LoginBody(BaseModel):
     password: str
 
 
+REGISTRATION_CLOSED = "目前不開放註冊，請向管理員取得帳號"
+
+
+@router.get("/auth/options")
+def auth_options(settings: Settings = Depends(get_settings)):
+    """What the login page may offer (no login needed)."""
+    return {"allow_registration": settings.allow_registration}
+
+
 @router.post("/auth/register", status_code=201)
-def register(body: RegisterBody, conn: sqlite3.Connection = Depends(get_db)):
+def register(
+    body: RegisterBody,
+    conn: sqlite3.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    if not settings.allow_registration:
+        raise HTTPException(status_code=403, detail=REGISTRATION_CLOSED)
     try:
         user_id = auth.create_user(conn, body.username, body.password)
     except auth.UsernameTaken:
@@ -63,7 +78,7 @@ def login(
         max_age=settings.session_days * 86400,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=settings.cookie_secure,
     )
     return {"id": user_id, "username": body.username}
 
