@@ -2,9 +2,15 @@
 
 用 Docker Compose 部署時的完整架構，以及「上傳文件到知識庫」和「對話」兩個流程的時序圖。各服務的詳細說明見 [services.md](services.md)，設定見 [docker/README.md](../docker/README.md)。
 
-圖用 Mermaid 寫成，GitHub 和 VS Code 的 Markdown 預覽都能直接顯示。
+分層架構圖是 SVG（[images/architecture.svg](images/architecture.svg)，用 `uv run python -m scripts.draw_architecture` 產生，要改圖就改這支腳本再重跑）。其餘的圖用 Mermaid 寫成。兩種圖 GitHub 和 VS Code 的 Markdown 預覽都能直接顯示。
 
 ## 架構圖
+
+![Phoebe 系統架構圖](images/architecture.svg)
+
+### 連線細節
+
+每條連線讀寫什麼：
 
 ```mermaid
 flowchart LR

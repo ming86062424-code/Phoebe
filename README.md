@@ -333,7 +333,7 @@ docker compose --profile lightonocr down
 - `app/monitor/` — 監控（任務事件、資源取樣、monitor 服務）
 - `embedder/` — Embedding 服務（獨立的套件環境與測試）
 - `docker/` — Docker 部署（compose、Dockerfile、說明）
-- `scripts/` — 手動執行的腳本（效能測試、對話壓力測試、資源紀錄、OCR 驗證）
+- `scripts/` — 手動執行的腳本（效能測試、對話壓力測試、資源紀錄、OCR 驗證、畫架構圖）
 - `docs/` — 說明文件；`docs/superpowers/` 是各功能開發時的設計規格與計畫（歷史紀錄）
 - `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試

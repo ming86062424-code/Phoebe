@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900" role="img" aria-labelledby="title">
+<title id="title">Phoebe 系統架構圖</title>
+<style>
+text{font-family:'Segoe UI','Microsoft JhengHei','PingFang TC','Noto Sans TC','Noto Sans CJK TC',sans-serif}
+.bg{fill:#ffffff}
+.outer{fill:none;stroke:#57606a;stroke-width:1.5}
+.ol{font-size:15px;font-weight:700;fill:#24292f}
+.g{stroke-width:1.4}
+.gl{font-size:13.5px;font-weight:700}
+.card{fill:#ffffff;stroke:#d0d7de;stroke-width:1}
+.ct{font-size:15px;font-weight:700;fill:#1f2328}
+.cs{font-size:12.5px;fill:#57606a}
+.e{fill:none;stroke:#6e7781;stroke-width:1.6}
+.ah{fill:#6e7781}
+.lbg{fill:#ffffff;opacity:.92}
+.el{font-size:12px;fill:#424a53}
+.foot{font-size:12.5px;fill:#57606a}
+use{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.g-blue{stroke:#3b6fd4;fill:#eef3fd} .t-blue{fill:#3b6fd4} .ic-blue{color:#3b6fd4}
+.g-orange{stroke:#c96a12;fill:#fdf3e8} .t-orange{fill:#c96a12} .ic-orange{color:#c96a12}
+.g-purple{stroke:#7b52c7;fill:#f4effc} .t-purple{fill:#7b52c7} .ic-purple{color:#7b52c7}
+.g-green{stroke:#2f8a4a;fill:#edf7f0} .t-green{fill:#2f8a4a} .ic-green{color:#2f8a4a}
+.g-teal{stroke:#13808c;fill:#eaf6f7} .t-teal{fill:#13808c} .ic-teal{color:#13808c}
+.g-gray{stroke:#6b7280;fill:#f5f6f8} .t-gray{fill:#6b7280} .ic-gray{color:#6b7280}
+@media (prefers-color-scheme: dark) {
+.bg{fill:#0d1117}
+.outer{stroke:#8b949e}
+.ol{fill:#e6edf3}
+.card{fill:#161b22;stroke:#3d444d}
+.ct{fill:#e6edf3}
+.cs{fill:#9198a1}
+.e{stroke:#8b949e}
+.ah{fill:#8b949e}
+.lbg{fill:#0d1117}
+.el{fill:#c9d1d9}
+.foot{fill:#9198a1}
+.g-blue{stroke:#6d9eff;fill:#16223a} .t-blue{fill:#6d9eff} .ic-blue{color:#6d9eff}
+.g-orange{stroke:#f0a050;fill:#33240f} .t-orange{fill:#f0a050} .ic-orange{color:#f0a050}
+.g-purple{stroke:#ad8cf0;fill:#271d3b} .t-purple{fill:#ad8cf0} .ic-purple{color:#ad8cf0}
+.g-green{stroke:#5cc47c;fill:#142b1c} .t-green{fill:#5cc47c} .ic-green{color:#5cc47c}
+.g-teal{stroke:#4cc3cf;fill:#0f2a2e} .t-teal{fill:#4cc3cf} .ic-teal{color:#4cc3cf}
+.g-gray{stroke:#9aa3af;fill:#1c2027} .t-gray{fill:#9aa3af} .ic-gray{color:#9aa3af}
+}
+</style>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker>
+
+<symbol id="i-browser" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M2.5 9h19"/><path d="M5.5 6.5h.01M8 6.5h.01M10.5 6.5h.01"/></symbol>
+<symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="7" rx="1.5"/><rect x="3" y="13.5" width="18" height="7" rx="1.5"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></symbol>
+<symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 2.5h8l5 5v14H6z"/><path d="M14 2.5v5h5"/><path d="M9 12.5h7M9 16.5h7"/></symbol>
+<symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path d="M7 9.5h10M7 12h10M7 14.5h6"/></symbol>
+<symbol id="i-vector" viewBox="0 0 24 24"><circle cx="5" cy="6" r="2.2"/><circle cx="19" cy="6" r="2.2"/><circle cx="12" cy="18.5" r="2.2"/><path d="M7.2 6h9.6M6.1 8l4.8 8.6M17.9 8l-4.8 8.6"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M6.5 15.5l3.5-4 3 3 4.5-6"/></symbol>
+<symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5h8.5a1.5 1.5 0 0 1 1.5 1.5v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
+<symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 19h10.5a4.5 4.5 0 0 0 .4-8.98A6.5 6.5 0 0 0 5.6 9.6 4.75 4.75 0 0 0 7 19z"/></symbol>
+<symbol id="i-pc" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20.5h8M12 16v4.5"/></symbol>
+<symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 10l3 2.5L7 15M12.5 15H17"/></symbol>
+
+</defs>
+<rect class="bg" width="1200" height="900"/>
+<rect class="card" x="585" y="30" width="200" height="60" rx="8"/>
+<use href="#i-browser" class="ic-gray" x="599" y="45.0" width="30" height="30"/>
+<text class="ct" x="641" y="56.5">使用者</text>
+<text class="cs" x="641" y="74.5">瀏覽器</text>
+<rect class="outer" x="30" y="120" width="890" height="740" rx="16" stroke-dasharray="8 5"/>
+<text class="ol" x="48" y="146">本機 · Docker Compose</text>
+<rect class="g g-orange" x="60" y="170" width="390" height="150" rx="12" stroke-dasharray="6 4"/>
+<text class="gl t-orange" x="74" y="192">背景工作</text>
+<rect class="card" x="80" y="205" width="350" height="100" rx="8"/>
+<use href="#i-doc" class="ic-orange" x="94" y="240.0" width="30" height="30"/>
+<text class="ct" x="136" y="234.5">ingest</text>
+<text class="cs" x="136" y="252.5">解析文件 → 產生向量 → 寫入 Milvus</text>
+<text class="cs" x="136" y="269.5">每 2 秒查一次文件佇列</text>
+<text class="cs" x="136" y="286.5">LiteParse 在這裡執行</text>
+<rect class="g g-blue" x="490" y="170" width="390" height="150" rx="12" stroke-dasharray="6 4"/>
+<text class="gl t-blue" x="504" y="192">對外服務 · :8000</text>
+<rect class="card" x="510" y="205" width="350" height="100" rx="8"/>
+<use href="#i-server" class="ic-blue" x="524" y="240.0" width="30" height="30"/>
+<text class="ct" x="566" y="234.5">web</text>
+<text class="cs" x="566" y="252.5">Gunicorn 2 個 worker + FastAPI</text>
+<text class="cs" x="566" y="269.5">網頁介面（React）與所有 API</text>
+<text class="cs" x="566" y="286.5">檢索、組提示詞、串流回答</text>
+<rect class="g g-purple" x="130" y="380" width="490" height="140" rx="12" stroke-dasharray="6 4"/>
+<text class="gl t-purple" x="144" y="402">AI 模型 · 只開放本機</text>
+<rect class="card" x="150" y="415" width="220" height="90" rx="8"/>
+<use href="#i-scan" class="ic-purple" x="164" y="445.0" width="30" height="30"/>
+<text class="ct" x="206" y="448.0">vllm（選用）</text>
+<text class="cs" x="206" y="466.0">LightOnOCR</text>
+<text class="cs" x="206" y="483.0">GPU</text>
+<rect class="card" x="390" y="415" width="210" height="90" rx="8"/>
+<use href="#i-vector" class="ic-purple" x="404" y="445.0" width="30" height="30"/>
+<text class="ct" x="446" y="448.0">embedder</text>
+<text class="cs" x="446" y="466.0">embeddinggemma-2</text>
+<text class="cs" x="446" y="483.0">文字與圖片轉向量</text>
+<rect class="g g-green" x="690" y="380" width="190" height="140" rx="12" stroke-dasharray="6 4"/>
+<text class="gl t-green" x="704" y="402">監控</text>
+<rect class="card" x="710" y="415" width="150" height="90" rx="8"/>
+<use href="#i-chart" class="ic-green" x="724" y="445.0" width="30" height="30"/>
+<text class="ct" x="766" y="448.0">monitor</text>
+<text class="cs" x="766" y="466.0">每 5 秒取樣</text>
+<text class="cs" x="766" y="483.0">容器、GPU 用量</text>
+<rect class="g g-teal" x="60" y="580" width="820" height="260" rx="12"/>
+<text class="gl t-teal" x="74" y="602">資料層</text>
+<rect class="g g-teal" x="80" y="612" width="370" height="213" rx="12" stroke-dasharray="6 4"/>
+<text class="gl t-teal" x="94" y="634">向量資料庫</text>
+<rect class="card" x="100" y="642" width="330" height="70" rx="8"/>
+<use href="#i-db" class="ic-teal" x="114" y="662.0" width="30" height="30"/>
+<text class="ct" x="156" y="673.5">milvus</text>
+<text class="cs" x="156" y="691.5">向量查詢 + BM25 關鍵字查詢</text>
+<rect class="card" x="100" y="742" width="155" height="62" rx="8"/>
+<text class="ct" x="114" y="769.5">etcd</text>
+<text class="cs" x="114" y="787.5">設定</text>
+<rect class="card" x="275" y="742" width="155" height="62" rx="8"/>
+<text class="ct" x="289" y="769.5">minio</text>
+<text class="cs" x="289" y="787.5">資料檔</text>
+<polyline class="e" points="177,712 177,740"/>
+<polyline class="e" points="352,712 352,740"/>
+<rect class="g g-teal" x="470" y="612" width="390" height="213" rx="12" stroke-dasharray="6 4"/>
+<text class="gl t-teal" x="484" y="634">共用儲存 · web 與 ingest 掛同一個 volume</text>
+<rect class="card" x="490" y="642" width="350" height="52" rx="8"/>
+<use href="#i-db" class="ic-teal" x="504" y="653.0" width="30" height="30"/>
+<text class="ct" x="546" y="664.5">app.db（SQLite）</text>
+<text class="cs" x="546" y="682.5">帳號、對話、知識庫、文件佇列</text>
+<rect class="card" x="490" y="702" width="350" height="52" rx="8"/>
+<use href="#i-db" class="ic-teal" x="504" y="713.0" width="30" height="30"/>
+<text class="ct" x="546" y="724.5">monitor.db（SQLite）</text>
+<text class="cs" x="546" y="742.5">事件與資源取樣</text>
+<rect class="card" x="490" y="762" width="350" height="52" rx="8"/>
+<use href="#i-folder" class="ic-teal" x="504" y="773.0" width="30" height="30"/>
+<text class="ct" x="546" y="784.5">volumes/kb</text>
+<text class="cs" x="546" y="802.5">原始檔、頁面圖、裁切的圖片</text>
+<rect class="g g-gray" x="950" y="170" width="230" height="350" rx="12" stroke-dasharray="6 4"/>
+<text class="gl t-gray" x="964" y="192">Docker 外</text>
+<rect class="card" x="970" y="205" width="190" height="62" rx="8"/>
+<use href="#i-cloud" class="ic-gray" x="984" y="221.0" width="30" height="30"/>
+<text class="ct" x="1026" y="232.5">Gemini API</text>
+<text class="cs" x="1026" y="250.5">雲端聊天模型（預設）</text>
+<rect class="card" x="970" y="280" width="190" height="62" rx="8"/>
+<use href="#i-pc" class="ic-gray" x="984" y="296.0" width="30" height="30"/>
+<text class="ct" x="1026" y="307.5">Ollama</text>
+<text class="cs" x="1026" y="325.5">主機上的聊天模型</text>
+<rect class="card" x="970" y="428" width="190" height="64" rx="8"/>
+<use href="#i-term" class="ic-gray" x="984" y="445.0" width="30" height="30"/>
+<text class="ct" x="1026" y="456.5">Docker socket</text>
+<text class="cs" x="1026" y="474.5">nvidia-smi</text>
+<polyline class="e" points="685,90 685,203" marker-end="url(#arrow)"/>
+<rect class="lbg" x="646.2" y="150" width="77.6" height="17" rx="3"/>
+<text class="el" x="685" y="162" text-anchor="middle">HTTP :8000</text>
+<polyline class="e" points="860,236 968,236" marker-end="url(#arrow)"/>
+<rect class="lbg" x="874.0" y="217" width="80.0" height="17" rx="3"/>
+<text class="el" x="914" y="229" text-anchor="middle">聊天（串流）</text>
+<polyline class="e" points="860,290 968,310" marker-end="url(#arrow)"/>
+<polyline class="e" points="860,460 968,460" marker-end="url(#arrow)"/>
+<rect class="lbg" x="886.0" y="441" width="56.0" height="17" rx="3"/>
+<text class="el" x="914" y="453" text-anchor="middle">讀取用量</text>
+<polyline class="e" points="260,305 260,413" marker-end="url(#arrow)"/>
+<rect class="lbg" x="226.0" y="342" width="68.0" height="17" rx="3"/>
+<text class="el" x="260" y="354" text-anchor="middle">整頁圖辨識</text>
+<polyline class="e" points="410,305 410,413" marker-end="url(#arrow)"/>
+<rect class="lbg" x="367.1" y="342" width="85.8" height="17" rx="3"/>
+<text class="el" x="410" y="354" text-anchor="middle">chunk 轉向量</text>
+<polyline class="e" points="560,305 560,413" marker-end="url(#arrow)"/>
+<rect class="lbg" x="526.0" y="342" width="68.0" height="17" rx="3"/>
+<text class="el" x="560" y="354" text-anchor="middle">問題轉向量</text>
+<polyline class="e" points="95,305 95,578" marker-end="url(#arrow)"/>
+<rect class="lbg" x="99.0" y="544" width="157.8" height="17" rx="3"/>
+<text class="el" x="103" y="556" text-anchor="start">寫入 chunk、更新佇列狀態</text>
+<polyline class="e" points="655,305 655,578" marker-end="url(#arrow)"/>
+<rect class="lbg" x="583.0" y="544" width="68.0" height="17" rx="3"/>
+<text class="el" x="647" y="556" text-anchor="end">查詢、讀寫</text>
+<polyline class="e" points="785,505 785,578" marker-end="url(#arrow)"/>
+<rect class="lbg" x="789.0" y="544" width="56.0" height="17" rx="3"/>
+<text class="el" x="793" y="556" text-anchor="start">寫入取樣</text>
+<text class="foot" x="30" y="886">箭頭：誰呼叫誰（或讀寫哪裡）。web 和 ingest 不直接互相呼叫，透過 app.db 的文件佇列溝通。</text>
+</svg>
