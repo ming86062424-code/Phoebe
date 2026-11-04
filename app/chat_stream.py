@@ -38,6 +38,7 @@ class ReplyLock:
         self._mutex = threading.Lock()
         self._task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._released = False
 
     def start_keep_alive(self, interval: float | None = None) -> None:
         """Refresh the lock in the background until it is released (call from the event loop)."""
@@ -76,6 +77,9 @@ class ReplyLock:
         self._stop_keep_alive()
         # Match started_at so a stale release can't drop a newer claim.
         with self._mutex:
+            if self._released:  # later calls (the stream's cleanup) need no database
+                return
+            self._released = True
             conn = connect(self.db_path)
             try:
                 conn.execute(
@@ -254,27 +258,35 @@ async def _ndjson_reply(
                 async for delta in stream:
                     yield handle(delta)
             except (LlmError, httpx.HTTPError) as e:
-                finish("error", str(e) or INTERRUPTED_DETAIL)
+                await run_in_threadpool(finish, "error", str(e) or INTERRUPTED_DETAIL)
                 yield _line({"type": "error", "detail": str(e) or INTERRUPTED_DETAIL})
                 return
-            # The generator uses its own connection so it doesn't depend on the
-            # request-scoped dependency's lifetime.
-            save_conn = connect(db_path)
+
+            def save_reply() -> int:
+                # its own connection: it must not depend on the request-scoped one
+                save_conn = connect(db_path)
+                try:
+                    return conversations.add_message(
+                        save_conn, conversation_id, "assistant", "".join(parts), sources
+                    )
+                finally:
+                    save_conn.close()
+
             try:
-                message_id = conversations.add_message(
-                    save_conn, conversation_id, "assistant", "".join(parts), sources
-                )
+                message_id = await run_in_threadpool(save_reply)
             except sqlite3.Error:
                 # e.g. the conversation was deleted in another tab mid-stream
-                finish("error", SAVE_FAILED_DETAIL)
+                await run_in_threadpool(finish, "error", SAVE_FAILED_DETAIL)
                 yield _line({"type": "error", "detail": SAVE_FAILED_DETAIL})
                 return
-            finally:
-                save_conn.close()
-            finish("ok")
+            await run_in_threadpool(finish, "ok")
+            # released before "done", so the next message is never refused as busy
+            await run_in_threadpool(release)
             yield _line({"type": "done", "message_id": message_id})
         finally:
-            # the client went away mid-reply (finish() is a no-op after an outcome)
+            # Also runs when the client went away mid-reply and the stream is being
+            # cancelled, so it stays synchronous: an await here could be cancelled too.
+            # After a normal end both calls return at once.
             finish("cancelled")
             release()
 

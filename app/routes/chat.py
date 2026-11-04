@@ -57,7 +57,7 @@ async def _with_knowledge(
     if conv["kb_id"] is None:
         return Knowledge()
     kb_id = conv["kb_id"]
-    kb_row = kb_store.get_kb(conn, user["id"], kb_id)
+    kb_row = await run_in_threadpool(kb_store.get_kb, conn, user["id"], kb_id)
     if kb_row is None:
         return Knowledge()
     trace.details.update(kb_id=kb_id, kb=kb_row["name"])
@@ -73,7 +73,7 @@ async def _with_knowledge(
         )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"知識庫檢索失敗：{e}") from e
-    live = {d["id"] for d in kb_store.list_documents(conn, kb_id)}
+    live = {d["id"] for d in await run_in_threadpool(kb_store.list_documents, conn, kb_id)}
     found = [s for s in found if s.document_id in live]
     loading = time.perf_counter()
     images = await run_in_threadpool(
@@ -94,6 +94,15 @@ async def _with_knowledge(
 
 def _combine_system(system_prompt: str, kb_prompt: str | None) -> str | None:
     return "\n\n".join(p for p in (system_prompt, kb_prompt) if p) or None
+
+
+async def _own_conversation(conn: sqlite3.Connection, user: dict, conversation_id: int) -> dict:
+    conv = await run_in_threadpool(
+        conversations.get_conversation, conn, user["id"], conversation_id
+    )
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conv
 
 
 def _trace(settings: Settings, user: dict, conv: dict, conversation_id: int) -> ChatTrace:
@@ -119,20 +128,22 @@ async def send_message(
     client: ChatClient = Depends(get_chat_client),
     kb: KbServices = Depends(get_kb_services),
 ):
-    conv = conversations.get_conversation(conn, user["id"], conversation_id)
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv = await _own_conversation(conn, user, conversation_id)
     release = await run_in_threadpool(
         claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
     )
     release.start_keep_alive()
     trace = _trace(settings, user, conv, conversation_id)
-    try:
+
+    def save_user_message() -> list[dict]:
         conversations.add_message(conn, conversation_id, "user", body.content)
         conversations.set_title_if_empty(conn, conversation_id, body.content.strip()[:30])
+        return conversations.get_history(conn, conversation_id)
+
+    try:
+        history = await run_in_threadpool(save_user_message)
         if not conv["title"]:
             trace.title = body.content.strip()[:30]
-        history = conversations.get_history(conn, conversation_id)
         llm = await run_in_threadpool(load_llm_settings, conn, settings)
         _model_details(trace, llm)
         knowledge = await _with_knowledge(conn, user, conv, history, settings, kb, trace)
@@ -164,16 +175,18 @@ async def regenerate(
     client: ChatClient = Depends(get_chat_client),
     kb: KbServices = Depends(get_kb_services),
 ):
-    conv = conversations.get_conversation(conn, user["id"], conversation_id)
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv = await _own_conversation(conn, user, conversation_id)
     release = await run_in_threadpool(
         claim_reply, settings.db_path, conversation_id, settings.reply_lock_ttl_seconds
     )
     release.start_keep_alive()
-    history = conversations.get_history(conn, conversation_id)
-    if not history or history[-1]["role"] != "user":
+    try:
+        history = await run_in_threadpool(conversations.get_history, conn, conversation_id)
+    except BaseException:
         release()
+        raise
+    if not history or history[-1]["role"] != "user":
+        await run_in_threadpool(release)
         raise HTTPException(status_code=409, detail="沒有需要重新產生的回答")
     trace = _trace(settings, user, conv, conversation_id)
     trace.details["regenerate"] = True
