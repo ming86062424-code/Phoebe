@@ -244,7 +244,7 @@ export function useChat({ conversationId, onConversationCreated, onFinished }: O
           persistedRef.current = true
           return res
         } catch (e) {
-          // 503: the backend stores the user message before it calls Ollama
+          // 503: the backend has stored the user message (any 503 comes after saving it)
           if (e instanceof ApiError && e.status === 503) persistedRef.current = true
           throw e
         }

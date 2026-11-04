@@ -91,12 +91,20 @@ def test_llm_provider_and_ollama_context_env(monkeypatch):
     assert (s.llm_provider, s.ollama_num_ctx) == ("ollama", 8192)
 
 
+def test_ollama_timeout_env(monkeypatch):
+    monkeypatch.delenv("OLLAMA_TIMEOUT_SECONDS", raising=False)
+    assert Settings.from_env().ollama_timeout_seconds == 300
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "90")
+    assert Settings.from_env().ollama_timeout_seconds == 90
+
+
 @pytest.mark.parametrize(
     ("name", "value", "message"),
     [
         ("LLM_PROVIDER", "openai", "LLM_PROVIDER 必須是 ollama 或 gemini"),
         ("OLLAMA_NUM_CTX", "0", "OLLAMA_NUM_CTX 必須是正整數"),
         ("OLLAMA_NUM_CTX", "lots", "OLLAMA_NUM_CTX 必須是正整數"),
+        ("OLLAMA_TIMEOUT_SECONDS", "0", "OLLAMA_TIMEOUT_SECONDS 必須是正數"),
     ],
 )
 def test_invalid_provider_or_context_env(monkeypatch, name, value, message):

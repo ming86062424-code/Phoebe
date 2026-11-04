@@ -17,6 +17,7 @@ def build_chat_client(settings: Settings, llm: LlmSettings) -> ChatClient:
         llm.ollama_model,
         think=settings.chat_think,
         num_ctx=settings.ollama_num_ctx,
+        timeout=settings.ollama_timeout_seconds,
     )
 
 

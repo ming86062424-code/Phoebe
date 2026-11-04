@@ -358,3 +358,29 @@ def test_factory_passes_the_context_size_to_ollama():
         llm_provider="ollama", ollama_model="m", gemini_model="g", system_prompt="", temperature=None
     )
     assert build_chat_client(Settings(ollama_num_ctx=8192), llm).num_ctx == 8192
+
+
+async def test_read_timeout_raises_stream_error_naming_the_limit():
+    # e.g. Ollama hangs before the first token: the reply must end, not wait forever
+    def handler(request):
+        raise httpx.ReadTimeout("silent")
+
+    client = OllamaClient(
+        "http://ollama.test", MODEL, transport=httpx.MockTransport(handler), timeout=42
+    )
+    with pytest.raises(OllamaStreamError, match="42 秒"):
+        await collect(client)
+
+
+async def test_read_timeout_is_the_configured_limit():
+    seen = {}
+
+    def handler(request):
+        seen.update(request.extensions["timeout"])
+        return httpx.Response(200, content=ndjson({"message": {"content": "ok"}, "done": True}))
+
+    client = OllamaClient(
+        "http://ollama.test", MODEL, transport=httpx.MockTransport(handler), timeout=42
+    )
+    await collect(client)
+    assert seen["read"] == 42 and seen["connect"] == 5.0

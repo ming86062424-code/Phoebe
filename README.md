@@ -262,6 +262,7 @@ RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索�
 | `GEMINI_API_KEY` | 空 | Google Gemini API 金鑰；只能放在 `.env`／`docker/.env`，留空則「系統設定」中的 Gemini 選項停用 |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini 預設模型（可在「系統設定」頁覆寫） |
 | `LLM_PROVIDER` | `gemini` | 預設的聊天供應商（`gemini` 或 `ollama`），可在「系統設定」頁覆寫 |
+| `OLLAMA_TIMEOUT_SECONDS` | `300` | Ollama 最多可以幾秒沒有回應（等第一段文字，或兩段之間）。CPU 上載入模型可能要幾分鐘；超過就停止這次回答，對話不會一直卡在「正在產生回覆」 |
 | `OLLAMA_NUM_CTX` | `16384` | Ollama 每次對話的 context 長度。Ollama 本身預設只有 4096，知識庫回答帶整頁圖（每張約 740 token）時會被截斷 |
 | `ADMIN_USERNAME` | 空 | 管理員帳號，啟動時自動建立（3–32 字元） |
 | `ADMIN_PASSWORD` | 空 | 管理員密碼，每次啟動同步到資料庫（8 字元以上，最多 72 位元組） |
