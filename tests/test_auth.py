@@ -83,6 +83,29 @@ def test_expired_session_401(make_user, settings):
     assert c.get("/api/me").status_code == 401
 
 
+
+def test_sessions_store_a_hash_of_the_token(make_user, settings):
+    c = make_user("alice")
+    token = c.cookies.get("session")
+    conn = connect(settings.db_path)
+    stored = [r[0] for r in conn.execute("SELECT token FROM sessions")]
+    conn.close()
+    assert stored and token not in stored
+    # a stored value used as a cookie does not log in
+    c.cookies.set("session", stored[0])
+    assert c.get("/api/me").status_code == 401
+
+
+def test_login_clears_expired_sessions(make_user, client, settings):
+    make_user("alice")
+    conn = connect(settings.db_path)
+    conn.execute("UPDATE sessions SET expires_at = '2000-01-01T00:00:00+00:00'")
+    conn.commit()
+    assert client.post("/api/auth/login", json=CREDS).status_code == 200
+    expires = [r[0] for r in conn.execute("SELECT expires_at FROM sessions")]
+    conn.close()
+    assert len(expires) == 1 and not expires[0].startswith("2000")
+
 def _messages(r):
     return [e["msg"].removeprefix("Value error, ") for e in r.json()["detail"]]
 

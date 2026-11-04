@@ -146,7 +146,7 @@ class Settings:
             chat_model=os.environ.get("CHAT_MODEL", d.chat_model),
             eval_judge_model=os.environ.get("EVAL_JUDGE_MODEL", d.eval_judge_model),
             db_path=os.environ.get("DB_PATH", d.db_path),
-            session_days=int(os.environ.get("SESSION_DAYS", d.session_days)),
+            session_days=_positive_int("SESSION_DAYS", os.environ.get("SESSION_DAYS", str(d.session_days))),
             chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
             not in FALSY_VALUES,
             # opt-in switches: only an explicit yes turns them on (an empty value stays off)
@@ -156,14 +156,16 @@ class Settings:
             frontend_dist=os.environ.get("FRONTEND_DIST", d.frontend_dist),
             embedder_url=os.environ.get("EMBEDDER_URL", d.embedder_url).strip(),
             kb_dir=os.environ.get("KB_DIR", d.kb_dir),
-            kb_top_k=int(os.environ.get("KB_TOP_K", d.kb_top_k)),
+            kb_top_k=_positive_int("KB_TOP_K", os.environ.get("KB_TOP_K", str(d.kb_top_k))),
             kb_vector_weight=_weight(
                 "KB_VECTOR_WEIGHT", os.environ.get("KB_VECTOR_WEIGHT", str(d.kb_vector_weight))
             ),
             kb_max_images=_non_negative_int(
                 "KB_MAX_IMAGES", os.environ.get("KB_MAX_IMAGES", str(d.kb_max_images))
             ),
-            max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", d.max_upload_mb)),
+            max_upload_mb=_positive_int(
+                "MAX_UPLOAD_MB", os.environ.get("MAX_UPLOAD_MB", str(d.max_upload_mb))
+            ),
             ocr_model=os.environ.get("OCR_MODEL", d.ocr_model),
             liteparse_ocr_language=os.environ.get(
                 "LITEPARSE_OCR_LANGUAGE", d.liteparse_ocr_language
@@ -176,11 +178,13 @@ class Settings:
             milvus_uri=os.environ.get("MILVUS_URI", d.milvus_uri),
             milvus_token=os.environ.get("MILVUS_TOKEN", d.milvus_token).strip(),
             milvus_collection=os.environ.get("MILVUS_COLLECTION", d.milvus_collection),
-            reply_lock_ttl_seconds=int(
-                os.environ.get("REPLY_LOCK_TTL_SECONDS", d.reply_lock_ttl_seconds)
+            reply_lock_ttl_seconds=_positive_int(
+                "REPLY_LOCK_TTL_SECONDS",
+                os.environ.get("REPLY_LOCK_TTL_SECONDS", str(d.reply_lock_ttl_seconds)),
             ),
-            kb_ingest_poll_seconds=float(
-                os.environ.get("KB_INGEST_POLL_SECONDS", d.kb_ingest_poll_seconds)
+            kb_ingest_poll_seconds=_positive_float(
+                "KB_INGEST_POLL_SECONDS",
+                os.environ.get("KB_INGEST_POLL_SECONDS", str(d.kb_ingest_poll_seconds)),
             ),
             ingest_concurrency=_positive_int(
                 "INGEST_CONCURRENCY",
@@ -193,9 +197,12 @@ class Settings:
                 "OCR_TIMEOUT_SECONDS",
                 os.environ.get("OCR_TIMEOUT_SECONDS", str(d.ocr_timeout_seconds)),
             ),
-            kb_stale_seconds=int(os.environ.get("KB_STALE_SECONDS", d.kb_stale_seconds)),
-            kb_heartbeat_seconds=float(
-                os.environ.get("KB_HEARTBEAT_SECONDS", d.kb_heartbeat_seconds)
+            kb_stale_seconds=_positive_int(
+                "KB_STALE_SECONDS", os.environ.get("KB_STALE_SECONDS", str(d.kb_stale_seconds))
+            ),
+            kb_heartbeat_seconds=_positive_float(
+                "KB_HEARTBEAT_SECONDS",
+                os.environ.get("KB_HEARTBEAT_SECONDS", str(d.kb_heartbeat_seconds)),
             ),
             admin_username=os.environ.get("ADMIN_USERNAME", "").strip(),
             admin_password=os.environ.get("ADMIN_PASSWORD", ""),

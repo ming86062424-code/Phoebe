@@ -484,3 +484,23 @@ def test_every_service_rotates_its_logs():
             "driver": "json-file",
             "options": {"max-size": "10m", "max-file": "3"},
         }, name
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("SESSION_DAYS", "0", "SESSION_DAYS 必須是正整數"),
+        ("KB_TOP_K", "0", "KB_TOP_K 必須是正整數"),
+        ("MAX_UPLOAD_MB", "0", "MAX_UPLOAD_MB 必須是正整數"),
+        ("MAX_UPLOAD_MB", "big", "MAX_UPLOAD_MB 必須是正整數"),
+        ("KB_STALE_SECONDS", "-5", "KB_STALE_SECONDS 必須是正整數"),
+        ("KB_INGEST_POLL_SECONDS", "0", "KB_INGEST_POLL_SECONDS 必須是正數"),
+        ("KB_HEARTBEAT_SECONDS", "0", "KB_HEARTBEAT_SECONDS 必須是正數"),
+        ("REPLY_LOCK_TTL_SECONDS", "x", "REPLY_LOCK_TTL_SECONDS 必須是正整數"),
+    ],
+)
+def test_numbers_out_of_range_are_rejected(monkeypatch, name, value, message):
+    # e.g. KB_TOP_K=0 would silently retrieve nothing, KB_INGEST_POLL_SECONDS=0 spins
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=message):
+        Settings.from_env()
