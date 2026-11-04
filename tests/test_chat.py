@@ -729,3 +729,35 @@ def test_an_image_cited_by_several_sources_is_sent_once(make_user, fake_chat, kb
     for line in ("附圖 1 → [1]", "附圖 2 → [1]", "附圖 3 → [2]", "附圖 4 → [3]"):
         assert line in system
     assert "附圖 5" not in system
+
+
+def test_send_does_database_work_off_the_event_loop(make_user, fake_chat, monkeypatch):
+    # a busy SQLite write must not stall every stream on the worker's event loop
+    import asyncio
+
+    from app import chat_stream
+    from app import conversations as conv_module
+
+    places: list[tuple[str, str]] = []
+
+    def watch(module, name):
+        real = getattr(module, name)
+
+        def wrapper(*args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                places.append((name, "event loop"))
+            except RuntimeError:
+                places.append((name, "background thread"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, wrapper)
+
+    for name in ("get_conversation", "add_message", "set_title_if_empty", "get_history"):
+        watch(conv_module, name)
+    watch(chat_stream, "connect")  # reply lock and saving the answer
+    c = make_user("alice")
+    cid = _new_conv(c)
+    places.clear()
+    assert [e["type"] for e in events(_send(c, cid, "嗨"))][-1] == "done"
+    assert places and all(where == "background thread" for _, where in places), places
