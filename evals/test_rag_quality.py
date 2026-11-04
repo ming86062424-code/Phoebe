@@ -12,6 +12,7 @@ import pytest
 from deepeval.dataset import EvaluationDataset, Golden
 from deepeval.test_case import LLMTestCase
 
+from evals.conftest import JUDGE_MODEL
 from evals.metrics import rag_answer_metrics
 from evals.rag_app import RAG_DIR, LiveRag, Reply
 from evals.rag_report import RETRIEVAL_ONLY, short_error, source_rank, with_retry, write_report
@@ -56,7 +57,7 @@ def rag(config_value, settings):
             "started": started,
             "git commit": _git_commit(),
             **live.environment(),
-            "裁判模型": config_value("EVAL_JUDGE_MODEL", settings.eval_judge_model),
+            "裁判模型": config_value("EVAL_JUDGE_MODEL", JUDGE_MODEL),
             "題庫": f"{len(GOLDENS)} 題（evals/rag.dataset.json），{len(statuses)} 份 md（md 一律用文字解析）",
         }
         yield live

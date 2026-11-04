@@ -83,7 +83,6 @@ def _check_admin(username: str, password: str) -> None:
 class Settings:
     ollama_base_url: str = "http://localhost:11434"
     chat_model: str = "gemma4:e4b"
-    eval_judge_model: str = "gemini-3.1-flash-lite"
     db_path: str = str(PROJECT_ROOT / "data" / "app.db")
     session_days: int = 7
     # anyone who can reach the site may sign up only when this is on; off by default
@@ -144,7 +143,6 @@ class Settings:
         settings = cls(
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", d.ollama_base_url),
             chat_model=os.environ.get("CHAT_MODEL", d.chat_model),
-            eval_judge_model=os.environ.get("EVAL_JUDGE_MODEL", d.eval_judge_model),
             db_path=os.environ.get("DB_PATH", d.db_path),
             session_days=_positive_int("SESSION_DAYS", os.environ.get("SESSION_DAYS", str(d.session_days))),
             chat_think=os.environ.get("CHAT_THINK", "true").strip().lower()
