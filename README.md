@@ -8,7 +8,7 @@ Phoebe 是一個可以上傳 PDF、圖片和文字檔，再針對內容提問的
 
 - **解決 PDF 解析的難題**：PDF 裡常同時有純文字、內嵌圖片、掃描頁面和表格。希望能把這些內容都正確轉進知識庫，讓它們都能被查詢和引用。
 - **改善只靠向量查詢的不足**：向量查詢擅長找意思相近的內容，但對專有名詞、編號、代碼這類需要字面完全相符的內容容易漏掉。所以結合關鍵字查詢，兩者互補。
-- **熟悉 AI 應用的完整開發流程**：從文件解析、建立索引、檢索、組提示詞，到串流回答、評測與部署。
+- **熟悉 AI 應用的完整開發流程**：從文件解析、建立索引、檢索、組提示詞，到串流回答與部署。
 
 ### 特色
 
@@ -160,7 +160,7 @@ GPU 用在 OCR（vLLM）時，建議聊天改用 Gemini，避免和 OCR 搶顯�
 - [docs/parsers.md](docs/parsers.md)：兩種解析器怎麼切段、送什麼給嵌入模型
 - [docker/README.md](docker/README.md)：Docker 部署的細節
 - [docs/configuration.md](docs/configuration.md)：所有環境變數
-- [docs/development.md](docs/development.md)：本機開發、測試、評測、效能測試與開發流程
+- [docs/development.md](docs/development.md)：本機開發、測試、效能測試與開發流程
 
 ## 專案結構
 
@@ -174,4 +174,3 @@ GPU 用在 OCR（vLLM）時，建議聊天改用 Gemini，避免和 OCR 搶顯�
 - `docs/` — 說明文件；`docs/superpowers/` 是各功能開發時的設計規格與計畫（歷史紀錄）
 - `frontend/` — 前端（React + TypeScript + Vite）
 - `tests/` — 單元測試
-- `evals/` — AI 品質評測（DeepEval）：一般聊天、知識庫問答（RAG）

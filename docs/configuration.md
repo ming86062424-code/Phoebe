@@ -17,7 +17,6 @@ Docker 部署的設定放在 `docker/.env`（範本 `docker/.env.example`），�
 | `OLLAMA_NUM_CTX` | `16384` | Ollama 每次對話的 context 長度。Ollama 本身預設只有 4096，知識庫回答帶整頁圖（每張約 740 token）時會被截斷 |
 | `ADMIN_USERNAME` | 空 | 管理員帳號，啟動時自動建立（3–32 字元） |
 | `ADMIN_PASSWORD` | 空 | 管理員密碼，每次啟動同步到資料庫（8 字元以上，最多 72 位元組） |
-| `EVAL_JUDGE_MODEL` | `gemini-3.1-flash-lite` | 評測（`evals/`）的裁判模型：`gemini-` 開頭用 Gemini（需要 `GEMINI_API_KEY`），其他名稱用本機 Ollama 的模型。只有手動執行評測時使用，容器不讀取 |
 | `DB_PATH` | `<專案根目錄>/data/app.db` | SQLite 資料庫路徑 |
 | `SESSION_DAYS` | `7` | 登入工作階段有效天數 |
 | `ALLOW_REGISTRATION` | `false` | 是否開放任何人在登入頁註冊。關閉時只有管理員帳號（由 `.env` 建立）能登入，除非之前已經註冊過 |

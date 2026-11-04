@@ -1,6 +1,6 @@
 # 本機開發與測試
 
-一般使用請用 Docker 部署（見 [README](../README.md#快速開始docker)）。這份文件給要修改程式的人：在本機直接執行 web 與 ingest、跑測試與評測。
+一般使用請用 Docker 部署（見 [README](../README.md#快速開始docker)）。這份文件給要修改程式的人：在本機直接執行 web 與 ingest、跑測試。
 
 ## 事前準備
 
@@ -148,16 +148,7 @@ uv run python -m scripts.loadtest
 
 報告寫到 `data/loadtest-<時間>.md`，說明見 [loadtest.md](loadtest.md)。
 
-**AI 品質評測**（僅手動執行，用 DeepEval；裁判模型由 `EVAL_JUDGE_MODEL` 決定，預設是 Gemini，付費方案會計費，免費方案每分鐘只能呼叫 15 次，每天 500 次，所以 RAG 評測要跑 1 小時左右，一天最好只跑一次；分數僅供觀察，不是通過／失敗的門檻）：
-
-```
-uv run --group eval pytest evals/test_rag_quality.py   # 知識庫問答（RAG），需要 Docker 服務都在跑
-uv run --group eval pytest evals/test_chat_quality.py  # 一般聊天，需要本機 Ollama 的 CHAT_MODEL
-```
-
-RAG 評測用 `test_data/rag/` 的 25 份文件和 54 題，分開評「檢索有沒有找對段落」和「回答是否正確、有沒有編造」，報告寫到 `evals/reports/`（不納入 git），說明見 [rag-eval.md](rag-eval.md)。
-
-注意：單純執行 `uv sync` 會移除 eval、ocr 群組的套件；`uv run --group eval`／`uv run --group ocr` 會重新安裝。
+注意：單純執行 `uv sync` 會移除 `ocr` 群組的套件；`uv run --group ocr` 會重新安裝。
 
 ## 開發流程
 
